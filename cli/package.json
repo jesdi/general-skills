@@ -1,0 +1,22 @@
+{
+  "name": "@jesdi/skills-cli",
+  "version": "0.1.0",
+  "description": "Install jesdi's agent skills into Claude Code and OpenCode",
+  "license": "MIT",
+  "type": "module",
+  "bin": { "skills-cli": "./dist/index.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.11.0",
+    "commander": "^12.1.0",
+    "tar": "^7.4.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0"
+  },
+  "engines": { "node": ">=20" }
+}
