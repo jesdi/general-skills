@@ -1,0 +1,38 @@
+name: publish-skills
+
+on:
+  push:
+    branches: [main]
+    paths: ['skills/**', 'lib/**', 'scripts/**']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: npm test
+      - run: npm run generate-manifest
+      - name: Publish if skills changed
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if git diff --quiet -I'"generatedAt"' skills-manifest.json; then
+            echo "No skill changes; skipping publish."
+            git checkout -- skills-manifest.json
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch --no-git-tag-version
+          git add skills-manifest.json package.json
+          git commit -m "chore: release skills [skip ci]"
+          git push
+          npm publish --provenance --access public
