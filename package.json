@@ -1,0 +1,21 @@
+{
+  "name": "@jesdi/skills",
+  "version": "0.0.0",
+  "description": "jesdi's agent skills (content package consumed by @jesdi/skills-cli)",
+  "license": "MIT",
+  "type": "module",
+  "files": ["skills", "skills-manifest.json"],
+  "workspaces": ["cli"],
+  "scripts": {
+    "test": "vitest run",
+    "generate-manifest": "tsx scripts/generate-manifest.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "gray-matter": "^4.0.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": { "node": ">=20" }
+}
