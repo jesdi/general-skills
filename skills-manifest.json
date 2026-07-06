@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-06T10:27:57.466Z",
+  "skills": [
+    {
+      "name": "hello-world",
+      "version": "0.1.0",
+      "hash": "sha256-916ea397cd74d91c4b6060672088b9c54353c915b98bcaef3514815694842e5a",
+      "description": "Minimal example skill proving the distribution pipeline works. Responds to \"test my skills setup\" by confirming the skill is loaded."
+    }
+  ]
+}
