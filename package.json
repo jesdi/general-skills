@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "description": "jesdi's agent skills (content package consumed by @jesdi/skills-cli)",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jesdi/general-skills.git"
+  },
   "type": "module",
   "files": [
     "skills",

@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Install jesdi's agent skills into Claude Code and OpenCode",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jesdi/general-skills.git",
+    "directory": "cli"
+  },
   "type": "module",
   "bin": { "skills-cli": "./dist/index.js" },
   "files": ["dist"],
