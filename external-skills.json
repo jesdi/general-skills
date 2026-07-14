@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "comment": "Third-party skills used alongside this repo's own skills. They are NOT vendored here (they have their own authors and licenses); install them from upstream with the skills.sh CLI: `npx skills add <source>`. The skills.sh lockfile (~/.agents/.skill-lock.json) tracks installed versions.",
+  "skills": [
+    {
+      "name": "caveman",
+      "source": "JuliusBrussee/caveman",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman",
+      "install": "npx skills add JuliusBrussee/caveman",
+      "notes": "Suite: caveman, caveman-commit, caveman-compress, caveman-help, compress. `compress` duplicates `caveman-compress` — install only one."
+    },
+    {
+      "name": "caveman-commit",
+      "source": "JuliusBrussee/caveman",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman",
+      "install": "npx skills add JuliusBrussee/caveman"
+    },
+    {
+      "name": "caveman-compress",
+      "source": "JuliusBrussee/caveman",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman",
+      "install": "npx skills add JuliusBrussee/caveman"
+    },
+    {
+      "name": "caveman-help",
+      "source": "JuliusBrussee/caveman",
+      "sourceUrl": "https://github.com/JuliusBrussee/caveman",
+      "install": "npx skills add JuliusBrussee/caveman"
+    },
+    {
+      "name": "find-skills",
+      "source": "vercel-labs/skills",
+      "sourceUrl": "https://github.com/vercel-labs/skills",
+      "install": "npx skills add vercel-labs/skills"
+    },
+    {
+      "name": "grill-me",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "grill-with-docs",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "vercel-react-best-practices",
+      "source": "vercel-labs/agent-skills",
+      "sourceUrl": "https://github.com/vercel-labs/agent-skills",
+      "install": "npx skills add vercel-labs/agent-skills",
+      "license": "MIT"
+    },
+    {
+      "name": "frontend-design",
+      "source": "anthropics/skills",
+      "sourceUrl": "https://github.com/anthropics/skills",
+      "install": "npx skills add anthropics/skills",
+      "notes": "Also ships as a Claude Code plugin — prefer the plugin; skip this install if the plugin is enabled."
+    }
+  ]
+}
