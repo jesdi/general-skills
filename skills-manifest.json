@@ -1,7 +1,25 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-06T10:27:57.466Z",
+  "generatedAt": "2026-07-14T10:05:20.198Z",
   "skills": [
+    {
+      "name": "branch-audit",
+      "version": "0.1.0",
+      "hash": "sha256-d1983aa0577bd64e23d17cc4e91a7e214a72677b3d0d7bcdcf175a27449cc636",
+      "description": "Audit local and remote git branches to see which are merged into main, which have unpushed commits, which have diverged, and which have stale worktrees. Use this skill whenever the user asks: \"is this branch already pushed?\", \"can I delete this branch?\", \"which branches are stale?\", \"clean up merged branches\", \"remove old worktrees\", \"what branches haven't been pushed yet?\", or anything related to branch hygiene, branch status, or pruning local/remote branches. Also use it when the user wants to delete branches in bulk, either locally or on the remote.\n"
+    },
+    {
+      "name": "ceo-review",
+      "version": "0.1.0",
+      "hash": "sha256-5f239c09fd46ba4c1887da88374a75e12e3df31ff18e93ed9367bdd06f3b386c",
+      "description": "CEO/founder-mode plan review. Rethink the problem, find the 10-star product,\nchallenge premises, expand scope when it creates a better product. Four modes:\nSCOPE EXPANSION (dream big), SELECTIVE EXPANSION (hold scope + cherry-pick\nexpansions), HOLD SCOPE (maximum rigor), SCOPE REDUCTION (strip to essentials).\nUse when asked to \"think bigger\", \"expand scope\", \"strategy review\", \"rethink this\",\n\"what would you do differently\", or when reviewing project direction and goals.\nProduces a structured review document with analysis and recommendations.\n"
+    },
+    {
+      "name": "file-bug-issue",
+      "version": "0.1.0",
+      "hash": "sha256-6e1aae08cf08d2ef18b963c3600701aeddbac744db1d82ce9fb9ff75ca650651",
+      "description": "Open (or update) a GitHub issue whenever a bug or misbehaviour is detected while working in a repo. Use this PROACTIVELY — the moment you notice something broken (a failing test that reveals a real defect, a crash, a stack trace, wrong output, a UI glitch, a regression, an API returning the wrong thing, flaky behaviour, a \"that shouldn't happen\") — not only when the user says \"file a bug\". It first searches the repo's OPEN issues (filtered by the labels that fit the bug) and judges whether the same defect is already tracked. If a real duplicate exists, it adds your new reproduction/context as a comment; otherwise it creates a fresh, well-structured issue with reproducible steps and the context a fixer will need. Trigger phrases include \"file an issue\", \"report this bug\", \"log this\", \"open a ticket\", \"track this\", \"this is broken\", \"that's a bug\" — and also fire with no prompt at all when you stumble onto a defect mid-task."
+    },
     {
       "name": "hello-world",
       "version": "0.1.0",
