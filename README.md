@@ -31,6 +31,24 @@ npx @jesdi/skills-cli list
 npx @jesdi/skills-cli uninstall <skill> [--global]
 ```
 
+## Third-party skills (not vendored)
+
+Skills authored by other people are **not** copied into this repo — they keep
+their own authors, upstreams, and licenses. `external-skills.json` records
+which ones are part of the standard setup and where they come from. Install
+them from upstream with the [skills.sh](https://skills.sh/) CLI:
+
+```bash
+npx skills add mattpocock/skills          # grill-me, grill-with-docs, improve-codebase-architecture
+npx skills add JuliusBrussee/caveman      # caveman suite
+npx skills add vercel-labs/skills         # find-skills
+npx skills add vercel-labs/agent-skills   # vercel-react-best-practices
+npx skills add anthropics/skills          # frontend-design (skip if using the Claude Code plugin)
+```
+
+The skills.sh lockfile (`~/.agents/.skill-lock.json`) tracks installed
+versions; `npx skills update` refreshes them.
+
 ## Authoring skills
 
 Add `skills/<name>/SKILL.md` (frontmatter `name` must match the directory,
