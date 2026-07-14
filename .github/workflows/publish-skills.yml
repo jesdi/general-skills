@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths: ['skills/**', 'lib/**', 'scripts/**']
+  workflow_dispatch:
 
 jobs:
   publish:
@@ -20,19 +21,24 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run generate-manifest
-      - name: Publish if skills changed
+      - name: Release if skills changed, publish if version missing
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if git diff --quiet -I'"generatedAt"' skills-manifest.json; then
-            echo "No skill changes; skipping publish."
+            echo "No skill changes; keeping current version."
             git checkout -- skills-manifest.json
-            exit 0
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            npm version patch --no-git-tag-version
+            git add skills-manifest.json package.json
+            git commit -m "chore: release skills [skip ci]"
+            git push
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          npm version patch --no-git-tag-version
-          git add skills-manifest.json package.json
-          git commit -m "chore: release skills [skip ci]"
-          git push
-          npm publish --provenance --access public
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@jesdi/skills@$VERSION" version >/dev/null 2>&1; then
+            echo "@jesdi/skills@$VERSION already published; skipping."
+          else
+            npm publish --provenance --access public
+          fi
