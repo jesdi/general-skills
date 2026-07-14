@@ -7,7 +7,7 @@
       "source": "JuliusBrussee/caveman",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman",
       "install": "npx skills add JuliusBrussee/caveman",
-      "notes": "Suite: caveman, caveman-commit, caveman-compress, caveman-help, compress. `compress` duplicates `caveman-compress` — install only one."
+      "notes": "Suite: caveman, caveman-commit, caveman-compress, caveman-help. Upstream also ships `compress`, a duplicate of `caveman-compress` — do not install it."
     },
     {
       "name": "caveman-commit",
@@ -50,6 +50,13 @@
       "source": "mattpocock/skills",
       "sourceUrl": "https://github.com/mattpocock/skills",
       "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "git-guardrails-claude-code",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills/blob/main/skills/misc/git-guardrails-claude-code/SKILL.md",
+      "install": "npx skills add mattpocock/skills",
+      "notes": "One-time setup skill: installs the block-dangerous-git.sh PreToolUse hook into ~/.claude/hooks. The hook keeps working after the skill is uninstalled."
     },
     {
       "name": "vercel-react-best-practices",

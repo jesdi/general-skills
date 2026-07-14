@@ -39,8 +39,8 @@ which ones are part of the standard setup and where they come from. Install
 them from upstream with the [skills.sh](https://skills.sh/) CLI:
 
 ```bash
-npx skills add mattpocock/skills          # grill-me, grill-with-docs, improve-codebase-architecture
-npx skills add JuliusBrussee/caveman      # caveman suite
+npx skills add mattpocock/skills          # grill-me, grill-with-docs, improve-codebase-architecture, git-guardrails-claude-code
+npx skills add JuliusBrussee/caveman      # caveman suite (skip `compress`, dup of caveman-compress)
 npx skills add vercel-labs/skills         # find-skills
 npx skills add vercel-labs/agent-skills   # vercel-react-best-practices
 npx skills add anthropics/skills          # frontend-design (skip if using the Claude Code plugin)
