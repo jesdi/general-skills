@@ -14,13 +14,15 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm test
-      - run: npm run generate-manifest
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm generate-manifest
       - name: Release if skills changed, publish if version missing
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -31,14 +33,14 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
-            npm version patch --no-git-tag-version
+            pnpm version patch --no-git-tag-version
             git add skills-manifest.json package.json
             git commit -m "chore: release skills [skip ci]"
             git push
           fi
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "@jesdi/skills@$VERSION" version >/dev/null 2>&1; then
+          if pnpm view "@jesdi/skills@$VERSION" version >/dev/null 2>&1; then
             echo "@jesdi/skills@$VERSION already published; skipping."
           else
-            npm publish --provenance --access public
+            pnpm publish --provenance --access public --no-git-checks
           fi

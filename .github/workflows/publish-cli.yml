@@ -13,21 +13,23 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm test
-      - run: npm run build -w cli
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm --filter @jesdi/skills-cli build
       - name: Publish if this version is new
         working-directory: cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if npm view "@jesdi/skills-cli@$VERSION" version >/dev/null 2>&1; then
+          if pnpm view "@jesdi/skills-cli@$VERSION" version >/dev/null 2>&1; then
             echo "@jesdi/skills-cli@$VERSION already published; skipping."
           else
-            npm publish --provenance --access public
+            pnpm publish --provenance --access public --no-git-checks
           fi
