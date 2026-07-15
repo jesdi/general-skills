@@ -158,8 +158,29 @@ def main(owner, project_number, repo):
     print(render(rank_issues(issues)))
 
 
+def find_project_meta(start=None):
+    """Walk up from `start` (default cwd) to the nearest `.backlog/project-meta.json`.
+
+    Returns its absolute path. Raises FileNotFoundError with an actionable
+    message if no ancestor directory contains one.
+    """
+    origin = os.path.abspath(start or os.getcwd())
+    directory = origin
+    while True:
+        candidate = os.path.join(directory, ".backlog", "project-meta.json")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(directory)
+        if parent == directory:  # reached the filesystem root
+            raise FileNotFoundError(
+                f"No .backlog/project-meta.json found walking up from {origin}. "
+                "Run `backlog setup` to provision the board and write it."
+            )
+        directory = parent
+
+
 if __name__ == "__main__":
-    meta_path = os.path.join(os.path.dirname(__file__), "project-meta.json")
-    with open(meta_path) as handle:
+    config_path = find_project_meta()
+    with open(config_path) as handle:
         meta = json.load(handle)
     main(meta["owner"], meta["projectNumber"], meta["repo"])

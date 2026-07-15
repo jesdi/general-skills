@@ -166,3 +166,49 @@ def test_render_shows_claimed_section_first():
 def test_render_no_claimed_section_when_none_in_progress():
     text = rank.render(rank.rank_issues([_scored(1, 2, 1)]))
     assert "claimed" not in text
+
+
+import os
+
+import pytest
+
+
+def test_find_project_meta_in_cwd(tmp_path, monkeypatch):
+    backlog = tmp_path / ".backlog"
+    backlog.mkdir()
+    meta_file = backlog / "project-meta.json"
+    meta_file.write_text("{}")
+    monkeypatch.chdir(tmp_path)
+    assert rank.find_project_meta() == str(meta_file)
+
+
+def test_find_project_meta_walks_up_from_subdir(tmp_path, monkeypatch):
+    backlog = tmp_path / ".backlog"
+    backlog.mkdir()
+    meta_file = backlog / "project-meta.json"
+    meta_file.write_text("{}")
+    nested = tmp_path / "backend" / "deep"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    assert rank.find_project_meta() == str(meta_file)
+
+
+def test_find_project_meta_nearest_ancestor_wins(tmp_path, monkeypatch):
+    outer = tmp_path / ".backlog"
+    outer.mkdir()
+    (outer / "project-meta.json").write_text("{}")
+    inner_root = tmp_path / "sub"
+    inner_backlog = inner_root / ".backlog"
+    inner_backlog.mkdir(parents=True)
+    inner_meta = inner_backlog / "project-meta.json"
+    inner_meta.write_text("{}")
+    monkeypatch.chdir(inner_root)
+    assert rank.find_project_meta() == str(inner_meta)
+
+
+def test_find_project_meta_errors_clearly_when_absent(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(FileNotFoundError) as exc:
+        rank.find_project_meta()
+    assert ".backlog/project-meta.json" in str(exc.value)
+    assert "backlog setup" in str(exc.value)
