@@ -18,7 +18,7 @@ def test_parse_blocked_by_none_and_empty():
 def test_merge_sources_joins_fields_and_bodies():
     project_items = [
         {"content": {"number": 12, "title": "Add X", "url": "u/12"},
-         "status": "Ready", "impact": 4, "effort": 2, "area": "scorecard"},
+         "status": "Ready", "impact": 4, "effort": 2, "area": "feature"},
         {"content": {"number": 34, "title": "Do Y", "url": "u/34"}},  # untriaged, no fields
         {"title": "a draft note"},  # draft item, no content -> skipped
     ]
@@ -31,7 +31,7 @@ def test_merge_sources_joins_fields_and_bodies():
     twelve = out[0]
     assert twelve["state"] == "OPEN"
     assert twelve["impact"] == 4 and twelve["effort"] == 2
-    assert twelve["area"] == "scorecard" and twelve["status"] == "Ready"
+    assert twelve["area"] == "feature" and twelve["status"] == "Ready"
     assert twelve["body"] == "Blocked by: #34"
     thirtyfour = out[1]
     assert thirtyfour["impact"] is None and thirtyfour["status"] is None
