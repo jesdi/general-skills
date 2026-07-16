@@ -3,7 +3,7 @@
  *
  * This is a template. Before running, substitute every __PVD_*__ marker below
  * with the value from this project's discovery cache
- * (skills/pr-visual-diff/pr-visual-diff.<slug>.json). The markers exist because
+ * (<skill-dir>/pr-visual-diff.<slug>.json). The markers exist because
  * each project wires its Playwright auth fixture and API mock differently.
  *
  * Copy the filled result to <specsDir>/__pr-capture__.spec.ts, then run:

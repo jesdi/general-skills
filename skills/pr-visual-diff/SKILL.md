@@ -22,7 +22,7 @@ project's setup once and caches it, then reuses the cache on later runs.
 
 The config cache lives beside this skill at
 `<skill-dir>/pr-visual-diff.<slug>.json`, where `<slug>` is the target repo's
-directory name. It is gitignored — local to this machine.
+directory name. It is gitignored — local to this machine. Ensure the cache file is ignored in the `.gitignore` of the repo where you install the skill directory (add an entry like `pr-visual-diff.*.json` if it isn't already).
 
 - **If the cache exists**, read it and skip to "When NOT to run the capture".
   If it says `{"supported": false}`, tell the user this project has no
