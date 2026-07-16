@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .my-skills/
+
+# Superpowers brainstorming/planning artifacts — never committed in this repo
+docs/superpowers/
+# pr-visual-diff per-project discovery caches
+skills/*/pr-visual-diff.*.json
