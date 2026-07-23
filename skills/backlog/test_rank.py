@@ -37,6 +37,46 @@ def test_merge_sources_joins_fields_and_bodies():
     assert thirtyfour["impact"] is None and thirtyfour["status"] is None
 
 
+def test_merge_sources_falls_back_to_title_join_when_content_redacted():
+    # A project-scope token can list items and field values but cannot expand
+    # the linked issue of a private repo: no "content", empty "repository".
+    # GitHub syncs linked-item titles to issue titles, so title is the join key.
+    project_items = [
+        {"id": "PVTI_a", "title": "Add X", "repository": "",
+         "status": "Ready", "impact": 4, "effort": 2},
+    ]
+    issue_rows = [
+        {"number": 12, "title": "Add X", "url": "u/12",
+         "body": "Blocked by: #34", "state": "open",
+         "labels": [{"name": "auto"}]},
+    ]
+    out = rank.merge_sources(project_items, issue_rows)
+    assert len(out) == 1
+    twelve = out[0]
+    assert twelve["number"] == 12
+    assert twelve["url"] == "u/12"
+    assert twelve["impact"] == 4 and twelve["status"] == "Ready"
+    assert twelve["body"] == "Blocked by: #34"
+    assert twelve["labels"] == ["auto"]
+
+
+def test_merge_sources_redacted_item_without_matching_title_is_skipped():
+    out = rank.merge_sources(
+        [{"id": "PVTI_a", "title": "board-only note", "status": "Ready"}],
+        [{"number": 1, "title": "Other", "url": "u/1", "body": "", "state": "open"}],
+    )
+    assert out == []
+
+
+def test_merge_sources_title_join_skips_ambiguous_duplicate_titles():
+    project_items = [{"id": "PVTI_a", "title": "Dup", "status": "Ready"}]
+    issue_rows = [
+        {"number": 1, "title": "Dup", "url": "u/1", "body": "", "state": "open"},
+        {"number": 2, "title": "Dup", "url": "u/2", "body": "", "state": "open"},
+    ]
+    assert rank.merge_sources(project_items, issue_rows) == []
+
+
 def test_merge_sources_missing_body_row_defaults_open_empty():
     out = rank.merge_sources(
         [{"content": {"number": 7, "title": "T", "url": "u/7"}, "impact": 3, "effort": 1}],
@@ -249,7 +289,9 @@ def test_main_json_emits_machine_readable_rows(monkeypatch, capsys):
                     {"content": {"number": 5, "title": "Task", "url": "u/5"},
                      "status": "Ready", "impact": 4, "effort": 2}]})
             else:
-                assert "labels" in args[args.index("--json") + 1]
+                fields = args[args.index("--json") + 1]
+                assert "labels" in fields
+                assert "title" in fields and "url" in fields  # title-join keys
                 stdout = jsonlib.dumps([
                     {"number": 5, "body": "", "state": "open",
                      "labels": [{"name": "auto"}]}])

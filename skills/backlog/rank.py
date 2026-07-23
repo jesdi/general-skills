@@ -29,14 +29,31 @@ def _as_int(value):
 
 
 def merge_sources(project_items, issue_rows):
-    """Join Project field values (item-list) with issue bodies/state (issue list)."""
+    """Join Project field values (item-list) with issue bodies/state (issue list).
+
+    Join key is the issue number when the token can expand item content; when
+    content is redacted (project-scope token + private repo), fall back to the
+    title — GitHub syncs linked-item titles to issue titles. Ambiguous titles
+    (duplicates) and titles matching no issue are skipped, as are drafts.
+    """
     bodies = {row["number"]: row for row in issue_rows}
+    by_title, dup_titles = {}, set()
+    for row in issue_rows:
+        title = row.get("title")
+        if title in by_title:
+            dup_titles.add(title)
+        elif title is not None:
+            by_title[title] = row
     merged = []
     for item in project_items:
         content = item.get("content") or {}
         number = content.get("number")
         if number is None:
-            continue  # draft item (no linked issue) — not part of the work graph
+            row = by_title.get(item.get("title"))
+            if row is None or item.get("title") in dup_titles:
+                continue  # draft, board-only, or ambiguous — not joinable
+            number = row["number"]
+            content = {"title": row.get("title", ""), "url": row.get("url", "")}
         row = bodies.get(number, {})
         merged.append({
             "number": number,
@@ -183,7 +200,7 @@ def main(owner, project_number, repo, as_json=False):
     project_items = payload.get("items", [])
     issue_rows = _gh_json([
         "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--limit", "500", "--json", "number,body,state,labels",
+        "--limit", "500", "--json", "number,title,url,body,state,labels",
     ])
     issues = merge_sources(project_items, issue_rows)
     result = rank_issues(issues)
