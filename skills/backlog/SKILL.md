@@ -151,7 +151,11 @@ Runs the pure engine; makes no writes. Run **from the project root** (so the cwd
 walk-up finds `.backlog/project-meta.json`); do **not** `cd` into the skill dir:
 
 ```bash
-python3 .claude/skills/backlog/rank.py
+python3 .claude/skills/backlog/rank.py          # human-readable table
+python3 .claude/skills/backlog/rank.py --json   # machine-readable rows for
+                                                # dispatchers: number, title,
+                                                # url, status, labels, blocked,
+                                                # score
 ```
 
 (Use whichever agent-skills path the store symlinked the skill into — e.g.

@@ -48,6 +48,7 @@ def merge_sources(project_items, issue_rows):
             "impact": _as_int(item.get("impact")),
             "effort": _as_int(item.get("effort")),
             "area": item.get("area"),
+            "labels": [l["name"] for l in row.get("labels") or []],
         })
     return merged
 
@@ -111,6 +112,27 @@ def rank_issues(issues):
     }
 
 
+def to_json_rows(result):
+    """Flat machine-readable rows for `--json` consumers (e.g. dispatchers):
+    available issues in rank order, then blocked, then in-progress."""
+    rows = []
+    for issue, blocked in (
+        [(i, False) for i in result["available"]]
+        + [(i, True) for i in result["blocked"]]
+        + [(i, False) for i in result["in_progress"]]
+    ):
+        rows.append({
+            "number": issue["number"],
+            "title": issue["title"],
+            "url": issue["url"],
+            "status": issue.get("status"),
+            "labels": issue.get("labels", []),
+            "blocked": blocked,
+            "score": score(issue),
+        })
+    return rows
+
+
 def render(result):
     lines = []
     if result["in_progress"]:
@@ -153,7 +175,7 @@ def _project_env():
     return {**os.environ, "GH_TOKEN": token} if token else None
 
 
-def main(owner, project_number, repo):
+def main(owner, project_number, repo, as_json=False):
     payload = _gh_json([
         "gh", "project", "item-list", str(project_number),
         "--owner", owner, "--format", "json", "--limit", "200",
@@ -161,10 +183,14 @@ def main(owner, project_number, repo):
     project_items = payload.get("items", [])
     issue_rows = _gh_json([
         "gh", "issue", "list", "--repo", repo, "--state", "all",
-        "--limit", "500", "--json", "number,body,state",
+        "--limit", "500", "--json", "number,body,state,labels",
     ])
     issues = merge_sources(project_items, issue_rows)
-    print(render(rank_issues(issues)))
+    result = rank_issues(issues)
+    if as_json:
+        print(json.dumps(to_json_rows(result)))
+    else:
+        print(render(result))
 
 
 def find_project_meta(start=None):
@@ -189,7 +215,9 @@ def find_project_meta(start=None):
 
 
 if __name__ == "__main__":
+    import sys
     config_path = find_project_meta()
     with open(config_path) as handle:
         meta = json.load(handle)
-    main(meta["owner"], meta["projectNumber"], meta["repo"])
+    main(meta["owner"], meta["projectNumber"], meta["repo"],
+         as_json="--json" in sys.argv[1:])
