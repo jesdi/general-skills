@@ -230,7 +230,7 @@ def test_main_uses_project_token_only_for_project_call(monkeypatch):
         return R()
 
     monkeypatch.setattr(rank.subprocess, "run", fake_run)
-    rank.main("jesdi", 1, "jesdi/portfolio_eval")
+    rank.main("acme", 1, "acme/private-repo")
     project_call, issue_call = calls
     assert project_call[0][1] == "project"
     assert project_call[1]["GH_TOKEN"] == "classic-tok"
