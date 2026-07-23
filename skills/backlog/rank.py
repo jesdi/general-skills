@@ -139,16 +139,25 @@ def render(result):
     return "\n".join(lines)
 
 
-def _gh_json(args):
-    completed = subprocess.run(args, capture_output=True, text=True, check=True)
+def _gh_json(args, env=None):
+    completed = subprocess.run(args, capture_output=True, text=True, check=True,
+                               env=env)
     return json.loads(completed.stdout)
+
+
+def _project_env():
+    """User-owned Projects v2 are invisible to fine-grained PATs, so when
+    GH_PROJECT_TOKEN is set, `gh project` calls run with GH_TOKEN swapped to
+    it; every other gh call keeps the stored auth (which can read the repo)."""
+    token = os.environ.get("GH_PROJECT_TOKEN")
+    return {**os.environ, "GH_TOKEN": token} if token else None
 
 
 def main(owner, project_number, repo):
     payload = _gh_json([
         "gh", "project", "item-list", str(project_number),
         "--owner", owner, "--format", "json", "--limit", "200",
-    ])
+    ], env=_project_env())
     project_items = payload.get("items", [])
     issue_rows = _gh_json([
         "gh", "issue", "list", "--repo", repo, "--state", "all",

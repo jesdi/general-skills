@@ -206,6 +206,38 @@ def test_find_project_meta_nearest_ancestor_wins(tmp_path, monkeypatch):
     assert rank.find_project_meta() == str(inner_meta)
 
 
+def test_project_env_absent_without_token(monkeypatch):
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    assert rank._project_env() is None
+
+
+def test_project_env_swaps_gh_token(monkeypatch):
+    monkeypatch.setenv("GH_PROJECT_TOKEN", "classic-tok")
+    env = rank._project_env()
+    assert env["GH_TOKEN"] == "classic-tok"
+
+
+def test_main_uses_project_token_only_for_project_call(monkeypatch):
+    monkeypatch.setenv("GH_PROJECT_TOKEN", "classic-tok")
+    calls = []
+
+    def fake_run(args, capture_output, text, check, env=None):
+        calls.append((args, env))
+
+        class R:
+            stdout = "{\"items\": []}" if args[1] == "project" else "[]"
+
+        return R()
+
+    monkeypatch.setattr(rank.subprocess, "run", fake_run)
+    rank.main("jesdi", 1, "jesdi/portfolio_eval")
+    project_call, issue_call = calls
+    assert project_call[0][1] == "project"
+    assert project_call[1]["GH_TOKEN"] == "classic-tok"
+    assert issue_call[0][1] == "issue"
+    assert issue_call[1] is None  # stored gh auth (repo PAT) stays active
+
+
 def test_find_project_meta_errors_clearly_when_absent(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(FileNotFoundError) as exc:
