@@ -2,7 +2,13 @@ name: ci
 
 on:
   push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -17,6 +23,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - run: pip install pytest
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm --filter @jesdi/skills-cli build
