@@ -206,6 +206,63 @@ def test_find_project_meta_nearest_ancestor_wins(tmp_path, monkeypatch):
     assert rank.find_project_meta() == str(inner_meta)
 
 
+def test_merge_sources_carries_label_names():
+    out = rank.merge_sources(
+        [{"content": {"number": 7, "title": "T", "url": "u/7"}}],
+        [{"number": 7, "body": "", "state": "open",
+          "labels": [{"name": "auto"}, {"name": "bug"}]}],
+    )
+    assert out[0]["labels"] == ["auto", "bug"]
+
+
+def test_merge_sources_defaults_labels_empty():
+    out = rank.merge_sources(
+        [{"content": {"number": 7, "title": "T", "url": "u/7"}}], [])
+    assert out[0]["labels"] == []
+
+
+def test_json_rows_flags_blocked_and_keeps_rank_order():
+    issues = [
+        _scored(1, 2, 2),                          # score 1.0
+        _scored(2, 5, 1),                          # score 5.0 -> first
+        _scored(3, 9, 1, body="Blocked by: #2"),   # blocked
+        _scored(4, 4, 1, status="In progress"),    # claimed
+    ]
+    for i in issues:
+        i["labels"] = ["auto"]
+    rows = rank.to_json_rows(rank.rank_issues(issues))
+    assert [(r["number"], r["blocked"]) for r in rows] == [
+        (2, False), (1, False), (3, True), (4, False)]
+    row = rows[0]
+    assert row["title"] == "i2" and row["status"] == "Ready"
+    assert row["labels"] == ["auto"]
+    assert "url" in row
+
+
+def test_main_json_emits_machine_readable_rows(monkeypatch, capsys):
+    import json as jsonlib
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    def fake_run(args, capture_output, text, check, env=None):
+        class R:
+            if args[1] == "project":
+                stdout = jsonlib.dumps({"items": [
+                    {"content": {"number": 5, "title": "Task", "url": "u/5"},
+                     "status": "Ready", "impact": 4, "effort": 2}]})
+            else:
+                assert "labels" in args[args.index("--json") + 1]
+                stdout = jsonlib.dumps([
+                    {"number": 5, "body": "", "state": "open",
+                     "labels": [{"name": "auto"}]}])
+        return R()
+
+    monkeypatch.setattr(rank.subprocess, "run", fake_run)
+    rank.main("acme", 1, "acme/private-repo", as_json=True)
+    rows = jsonlib.loads(capsys.readouterr().out)
+    assert rows == [{"number": 5, "title": "Task", "url": "u/5",
+                     "status": "Ready", "labels": ["auto"],
+                     "blocked": False, "score": 2.0}]
+
+
 def test_project_env_absent_without_token(monkeypatch):
     monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
     assert rank._project_env() is None
