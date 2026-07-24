@@ -31,9 +31,22 @@ gh project field-create <projectNumber> --owner <owner> --name "Area" \
   --data-type SINGLE_SELECT \
   --single-select-options "feature,bug,infra,docs,research"
 
-# 4. Create the inbox label on the repo
-gh label create inbox --repo <repo> \
-  --description "Un-triaged capture" --color BFD4F2 || true
+# 4. Create the labels on the repo (idempotent: --force updates color/description)
+gh label create inbox --repo <repo> --description "Un-triaged capture" --color BFD4F2 --force
+# Type labels (at most one per issue)
+gh label create bug --repo <repo> --description "Something is broken or behaves incorrectly" --color d73a4a --force
+gh label create enhancement --repo <repo> --description "New feature or improvement to existing behavior" --color a2eeef --force
+gh label create documentation --repo <repo> --description "Docs, READMEs, comments, guides" --color 0075ca --force
+gh label create question --repo <repo> --description "Open question or decision needed, not yet actionable work" --color d876e3 --force
+# Area labels (0-2 per issue)
+gh label create frontend --repo <repo> --description "UI, components, styling, client/browser behavior" --color fbca04 --force
+gh label create backend --repo <repo> --description "Server logic, APIs, data models, services" --color 1d76db --force
+gh label create infra --repo <repo> --description "Deployment, hosting, environments, tooling, build" --color c2e0c6 --force
+gh label create ci --repo <repo> --description "CI/CD pipelines, workflows, checks" --color bfdadc --force
+gh label create security --repo <repo> --description "Vulnerabilities, auth, permissions, hardening" --color ee0701 --force
+gh label create performance --repo <repo> --description "Speed, memory, efficiency, scalability" --color f9d0c4 --force
+gh label create testing --repo <repo> --description "Test coverage, test infrastructure, flaky tests" --color 0e8a16 --force
+gh label create dependencies --repo <repo> --description "Upgrading or managing third-party dependencies" --color 0366d6 --force
 
 # 5. Discover IDs to build .backlog/project-meta.json
 gh project view <projectNumber> --owner <owner> --format json   # -> id (projectId)
@@ -49,7 +62,8 @@ IDs into `.backlog/project-meta.json`.
 
 ```bash
 gh issue create --repo <repo> \
-  --title "<concise idea title>" --label inbox \
+  --title "<concise idea title>" \
+  --label inbox --label "<inferred>" [--label "<inferred>" ...] \
   --body "<one loose sentence is fine>"
 ```
 
@@ -81,6 +95,8 @@ gh issue edit <number> --repo <repo> --body "<body>\n\nBlocked by: #<a>, #<b>"
 
 # Drop the inbox label
 gh issue edit <number> --repo <repo> --remove-label inbox
+# Correct taxonomy labels if the user adjusts them during review
+gh issue edit <number> --repo <repo> --add-label "<label>,<label>" --remove-label "<label>"
 ```
 
 ## Sub-issues (native parent/child) — GraphQL, no field IDs needed
