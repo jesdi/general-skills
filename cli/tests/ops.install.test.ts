@@ -63,6 +63,7 @@ describe('opInstall', () => {
     );
     expect(state.skills['hello-world']).toEqual({
       version: '0.1.0',
+      package: '1.0.0',
       agents: ['claude', 'opencode'],
     });
   });
@@ -72,12 +73,19 @@ describe('opInstall', () => {
     await opInstall(['other'], ['opencode'], 'local', ctx);
     expect(existsSync(join(ctx.project, '.agents', 'skills', 'other', 'SKILL.md'))).toBe(true);
     const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
-    expect(state.skills.other).toEqual({ version: '0.2.0', agents: ['opencode'] });
+    expect(state.skills.other).toEqual({ version: '0.2.0', package: '1.0.0', agents: ['opencode'] });
   });
 
   it('rejects unknown skill names', async () => {
     const ctx = await makeCtx();
     await expect(opInstall(['nope'], ['claude'], 'global', ctx)).rejects.toThrow(/unknown skill/i);
+  });
+
+  it('records the @jesdi/skills package version as a pin', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'local', ctx);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world'].package).toBe('1.0.0');
   });
 });
 

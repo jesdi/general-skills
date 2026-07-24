@@ -6,7 +6,7 @@ import {
   type Ctx,
   type Scope,
 } from './paths.js';
-import { fetchLatest, type FetchLatestResult } from './registry.js';
+import { fetchLatest, fetchVersion, type FetchLatestResult } from './registry.js';
 import { loadState, saveState, loadGlobalState, saveGlobalState } from './state.js';
 import { installSkill, uninstallSkill } from './store.js';
 import { join } from 'node:path';
@@ -24,31 +24,44 @@ export async function fetchSkills(ctx: CliCtx): Promise<FetchLatestResult> {
   });
 }
 
+async function installFromFetched(
+  fetched: FetchLatestResult,
+  name: string,
+  agents: AgentId[],
+  scope: Scope,
+  ctx: CliCtx,
+): Promise<{ name: string; version: string }> {
+  const skill = fetched.manifest.skills.find((s) => s.name === name);
+  if (!skill) {
+    throw new Error(`@jesdi/skills@${fetched.packageVersion} does not contain skill: ${name}`);
+  }
+  await installSkill({
+    name,
+    sourceDir: join(fetched.skillsDir, name),
+    storeDir: storeDir(scope, ctx),
+    agentDirs: agents.map((a) => agentSkillsDir(a, scope, ctx)),
+  });
+  const state = await loadState(scope, ctx);
+  state.skills[name] = { version: skill.version, package: fetched.packageVersion, agents };
+  await saveState(scope, ctx, state);
+  return { name, version: skill.version };
+}
+
 export async function opInstall(
   names: string[],
   agents: AgentId[],
   scope: Scope,
   ctx: CliCtx,
 ): Promise<{ name: string; version: string }[]> {
-  const { manifest, skillsDir } = await fetchSkills(ctx);
-  const available = new Map(manifest.skills.map((s) => [s.name, s]));
+  const fetched = await fetchSkills(ctx);
+  const available = new Set(fetched.manifest.skills.map((s) => s.name));
   for (const name of names) {
     if (!available.has(name)) throw new Error(`unknown skill: ${name}`);
   }
-  const state = await loadState(scope, ctx);
   const installed: { name: string; version: string }[] = [];
   for (const name of names) {
-    const skill = available.get(name)!;
-    await installSkill({
-      name,
-      sourceDir: join(skillsDir, name),
-      storeDir: storeDir(scope, ctx),
-      agentDirs: agents.map((a) => agentSkillsDir(a, scope, ctx)),
-    });
-    state.skills[name] = { version: skill.version, agents };
-    installed.push({ name, version: skill.version });
+    installed.push(await installFromFetched(fetched, name, agents, scope, ctx));
   }
-  await saveState(scope, ctx, state);
   return installed;
 }
 
@@ -114,8 +127,23 @@ export async function opSync(ctx: CliCtx): Promise<{ name: string; version: stri
   }
   const results: { name: string; version: string }[] = [];
   for (const [name, entry] of entries) {
-    const [installed] = await opInstall([name], entry.agents, 'local', ctx);
-    results.push(installed);
+    const fetched = entry.package
+      ? await fetchVersion(entry.package, {
+          cacheDir: cacheDir(ctx),
+          registryUrl: ctx.registryUrl,
+          fetchImpl: ctx.fetchImpl,
+        })
+      : await fetchSkills(ctx);
+    if (entry.package) {
+      const skill = fetched.manifest.skills.find((s) => s.name === name);
+      if (!skill || skill.version !== entry.version) {
+        throw new Error(
+          `pinned @jesdi/skills@${entry.package} does not contain ${name}@${entry.version} — ` +
+            `.my-skills.json is inconsistent`,
+        );
+      }
+    }
+    results.push(await installFromFetched(fetched, name, entry.agents, 'local', ctx));
   }
   return results;
 }
