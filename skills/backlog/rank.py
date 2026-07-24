@@ -148,6 +148,7 @@ def to_json_rows(result):
             "labels": issue.get("labels", []),
             "blocked": blocked,
             "score": score(issue),
+            "boost": issue.get("boost", 0),
         })
     return rows
 
@@ -167,6 +168,11 @@ def render(result):
         value = score(issue)
         score_str = f"{value:.2f}" if value is not None else "  — "
         flag = "" if value is not None else "  [needs triage]"
+        boost = issue.get("boost", 0)
+        if boost > 0:
+            flag += f"  ↑{boost}"
+        elif boost < 0:
+            flag += f"  ↓{-boost}"
         label = f"#{issue['number']} {issue['title']}"[:38].ljust(38)
         area = (issue.get("area") or "-")
         lines.append(f"{idx:>4}  {score_str:>5}  {label}  {area:<10}{flag}")

@@ -137,6 +137,12 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
 3. For a promoted issue, gather `Impact` (1–5), `Effort` (1–5), `Area` (**pick one
    from the options present in `.backlog/project-meta.json`** → `fields.Area.options`),
    and optional blockers.
+
+   - **Boost** (number, optional, default 0): manual priority override. Ranking is
+     band-dominant — any issue with higher Boost outranks every issue with lower
+     Boost regardless of score; score orders issues within a band. Negative values
+     sink an issue below the unboosted pack. Dispatchers set 99 for "work on this
+     next". `--json` rows carry `"boost"`.
 4. Apply, in order, the `references/graphql.md` → Triage commands:
    add to project → set Impact/Effort (`--number`) → set
    `Score` = round(Impact ÷ Effort, 1) (`--number`) → set Area +

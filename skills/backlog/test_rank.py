@@ -302,7 +302,7 @@ def test_main_json_emits_machine_readable_rows(monkeypatch, capsys):
     rows = jsonlib.loads(capsys.readouterr().out)
     assert rows == [{"number": 5, "title": "Task", "url": "u/5",
                      "status": "Ready", "labels": ["auto"],
-                     "blocked": False, "score": 2.0}]
+                     "blocked": False, "score": 2.0, "boost": 0}]
 
 
 def test_project_env_absent_without_token(monkeypatch):
@@ -386,3 +386,26 @@ def test_unscored_boosted_enters_band_after_scored_in_band():
     scored_plain = _scored(3, 5, 1)
     result = rank.rank_issues([scored_plain, unscored_boosted, scored_boosted])
     assert [i["number"] for i in result["available"]] == [1, 2, 3]
+
+
+def test_json_rows_include_boost():
+    a = _scored(1, 2, 1)
+    a["boost"] = 2
+    a["labels"] = ["auto"]
+    b = _scored(2, 5, 1)
+    b["labels"] = ["auto"]
+    rows = rank.to_json_rows(rank.rank_issues([a, b]))
+    assert [(r["number"], r["boost"]) for r in rows] == [(1, 2), (2, 0)]
+
+
+def test_render_marks_boost_up_and_down():
+    up = _scored(1, 2, 1)
+    up["boost"] = 2
+    down = _scored(2, 5, 1)
+    down["boost"] = -1
+    plain = _scored(3, 1, 1)
+    text = rank.render(rank.rank_issues([up, down, plain]))
+    assert "↑2" in text
+    assert "↓1" in text
+    line_for_plain = next(l for l in text.splitlines() if "#3 i3" in l)
+    assert "↑" not in line_for_plain and "↓" not in line_for_plain
