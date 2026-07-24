@@ -66,6 +66,7 @@ def merge_sources(project_items, issue_rows):
             "effort": _as_int(item.get("effort")),
             "area": item.get("area"),
             "labels": [l["name"] for l in row.get("labels") or []],
+            "boost": (lambda v: 0 if v is None else v)(_as_int(item.get("boost"))),
         })
     return merged
 
@@ -100,7 +101,8 @@ def score(issue):
 def _sort_key(issue):
     value = score(issue)
     return (
-        0 if value is not None else 1,   # scored issues first
+        -issue.get("boost", 0),          # band first: higher boost above everything
+        0 if value is not None else 1,   # scored issues first within a band
         -(value or 0.0),                 # higher score first
         -(issue.get("impact") or 0),     # tiebreak: higher impact
         issue["number"],                 # stable, deterministic
@@ -146,6 +148,7 @@ def to_json_rows(result):
             "labels": issue.get("labels", []),
             "blocked": blocked,
             "score": score(issue),
+            "boost": issue.get("boost", 0),
         })
     return rows
 
@@ -165,6 +168,11 @@ def render(result):
         value = score(issue)
         score_str = f"{value:.2f}" if value is not None else "  — "
         flag = "" if value is not None else "  [needs triage]"
+        boost = issue.get("boost", 0)
+        if boost > 0:
+            flag += f"  ↑{boost}"
+        elif boost < 0:
+            flag += f"  ↓{-boost}"
         label = f"#{issue['number']} {issue['title']}"[:38].ljust(38)
         area = (issue.get("area") or "-")
         lines.append(f"{idx:>4}  {score_str:>5}  {label}  {area:<10}{flag}")

@@ -52,7 +52,7 @@ dir.
 1. Ensure the `project` scope: `gh auth status`; if Projects calls 403, run
    `gh auth refresh -s project`.
 2. Follow `references/graphql.md` → **Setup**: create the Project, link the repo,
-   add the four fields, create the `inbox` label. On a brand-new board the `Area`
+   add the six fields, create the `inbox` label. On a brand-new board the `Area`
    single-select is created with the generic default options
    `feature,bug,infra,docs,research`. If any step reports "already exists", treat
    it as done and continue. Projects that want different Areas edit the option set
@@ -137,6 +137,12 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
 3. For a promoted issue, gather `Impact` (1–5), `Effort` (1–5), `Area` (**pick one
    from the options present in `.backlog/project-meta.json`** → `fields.Area.options`),
    and optional blockers.
+
+   - **Boost** (number, optional, default 0): manual priority override. Ranking is
+     band-dominant — any issue with higher Boost outranks every issue with lower
+     Boost regardless of score; score orders issues within a band. Negative values
+     sink an issue below the unboosted pack. Dispatchers set 99 for "work on this
+     next". `--json` rows carry `"boost"`.
 4. Apply, in order, the `references/graphql.md` → Triage commands:
    add to project → set Impact/Effort (`--number`) → set
    `Score` = round(Impact ÷ Effort, 1) (`--number`) → set Area +
@@ -155,7 +161,7 @@ python3 .claude/skills/backlog/rank.py          # human-readable table
 python3 .claude/skills/backlog/rank.py --json   # machine-readable rows for
                                                 # dispatchers: number, title,
                                                 # url, status, labels, blocked,
-                                                # score
+                                                # score, boost
 ```
 
 (Use whichever agent-skills path the store symlinked the skill into — e.g.
@@ -165,10 +171,11 @@ or below the repo root so `rank.py` can walk up to `.backlog/`.)
 `rank.py` pulls Project items + issue bodies via `gh`, parses `Blocked by:`
 edges, drops closed/`Done` blockers, and prints:
 
-- **Available** issues ranked by Impact÷Effort (unscored sort last, flagged
-  `[needs triage]`).
+- **Available** issues ranked boost-band first, then Impact÷Effort within a band
+  (unscored sort last within a band, flagged `[needs triage]`).
 - **Blocked** issues, unranked, annotated with what they wait on.
 
-Present the table as-is. If the user asks "why isn't #N at the top", point at its
-score or its blockers from the output. This in-memory ranking is the reason the
+Present the table as-is. If the user asks "why isn't #N at the top", check first
+whether another issue has a higher Boost band (shown as `↑n`), then its score, then
+its blockers from the output. This in-memory ranking is the reason the
 skill exists over a bare `gh issue list`.

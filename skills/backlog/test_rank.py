@@ -302,7 +302,7 @@ def test_main_json_emits_machine_readable_rows(monkeypatch, capsys):
     rows = jsonlib.loads(capsys.readouterr().out)
     assert rows == [{"number": 5, "title": "Task", "url": "u/5",
                      "status": "Ready", "labels": ["auto"],
-                     "blocked": False, "score": 2.0}]
+                     "blocked": False, "score": 2.0, "boost": 0}]
 
 
 def test_project_env_absent_without_token(monkeypatch):
@@ -343,3 +343,72 @@ def test_find_project_meta_errors_clearly_when_absent(tmp_path, monkeypatch):
         rank.find_project_meta()
     assert ".backlog/project-meta.json" in str(exc.value)
     assert "backlog setup" in str(exc.value)
+
+
+def test_merge_sources_parses_boost_and_defaults_zero():
+    out = rank.merge_sources(
+        [{"content": {"number": 7, "title": "T", "url": "u/7"}, "boost": 2},
+         {"content": {"number": 8, "title": "U", "url": "u/8"}, "boost": ""},
+         {"content": {"number": 9, "title": "V", "url": "u/9"}},
+         {"content": {"number": 10, "title": "W", "url": "u/10"}, "boost": -3}],
+        [])
+    assert [i["boost"] for i in out] == [2, 0, 0, -3]
+
+
+def test_boost_band_dominates_score():
+    lo = _scored(1, 5, 1)              # score 5.0, unboosted
+    hi = _scored(2, 1, 2)              # score 0.5, boosted
+    hi["boost"] = 1
+    result = rank.rank_issues([lo, hi])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_score_orders_within_boost_band():
+    a = _scored(1, 2, 2)               # score 1.0
+    b = _scored(2, 5, 1)               # score 5.0
+    a["boost"] = b["boost"] = 1
+    result = rank.rank_issues([a, b])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_negative_boost_sinks_below_unboosted():
+    demoted = _scored(1, 9, 1)         # score 9.0 but demoted
+    demoted["boost"] = -1
+    plain = _scored(2, 1, 1)           # score 1.0
+    result = rank.rank_issues([demoted, plain])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_unscored_boosted_enters_band_after_scored_in_band():
+    scored_boosted = _scored(1, 2, 1)
+    scored_boosted["boost"] = 1
+    unscored_boosted = _scored(2, None, None)
+    unscored_boosted["boost"] = 1
+    scored_plain = _scored(3, 5, 1)
+    result = rank.rank_issues([scored_plain, unscored_boosted, scored_boosted])
+    assert [i["number"] for i in result["available"]] == [1, 2, 3]
+
+
+def test_json_rows_include_boost():
+    a = _scored(1, 2, 1)
+    a["boost"] = 2
+    a["labels"] = ["auto"]
+    b = _scored(2, 5, 1)
+    b["labels"] = ["auto"]
+    rows = rank.to_json_rows(rank.rank_issues([a, b]))
+    assert [(r["number"], r["boost"]) for r in rows] == [(1, 2), (2, 0)]
+
+
+def test_render_marks_boost_up_and_down():
+    up = _scored(1, 2, 1)
+    up["boost"] = 2
+    down = _scored(2, 5, 1)
+    down["boost"] = -1
+    plain = _scored(3, 1, 1)
+    text = rank.render(rank.rank_issues([up, down, plain]))
+    line_for_up = next(l for l in text.splitlines() if "#1 i1" in l)
+    assert "↑2" in line_for_up
+    line_for_down = next(l for l in text.splitlines() if "#2 i2" in l)
+    assert "↓1" in line_for_down
+    line_for_plain = next(l for l in text.splitlines() if "#3 i3" in l)
+    assert "↑" not in line_for_plain and "↓" not in line_for_plain
