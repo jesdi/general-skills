@@ -40,11 +40,49 @@ async function newestCached(cacheDir: string, cause: unknown): Promise<FetchLate
   return loadFromCache(cacheDir, newest);
 }
 
-export async function fetchLatest(opts: {
+interface RegistryOpts {
   cacheDir: string;
   registryUrl?: string;
   fetchImpl?: typeof fetch;
-}): Promise<FetchLatestResult> {
+}
+
+async function download(
+  meta: { version: string; dist: { tarball: string } },
+  opts: RegistryOpts,
+): Promise<void> {
+  const f = opts.fetchImpl ?? fetch;
+  const versionDir = join(opts.cacheDir, meta.version);
+  if (existsSync(join(versionDir, 'package', 'skills-manifest.json'))) return;
+  const res = await f(meta.dist.tarball);
+  if (!res.ok) throw new Error(`tarball download failed: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  await rm(versionDir, { recursive: true, force: true });
+  await mkdir(versionDir, { recursive: true });
+  const tmpTar = join(versionDir, 'pkg.tgz');
+  await writeFile(tmpTar, buf);
+  await tar.extract({ file: tmpTar, cwd: versionDir });
+  await rm(tmpTar);
+}
+
+export async function fetchVersion(
+  version: string,
+  opts: RegistryOpts,
+): Promise<FetchLatestResult> {
+  if (existsSync(join(opts.cacheDir, version, 'package', 'skills-manifest.json'))) {
+    return loadFromCache(opts.cacheDir, version);
+  }
+  const f = opts.fetchImpl ?? fetch;
+  const registry = opts.registryUrl ?? DEFAULT_REGISTRY;
+  const res = await f(`${registry}/${PACKAGE}/${version}`);
+  if (!res.ok) {
+    throw new Error(`could not fetch @jesdi/skills@${version}: registry responded ${res.status}`);
+  }
+  const meta = (await res.json()) as { version: string; dist: { tarball: string } };
+  await download(meta, opts);
+  return loadFromCache(opts.cacheDir, version);
+}
+
+export async function fetchLatest(opts: RegistryOpts): Promise<FetchLatestResult> {
   const f = opts.fetchImpl ?? fetch;
   const registry = opts.registryUrl ?? DEFAULT_REGISTRY;
 
@@ -56,18 +94,6 @@ export async function fetchLatest(opts: {
   } catch (err) {
     return newestCached(opts.cacheDir, err);
   }
-
-  const versionDir = join(opts.cacheDir, meta.version);
-  if (!existsSync(join(versionDir, 'package', 'skills-manifest.json'))) {
-    const res = await f(meta.dist.tarball);
-    if (!res.ok) throw new Error(`tarball download failed: ${res.status}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    await rm(versionDir, { recursive: true, force: true });
-    await mkdir(versionDir, { recursive: true });
-    const tmpTar = join(versionDir, 'pkg.tgz');
-    await writeFile(tmpTar, buf);
-    await tar.extract({ file: tmpTar, cwd: versionDir });
-    await rm(tmpTar);
-  }
+  await download(meta, opts);
   return loadFromCache(opts.cacheDir, meta.version);
 }
