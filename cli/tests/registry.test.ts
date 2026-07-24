@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as tar from 'tar';
@@ -100,5 +100,40 @@ describe('fetchVersion', () => {
     await expect(fetchVersion('9.9.9', { cacheDir: cache, fetchImpl })).rejects.toThrow(
       /9\.9\.9/,
     );
+  });
+
+  it('rejects a path-traversal version string before touching the network', async () => {
+    const cache = await mkdtemp(join(tmpdir(), 'cache-'));
+    let networkCalled = false;
+    const fetchImpl = (async () => {
+      networkCalled = true;
+      return new Response('{}');
+    }) as unknown as typeof fetch;
+    await expect(fetchVersion('../..', { cacheDir: cache, fetchImpl })).rejects.toThrow(
+      /invalid version.*\.\.\//i,
+    );
+    expect(networkCalled).toBe(false);
+  });
+
+  it('rejects other non-semver version strings before touching the network', async () => {
+    const cache = await mkdtemp(join(tmpdir(), 'cache-'));
+    let networkCalled = false;
+    const fetchImpl = (async () => {
+      networkCalled = true;
+      return new Response('{}');
+    }) as unknown as typeof fetch;
+    await expect(
+      fetchVersion('latest', { cacheDir: cache, fetchImpl }),
+    ).rejects.toThrow(/invalid version.*latest/i);
+    expect(networkCalled).toBe(false);
+  });
+
+  it('leaves no temp directories in the cache after a successful fetch', async () => {
+    const cache = await mkdtemp(join(tmpdir(), 'cache-'));
+    const fetchImpl = await buildFixture('1.2.3');
+    await fetchVersion('1.2.3', { cacheDir: cache, fetchImpl });
+    const entries = await readdir(cache);
+    expect(entries.every((e) => !e.startsWith('.tmp-'))).toBe(true);
+    expect(entries).toContain('1.2.3');
   });
 });

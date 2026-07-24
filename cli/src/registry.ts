@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import * as tar from 'tar';
@@ -6,6 +6,8 @@ import type { Manifest } from './manifest.js';
 
 const PACKAGE = '@jesdi%2fskills';
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
+
+const VERSION_RE = /^\d+\.\d+\.\d+(-[\w.-]+)?$/;
 
 export interface FetchLatestResult {
   packageVersion: string;
@@ -56,18 +58,24 @@ async function download(
   const res = await f(meta.dist.tarball);
   if (!res.ok) throw new Error(`tarball download failed: ${res.status}`);
   const buf = Buffer.from(await res.arrayBuffer());
-  await rm(versionDir, { recursive: true, force: true });
-  await mkdir(versionDir, { recursive: true });
-  const tmpTar = join(versionDir, 'pkg.tgz');
+  const tmpDir = join(opts.cacheDir, `.tmp-${meta.version}`);
+  await rm(tmpDir, { recursive: true, force: true });
+  await mkdir(tmpDir, { recursive: true });
+  const tmpTar = join(tmpDir, 'pkg.tgz');
   await writeFile(tmpTar, buf);
-  await tar.extract({ file: tmpTar, cwd: versionDir });
+  await tar.extract({ file: tmpTar, cwd: tmpDir });
   await rm(tmpTar);
+  await rm(versionDir, { recursive: true, force: true });
+  await rename(tmpDir, versionDir);
 }
 
 export async function fetchVersion(
   version: string,
   opts: RegistryOpts,
 ): Promise<FetchLatestResult> {
+  if (!VERSION_RE.test(version)) {
+    throw new Error(`invalid version: ${version}`);
+  }
   if (existsSync(join(opts.cacheDir, version, 'package', 'skills-manifest.json'))) {
     return loadFromCache(opts.cacheDir, version);
   }
@@ -78,6 +86,11 @@ export async function fetchVersion(
     throw new Error(`could not fetch @jesdi/skills@${version}: registry responded ${res.status}`);
   }
   const meta = (await res.json()) as { version: string; dist: { tarball: string } };
+  if (meta.version !== version) {
+    throw new Error(
+      `registry returned version ${meta.version} but requested ${version} — refusing to cache`,
+    );
+  }
   await download(meta, opts);
   return loadFromCache(opts.cacheDir, version);
 }
