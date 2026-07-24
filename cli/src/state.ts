@@ -4,6 +4,7 @@ import { globalStateFile, projectStateFile, type AgentId, type Ctx, type Scope }
 
 export interface InstalledSkill {
   version: string;
+  package?: string;
   agents: AgentId[];
 }
 
