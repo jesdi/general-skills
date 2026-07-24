@@ -66,6 +66,7 @@ def merge_sources(project_items, issue_rows):
             "effort": _as_int(item.get("effort")),
             "area": item.get("area"),
             "labels": [l["name"] for l in row.get("labels") or []],
+            "boost": _as_int(item.get("boost")) or 0,
         })
     return merged
 
@@ -100,7 +101,8 @@ def score(issue):
 def _sort_key(issue):
     value = score(issue)
     return (
-        0 if value is not None else 1,   # scored issues first
+        -issue.get("boost", 0),          # band first: higher boost above everything
+        0 if value is not None else 1,   # scored issues first within a band
         -(value or 0.0),                 # higher score first
         -(issue.get("impact") or 0),     # tiebreak: higher impact
         issue["number"],                 # stable, deterministic

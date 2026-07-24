@@ -343,3 +343,46 @@ def test_find_project_meta_errors_clearly_when_absent(tmp_path, monkeypatch):
         rank.find_project_meta()
     assert ".backlog/project-meta.json" in str(exc.value)
     assert "backlog setup" in str(exc.value)
+
+
+def test_merge_sources_parses_boost_and_defaults_zero():
+    out = rank.merge_sources(
+        [{"content": {"number": 7, "title": "T", "url": "u/7"}, "boost": 2},
+         {"content": {"number": 8, "title": "U", "url": "u/8"}, "boost": ""},
+         {"content": {"number": 9, "title": "V", "url": "u/9"}}],
+        [])
+    assert [i["boost"] for i in out] == [2, 0, 0]
+
+
+def test_boost_band_dominates_score():
+    lo = _scored(1, 5, 1)              # score 5.0, unboosted
+    hi = _scored(2, 1, 2)              # score 0.5, boosted
+    hi["boost"] = 1
+    result = rank.rank_issues([lo, hi])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_score_orders_within_boost_band():
+    a = _scored(1, 2, 2)               # score 1.0
+    b = _scored(2, 5, 1)               # score 5.0
+    a["boost"] = b["boost"] = 1
+    result = rank.rank_issues([a, b])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_negative_boost_sinks_below_unboosted():
+    demoted = _scored(1, 9, 1)         # score 9.0 but demoted
+    demoted["boost"] = -1
+    plain = _scored(2, 1, 1)           # score 1.0
+    result = rank.rank_issues([demoted, plain])
+    assert [i["number"] for i in result["available"]] == [2, 1]
+
+
+def test_unscored_boosted_enters_band_after_scored_in_band():
+    scored_boosted = _scored(1, 2, 1)
+    scored_boosted["boost"] = 1
+    unscored_boosted = _scored(2, None, None)
+    unscored_boosted["boost"] = 1
+    scored_plain = _scored(3, 5, 1)
+    result = rank.rank_issues([scored_plain, unscored_boosted, scored_boosted])
+    assert [i["number"] for i in result["available"]] == [1, 2, 3]
