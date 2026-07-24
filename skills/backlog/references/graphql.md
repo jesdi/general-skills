@@ -26,6 +26,7 @@ gh project field-create <projectNumber> --owner <owner> --name "Status" \
 gh project field-create <projectNumber> --owner <owner> --name "Impact" --data-type NUMBER
 gh project field-create <projectNumber> --owner <owner> --name "Effort" --data-type NUMBER
 gh project field-create <projectNumber> --owner <owner> --name "Score" --data-type NUMBER
+gh project field-create <projectNumber> --owner <owner> --name "Boost" --data-type NUMBER
 gh project field-create <projectNumber> --owner <owner> --name "Area" \
   --data-type SINGLE_SELECT \
   --single-select-options "feature,bug,infra,docs,research"
@@ -65,6 +66,9 @@ gh project item-edit --project-id <projectId> --id <itemId> \
   --field-id <fields.Effort.id> --number <1-5>
 gh project item-edit --project-id <projectId> --id <itemId> \
   --field-id <fields.Score.id> --number <round(impact/effort, 1)>
+# Optional: manual priority override (default 0; positive boosts above unboosted, negative sinks below)
+gh project item-edit --project-id <projectId> --id <itemId> \
+  --field-id <fields.Boost.id> --number <n>
 
 # Set single-selects (use the option id from .backlog/project-meta.json)
 gh project item-edit --project-id <projectId> --id <itemId> \

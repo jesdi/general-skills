@@ -11,6 +11,7 @@
     "Impact": {"id": "PVTF_REPLACE"},
     "Effort": {"id": "PVTF_REPLACE"},
     "Score": {"id": "PVTF_REPLACE"},
+    "Boost": {"id": "PVTF_REPLACE"},
     "Area": {
       "id": "PVTSSF_REPLACE",
       "options": {"feature": "...", "bug": "...", "infra": "...", "docs": "...", "research": "..."}

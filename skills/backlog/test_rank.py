@@ -349,9 +349,10 @@ def test_merge_sources_parses_boost_and_defaults_zero():
     out = rank.merge_sources(
         [{"content": {"number": 7, "title": "T", "url": "u/7"}, "boost": 2},
          {"content": {"number": 8, "title": "U", "url": "u/8"}, "boost": ""},
-         {"content": {"number": 9, "title": "V", "url": "u/9"}}],
+         {"content": {"number": 9, "title": "V", "url": "u/9"}},
+         {"content": {"number": 10, "title": "W", "url": "u/10"}, "boost": -3}],
         [])
-    assert [i["boost"] for i in out] == [2, 0, 0]
+    assert [i["boost"] for i in out] == [2, 0, 0, -3]
 
 
 def test_boost_band_dominates_score():
@@ -405,7 +406,9 @@ def test_render_marks_boost_up_and_down():
     down["boost"] = -1
     plain = _scored(3, 1, 1)
     text = rank.render(rank.rank_issues([up, down, plain]))
-    assert "↑2" in text
-    assert "↓1" in text
+    line_for_up = next(l for l in text.splitlines() if "#1 i1" in l)
+    assert "↑2" in line_for_up
+    line_for_down = next(l for l in text.splitlines() if "#2 i2" in l)
+    assert "↓1" in line_for_down
     line_for_plain = next(l for l in text.splitlines() if "#3 i3" in l)
     assert "↑" not in line_for_plain and "↓" not in line_for_plain

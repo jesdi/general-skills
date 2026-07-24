@@ -66,7 +66,7 @@ def merge_sources(project_items, issue_rows):
             "effort": _as_int(item.get("effort")),
             "area": item.get("area"),
             "labels": [l["name"] for l in row.get("labels") or []],
-            "boost": _as_int(item.get("boost")) or 0,
+            "boost": (lambda v: 0 if v is None else v)(_as_int(item.get("boost"))),
         })
     return merged
 
