@@ -69,6 +69,103 @@ describe('opSync', () => {
   });
 });
 
+/** Registry serving TWO package versions: 1.0.0 has hello-world@0.1.0,
+ *  2.0.0 (latest) has hello-world@0.9.0. */
+async function twoVersionFetch() {
+  async function buildPkg(skillVersion: string) {
+    const root = await mkdtemp(join(tmpdir(), 'fix-'));
+    const pkg = join(root, 'package');
+    await mkdir(join(pkg, 'skills', 'hello-world'), { recursive: true });
+    await writeFile(
+      join(pkg, 'skills', 'hello-world', 'SKILL.md'),
+      `---\nname: hello-world\ndescription: v${skillVersion}\n---\nbody ${skillVersion}\n`,
+    );
+    await writeFile(
+      join(pkg, 'skills-manifest.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        generatedAt: new Date().toISOString(),
+        skills: [
+          { name: 'hello-world', version: skillVersion, hash: `sha256-${skillVersion}`, description: 'demo' },
+        ],
+      }),
+    );
+    const tarball = join(root, 'pkg.tgz');
+    await tar.create({ gzip: true, file: tarball, cwd: root }, ['package']);
+    return readFile(tarball);
+  }
+  const v1 = await buildPkg('0.1.0');
+  const v2 = await buildPkg('0.9.0');
+  return (async (url: RequestInfo | URL) => {
+    const u = String(url);
+    if (u.endsWith('/latest')) {
+      return new Response(
+        JSON.stringify({ version: '2.0.0', dist: { tarball: 'https://r.test/pkg-2.0.0.tgz' } }),
+      );
+    }
+    if (u.endsWith('/1.0.0')) {
+      return new Response(
+        JSON.stringify({ version: '1.0.0', dist: { tarball: 'https://r.test/pkg-1.0.0.tgz' } }),
+      );
+    }
+    if (u.includes('pkg-1.0.0')) return new Response(new Uint8Array(v1));
+    return new Response(new Uint8Array(v2));
+  }) as typeof fetch;
+}
+
+describe('opSync pinning', () => {
+  it('installs the pinned package version, not latest', async () => {
+    const ctx = { ...(await makeCtx()), fetchImpl: await twoVersionFetch() };
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.1.0', package: '1.0.0', agents: ['claude'] } },
+      }),
+    );
+    const result = await opSync(ctx);
+    expect(result).toEqual([{ name: 'hello-world', version: '0.1.0' }]);
+    const md = await readFile(
+      join(ctx.project, '.claude', 'skills', 'hello-world', 'SKILL.md'),
+      'utf8',
+    );
+    expect(md).toContain('v0.1.0');
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world']).toEqual({
+      version: '0.1.0',
+      package: '1.0.0',
+      agents: ['claude'],
+    });
+  });
+
+  it('ratchets an unpinned entry to pinned via latest', async () => {
+    const ctx = { ...(await makeCtx()), fetchImpl: await twoVersionFetch() };
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.1.0', agents: ['claude'] } },
+      }),
+    );
+    const result = await opSync(ctx);
+    expect(result).toEqual([{ name: 'hello-world', version: '0.9.0' }]);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world'].package).toBe('2.0.0');
+  });
+
+  it('fails loudly when the pin does not contain the recorded skill version', async () => {
+    const ctx = { ...(await makeCtx()), fetchImpl: await twoVersionFetch() };
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.5.0', package: '1.0.0', agents: ['claude'] } },
+      }),
+    );
+    await expect(opSync(ctx)).rejects.toThrow(/does not contain hello-world@0\.5\.0/);
+  });
+});
+
 describe('opList', () => {
   it('merges manifest with installed state', async () => {
     const ctx = await makeCtx();

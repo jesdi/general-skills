@@ -6,7 +6,7 @@ import {
   type Ctx,
   type Scope,
 } from './paths.js';
-import { fetchLatest, type FetchLatestResult } from './registry.js';
+import { fetchLatest, fetchVersion, type FetchLatestResult } from './registry.js';
 import { loadState, saveState, loadGlobalState, saveGlobalState } from './state.js';
 import { installSkill, uninstallSkill } from './store.js';
 import { join } from 'node:path';
@@ -127,8 +127,23 @@ export async function opSync(ctx: CliCtx): Promise<{ name: string; version: stri
   }
   const results: { name: string; version: string }[] = [];
   for (const [name, entry] of entries) {
-    const [installed] = await opInstall([name], entry.agents, 'local', ctx);
-    results.push(installed);
+    const fetched = entry.package
+      ? await fetchVersion(entry.package, {
+          cacheDir: cacheDir(ctx),
+          registryUrl: ctx.registryUrl,
+          fetchImpl: ctx.fetchImpl,
+        })
+      : await fetchSkills(ctx);
+    if (entry.package) {
+      const skill = fetched.manifest.skills.find((s) => s.name === name);
+      if (!skill || skill.version !== entry.version) {
+        throw new Error(
+          `pinned @jesdi/skills@${entry.package} does not contain ${name}@${entry.version} — ` +
+            `.my-skills.json is inconsistent`,
+        );
+      }
+    }
+    results.push(await installFromFetched(fetched, name, entry.agents, 'local', ctx));
   }
   return results;
 }
