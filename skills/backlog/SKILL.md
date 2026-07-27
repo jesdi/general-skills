@@ -166,7 +166,7 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
 
 ## `triage` — turn inbox issues into scored graph nodes
 
-1. List the inbox: `gh issue list --repo <repo> --state open --label inbox --json number,title,url,body`.
+1. List the inbox: `gh issue list --repo <repo> --state open --label inbox --json number,title,url,body,labels`.
 2. For each, present title + body + current labels and ask whether to promote
    (skip = leave in inbox). Offer label corrections per the **Label taxonomy**
    above; apply via `gh issue edit N --add-label … --remove-label …`
