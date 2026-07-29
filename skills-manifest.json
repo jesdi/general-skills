@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-24T16:48:47.031Z",
+  "generatedAt": "2026-07-29T09:24:37.867Z",
   "skills": [
     {
       "name": "backlog",
-      "version": "0.1.4",
-      "hash": "sha256-c5c2ff8482d24eb782b0d5799b1e490733340f604196f42e8051d731bb00dd09",
+      "version": "0.1.5",
+      "hash": "sha256-427fff6fc5005849a85e750568940b52375c823a9ad26b1827890dc0cabab499",
       "description": "Manage a GitHub-Issues-backed backlog and a Projects-v2 work graph via five verbs. Use when the user wants to CAPTURE an idea/research thread (\"add to backlog\", \"capture this\", \"note this idea\", \"log a task\"), TRIAGE the inbox (\"triage the backlog\", \"score the inbox\"), see what to work on NEXT (\"what's next\", \"what should I work on\", \"ranked backlog\", \"next actionable task\"), LAND a finished item (\"mark done\", \"close out #N\"), or SETUP the board the first time. Ranks open issues by impact÷effort, respecting `Blocked by:` edges, so only actionable work surfaces."
     },
     {
