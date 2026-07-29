@@ -42,6 +42,35 @@ not in the default `repo` scope).
 `<owner>`, `<repo>`, `<projectNumber>` below all come from that
 `.backlog/project-meta.json`.
 
+## Label taxonomy (capture infers, triage confirms)
+
+Issues carry conventional repo labels alongside `inbox`. They are orthogonal to
+the board's `Area` field — never derive one from the other. Apply every label
+that clearly fits, typically 1–3 total; when unsure, apply fewer. Use **only**
+these labels (`setup` provisions them all) — never invent new ones.
+
+**Type — at most one:**
+
+| Label | Apply when |
+|-------|-----------|
+| `bug` | Something is broken or behaves incorrectly |
+| `enhancement` | New feature or improvement to existing behavior |
+| `documentation` | Docs, READMEs, comments, guides |
+| `question` | Open question or decision needed, not yet actionable work |
+
+**Area — pick 0–2:**
+
+| Label | Apply when |
+|-------|-----------|
+| `frontend` | UI, components, styling, client/browser behavior |
+| `backend` | Server logic, APIs, data models, services |
+| `infra` | Deployment, hosting, environments, tooling, build |
+| `ci` | CI/CD pipelines, workflows, checks |
+| `security` | Vulnerabilities, auth, permissions, hardening |
+| `performance` | Speed, memory, efficiency, scalability |
+| `testing` | Test coverage, test infrastructure, flaky tests |
+| `dependencies` | Upgrading or managing third-party dependencies |
+
 ## `setup` — create the board once (idempotent)
 
 Run when `.backlog/project-meta.json` is absent or the board is being
@@ -52,7 +81,9 @@ dir.
 1. Ensure the `project` scope: `gh auth status`; if Projects calls 403, run
    `gh auth refresh -s project`.
 2. Follow `references/graphql.md` → **Setup**: create the Project, link the repo,
-   add the six fields, create the `inbox` label. On a brand-new board the `Area`
+   add the six fields, create the `inbox` label plus the 12 taxonomy labels
+   (idempotent — `--force` reconciles color/description on re-runs). On a
+   brand-new board the `Area`
    single-select is created with the generic default options
    `feature,bug,infra,docs,research`. If any step reports "already exists", treat
    it as done and continue. Projects that want different Areas edit the option set
@@ -126,14 +157,21 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
 2. Dedup: `gh issue list --repo <repo> --state open --search "<distinctive terms>" --json number,title,url`.
    If a genuine duplicate exists, add the new angle as a comment instead of a new
    issue and report which. Different-but-related → create new and cross-link `#N`.
-3. Otherwise create it (see `references/graphql.md` → Capture): `--label inbox`,
-   body = the idea as-is (one loose sentence is fine; no required structure).
-4. Report the new issue URL. If mid-task, treat as a side-quest and return.
+3. Otherwise infer labels from the idea text per the **Label taxonomy** above,
+   then create it (see `references/graphql.md` → Capture): `--label inbox` plus
+   one `--label` per inferred label, body = the idea as-is (one loose sentence
+   is fine; no required structure).
+4. Report the new issue URL and the labels applied. If mid-task, treat as a
+   side-quest and return.
 
 ## `triage` — turn inbox issues into scored graph nodes
 
-1. List the inbox: `gh issue list --repo <repo> --state open --label inbox --json number,title,url,body`.
-2. For each, present title + body and ask whether to promote (skip = leave in inbox).
+1. List the inbox: `gh issue list --repo <repo> --state open --label inbox --json number,title,url,body,labels`.
+2. For each, present title + body + current labels and ask whether to promote
+   (skip = leave in inbox). Offer label corrections per the **Label taxonomy**
+   above; apply via `gh issue edit N --add-label … --remove-label …`
+   (graphql.md → Triage). Labels stay independent of the board `Area` gathered
+   next.
 3. For a promoted issue, gather `Impact` (1–5), `Effort` (1–5), `Area` (**pick one
    from the options present in `.backlog/project-meta.json`** → `fields.Area.options`),
    and optional blockers.
