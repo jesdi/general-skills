@@ -47,6 +47,9 @@ gh label create security --repo <repo> --description "Vulnerabilities, auth, per
 gh label create performance --repo <repo> --description "Speed, memory, efficiency, scalability" --color f9d0c4 --force
 gh label create testing --repo <repo> --description "Test coverage, test infrastructure, flaky tests" --color 0e8a16 --force
 gh label create dependencies --repo <repo> --description "Upgrading or managing third-party dependencies" --color 0366d6 --force
+# Pipeline labels (at most one per issue; read by dispatchers)
+gh label create auto --repo <repo> --description "Suitable for the unattended agents pipeline" --color 5319E7 --force
+gh label create human-required --repo <repo> --description "Needs heavy human interaction before automation" --color B60205 --force
 
 # 5. Discover IDs to build .backlog/project-meta.json
 gh project view <projectNumber> --owner <owner> --format json   # -> id (projectId)

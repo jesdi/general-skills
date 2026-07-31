@@ -71,6 +71,17 @@ these labels (`setup` provisions them all) — never invent new ones.
 | `testing` | Test coverage, test infrastructure, flaky tests |
 | `dependencies` | Upgrading or managing third-party dependencies |
 
+**Pipeline — at most one, orthogonal to Type and Area:**
+
+Whether an issue is ready for an unattended agent to pick up. Leave both off
+when it is genuinely unclear — an unlabelled issue is simply not routed, which
+is the safe default. Dispatchers filter on `auto`; nothing else reads these.
+
+| Label | Apply when |
+|-------|-----------|
+| `auto` | Trivial, or close enough to previously automated work — suitable for the unattended agents pipeline |
+| `human-required` | Substantial fog of war remains; needs heavy human interaction before an agent can take it |
+
 ## `setup` — create the board once (idempotent)
 
 Run when `.backlog/project-meta.json` is absent or the board is being
@@ -81,7 +92,7 @@ dir.
 1. Ensure the `project` scope: `gh auth status`; if Projects calls 403, run
    `gh auth refresh -s project`.
 2. Follow `references/graphql.md` → **Setup**: create the Project, link the repo,
-   add the six fields, create the `inbox` label plus the 12 taxonomy labels
+   add the six fields, create the `inbox` label plus the 14 taxonomy labels
    (idempotent — `--force` reconciles color/description on re-runs). On a
    brand-new board the `Area`
    single-select is created with the generic default options
