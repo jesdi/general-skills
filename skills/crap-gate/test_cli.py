@@ -138,3 +138,15 @@ def test_failing_coverage_command_that_still_writes_a_report_warns(repo, capsys)
 def test_unknown_base_is_a_tool_error(repo, capsys):
     assert crap.main(["--base", "nope"]) == 2
     assert "nope" in capsys.readouterr().err
+
+
+def test_config_not_at_git_toplevel_is_a_tool_error(tmp_path, monkeypatch, capsys):
+    git(tmp_path, "init", "-q", "-b", "main")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / ".crap-gate.json").write_text(json.dumps(CONFIG))
+    git(tmp_path, "add", ".")
+    git(tmp_path, "commit", "-q", "-m", "base")
+    monkeypatch.chdir(sub)
+    assert crap.main([]) == 2
+    assert "git repository root" in capsys.readouterr().err
