@@ -20,7 +20,7 @@ from pathlib import Path
 import crap_git
 import crap_python
 import crap_typescript
-from crap_config import CODE_SUFFIXES, Config, Target, find_config, load, matches
+from crap_config import CODE_SUFFIXES, CONFIG_NAME, Config, Target, find_config, load, matches
 from crap_coverage import Report, load_report
 from crap_model import Func, ToolError
 from crap_report import Result, TargetRun, render_json, render_text
@@ -192,6 +192,12 @@ def main(argv: list[str] | None = None) -> int:
             config_path,
             {"base": args.base, "threshold_existing": args.threshold_existing, "threshold_new": args.threshold_new},
         )
+        toplevel = crap_git.toplevel(cfg.root).resolve()
+        if toplevel != cfg.root:
+            raise ToolError(
+                f"{CONFIG_NAME} must live at the git repository root; it is in "
+                f"{cfg.root}, but the root is {toplevel}"
+            )
         result = run(cfg, run_mode=args.run_mode, all_functions=args.all)
     except ToolError as exc:
         print(f"crap: {exc}", file=sys.stderr)
