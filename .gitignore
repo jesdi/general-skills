@@ -6,3 +6,7 @@ dist/
 docs/superpowers/
 # pr-visual-diff per-project discovery caches
 skills/*/pr-visual-diff.*.json
+
+# Python bytecode
+__pycache__/
+*.pyc
