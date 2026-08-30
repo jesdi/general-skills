@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-31T14:48:08.872Z",
+  "generatedAt": "2026-08-30T14:16:24.650Z",
   "skills": [
     {
       "name": "backlog",
@@ -19,6 +19,12 @@
       "version": "0.1.0",
       "hash": "sha256-5f239c09fd46ba4c1887da88374a75e12e3df31ff18e93ed9367bdd06f3b386c",
       "description": "CEO/founder-mode plan review. Rethink the problem, find the 10-star product,\nchallenge premises, expand scope when it creates a better product. Four modes:\nSCOPE EXPANSION (dream big), SELECTIVE EXPANSION (hold scope + cherry-pick\nexpansions), HOLD SCOPE (maximum rigor), SCOPE REDUCTION (strip to essentials).\nUse when asked to \"think bigger\", \"expand scope\", \"strategy review\", \"rethink this\",\n\"what would you do differently\", or when reviewing project direction and goals.\nProduces a structured review document with analysis and recommendations.\n"
+    },
+    {
+      "name": "crap-gate",
+      "version": "0.1.0",
+      "hash": "sha256-15a410b845b5346ed6ad1a0fa15c33add9e82acb7f1b7bbf8fdf83ab485bc741",
+      "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions > 15 and new functions > 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
     },
     {
       "name": "file-bug-issue",
