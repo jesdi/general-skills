@@ -36,7 +36,7 @@ finding). Everything else belongs in a different review.
 
 ## The smells
 
-Run every meaningful change through this table, top row first. Each row is one
+Run every meaningful change through this table, top to bottom. Each row is one
 concept; the *Ask* is the question that exposes it, the *Remedy* is what to
 push for.
 
@@ -52,7 +52,7 @@ push for.
 | 8 | **Needless sequencing / non-atomic update** — independent work serialized, related updates that can leave state half-applied | Is this actually dependent? Can it be observed half-done? | Parallelize independent work; group related updates. Not micro-optimization — brittleness. |
 | 9 | **Short-horizon change** — "temporary", TODO-later, quick patch, deferred cleanup, a shape chosen because it is the smallest diff | What does this look like when its reason is gone? What does removing it cost? | Do the durable fix now, or structure the stopgap so removal is a pure deletion (one branch, one file), never a refactor of live callers. |
 
-Row 9 is the long-term rule and it applies to every other row: prefer
+Short-horizon change is the long-term rule and it applies to every other smell: prefer
 consolidating now over a third copy later; prefer the simplification that
 still makes sense after the migration; never trade a durable simplification
 for a smaller diff.
@@ -61,27 +61,36 @@ for a smaller diff.
 
 1. Read the full diff, then the files it touches and the canonical helpers it
    should have reused. Structural problems are only visible in context.
-2. For each meaningful change, ask the table's questions in order. Rows 1 and
-   2 are where the big wins hide; spend most of the effort there.
+2. For each meaningful change, ask the table's questions in order.
+   Duplicated concept and Complexity rearranged are where the big wins hide;
+   spend most of the effort there.
 3. For every finding, write the *restructuring*, not the patch. "Extract a
    shared helper" is a patch; "one `Message` model with a renderer per channel,
    so channels become data" is a restructuring.
 
-## Output
+## Output Expectations
 
 Write the review in this shape:
 
-1. **Findings**, ordered by table row (row 1 first), each with: the row,
-   where, and the concrete restructuring. Keep to the few high-conviction
-   findings — structural findings displace cosmetic ones, and a cosmetic
-   finding never appears while a structural one exists.
+1. **Findings**, in the table's order (Duplicated concept first,
+   Short-horizon change last). Lead each finding with the smell's **name**
+   in bold (e.g. **Duplicated concept**, **Weak contract**), never a row
+   number — the table's numbers only sequence the review; the names carry
+   the meaning to a reader who has not seen the table. A finding that spans
+   two smells names both (**Weak contract + Short-horizon change**). Then:
+   where, and the concrete restructuring.
+   Keep to the few high-conviction findings — structural findings displace
+   cosmetic ones, and a cosmetic finding never appears while a structural
+   one exists.
 2. **Verdict**: `APPROVE` or `REQUEST CHANGES`, one line of justification.
 
-## Approval bar
+## Approval Bar
 
-Working code is not the bar. `REQUEST CHANGES` when any row 1–6 or row 9
-smell is present and unjustified, or when a visible code-judo move was
-skipped. Rows 7–8 block when the cleaner structure is obvious.
+Working code is not the bar. `REQUEST CHANGES` when any of Duplicated
+concept, Complexity rearranged, Special case in a shared flow, Wrong layer,
+Indirection without clarity, Weak contract, or Short-horizon change is present
+and unjustified, or when a visible code-judo move was skipped. File sprawl and
+Needless sequencing block when the cleaner structure is obvious.
 
 ## Author pushback
 
