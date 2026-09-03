@@ -53,6 +53,25 @@ macOS/Linux first; Windows symlink handling deferred.
 - Global state: `~/.config/my-skills/state.json` — installed skills, versions, agent selections, declined updates.
 - Project state: `<project>/.my-skills.json` — **committed** to the project repo so teammates can reproduce the setup with `npx @jesdi/skills-cli sync`. The store (`.my-skills/`) and the agent symlinks are gitignored.
 
+Both files share one shape (`schemaVersion: 1`; the global file additionally has `declined`):
+
+```json
+{
+  "schemaVersion": 1,
+  "agents": ["claude", "opencode"],
+  "skills": {
+    "crap-gate": { "version": "1.2.0", "package": "1.4.0" },
+    "backlog":   { "version": "0.3.0", "package": "1.4.0", "agents": ["claude"] }
+  }
+}
+```
+
+Agent resolution (`agentsFor(state, skill)`): a skill's own `agents` overrides the top-level `agents`; an entry without `agents` inherits the top-level default. Neither present is an error that names the skill and points at `--agent` — nothing is written. `sync`, `update` and `uninstall` all resolve through this one rule and preserve each entry's shape (an inherited entry stays inherited). Files where every entry carries its own `agents` and no top-level exists (the pre-default layout) keep working unchanged.
+
+How the default gets set: `install --agent ...` always writes a per-skill override and never touches the top-level. `install` without `--agent` inherits the top-level default; when the target scope has none yet, an interactive terminal asks once (same picker as the wizard) and stores the answer as the top-level `agents`, while a non-TTY run fails and asks for `--agent`. The wizard follows the same rule: its agent choice becomes the top-level default the first time, and a per-skill override afterwards (unless it matches the default, in which case the entries simply inherit).
+
+A malformed state file is an error naming the file — it is never silently treated as empty, since that would let a later write clobber it.
+
 ## Updates
 
 - On every CLI run: compare installed versions (state) against the freshly fetched manifest; prompt to update outdated skills.
@@ -63,7 +82,7 @@ macOS/Linux first; Windows symlink handling deferred.
 Bare `npx @jesdi/skills-cli` → interactive wizard (update prompts first, then pick skills → agents → scope). Subcommands for scripting:
 
 ```
-install <skill...> [--agent claude,opencode] [--global]
+install <skill...> [--agent claude,opencode] [--global]   # --agent = per-skill override; omitted = inherit top-level agents
 update  [skill]
 sync                  # materialize from committed .my-skills.json
 list

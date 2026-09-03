@@ -20,6 +20,24 @@ directory.
 npx @jesdi/skills-cli sync
 ```
 
+It looks like this:
+
+```json
+{
+  "schemaVersion": 1,
+  "agents": ["claude", "opencode"],
+  "skills": {
+    "crap-gate": { "version": "1.2.0", "package": "1.4.0" },
+    "backlog":   { "version": "0.3.0", "package": "1.4.0", "agents": ["claude"] }
+  }
+}
+```
+
+The top-level `agents` is the default for every skill; a skill's own `agents`
+overrides it. `install <skill>` inherits the default (the first interactive
+install asks once and stores it), while `install --agent ...` writes a
+per-skill override. In scripts, pass `--agent` or commit the top-level default.
+
 ## Commands
 
 ```

@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as tar from 'tar';
@@ -67,6 +68,54 @@ describe('updates', () => {
     );
     expect(content).toContain('content 0.1.1');
     expect(await opCheckUpdates('global', ctx)).toEqual([]);
+  });
+
+  it('updates an entry that inherits the top-level agents and keeps it inherited', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['claude', 'opencode'], skills: {} }),
+    );
+    await opInstall(['hello-world'], undefined, 'local', ctx);
+    ctx.fetchImpl = await fixtureFetch('1.0.1', '0.1.1');
+    await opApplyUpdates(['hello-world'], 'local', ctx);
+    for (const dir of [join('.claude', 'skills'), join('.agents', 'skills')]) {
+      const content = await readFile(join(ctx.project, dir, 'hello-world', 'SKILL.md'), 'utf8');
+      expect(content).toContain('content 0.1.1');
+    }
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude', 'opencode']);
+    expect(state.skills['hello-world']).toEqual({ version: '0.1.1', package: '1.0.1' });
+  });
+
+  it('keeps a per-skill override through an update', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['claude'], skills: {} }),
+    );
+    await opInstall(['hello-world'], ['opencode'], 'local', ctx);
+    ctx.fetchImpl = await fixtureFetch('1.0.1', '0.1.1');
+    await opApplyUpdates(['hello-world'], 'local', ctx);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world']).toEqual({
+      version: '0.1.1',
+      package: '1.0.1',
+      agents: ['opencode'],
+    });
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world'))).toBe(false);
+  });
+
+  it('fails with the friendly message when an entry has no agents anywhere', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, skills: { 'hello-world': { version: '0.1.0' } } }),
+    );
+    ctx.fetchImpl = await fixtureFetch('1.0.1', '0.1.1');
+    await expect(opApplyUpdates(['hello-world'], 'local', ctx)).rejects.toThrow(
+      /no agents configured for hello-world/,
+    );
   });
 
   it('suppresses a declined version but re-prompts on the next one', async () => {
