@@ -37,6 +37,16 @@ python3 <skill-dir>/crap.py --base main --threshold-new 7   # local what-ifs
 `~/.my-skills/crap-gate`, …). Projects usually
 wrap it (`make crap`); prefer the wrapper when one exists.
 
+When you point a wrapper at an agent symlink, that symlink only exists after
+`skills-cli sync` if the matching agent is declared for the skill in
+`.my-skills.json` — `claude` → `.claude/skills/crap-gate`, `opencode` →
+`.agents/skills/crap-gate`. A wrapper that runs `.agents/skills/crap-gate/crap.py`
+therefore needs `"agents": ["opencode"]` (or `["claude", "opencode"]`) on the
+`crap-gate` entry, or a fresh checkout/worktree will lack that path after `sync`.
+The store copy `.my-skills/crap-gate/crap.py` is always materialized regardless
+of declared agents, so wrapping against it avoids the agent/path coupling
+entirely.
+
 By default the engine runs each target's coverage command only when that
 target has changed files, so a backend-only change never runs the frontend
 suite. Coverage command output goes to `.crap/<target>.log`.
