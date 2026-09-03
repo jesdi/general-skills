@@ -7,7 +7,9 @@ import {
   opList,
   type CliCtx,
 } from './ops.js';
-import { AGENTS, type AgentId, type Scope } from './paths.js';
+import { type AgentId, type Scope } from './paths.js';
+import { selectAgents } from './prompts.js';
+import { loadState, saveState } from './state.js';
 
 export async function runWizard(ctx: CliCtx): Promise<void> {
   p.intro('@jesdi/skills');
@@ -39,15 +41,7 @@ export async function runWizard(ctx: CliCtx): Promise<void> {
   if (p.isCancel(skills)) return cancel();
 
   // 3. Pick agents.
-  const agents = await p.multiselect({
-    message: 'Install for which agents?',
-    options: (Object.entries(AGENTS) as [AgentId, { label: string }][]).map(([id, a]) => ({
-      value: id,
-      label: a.label,
-    })),
-    initialValues: ['claude' as AgentId],
-    required: true,
-  });
+  const agents = await selectAgents();
   if (p.isCancel(agents)) return cancel();
 
   // 4. Pick scope.
@@ -60,11 +54,32 @@ export async function runWizard(ctx: CliCtx): Promise<void> {
   });
   if (p.isCancel(scope)) return cancel();
 
+  // Same rule as `install --agent`: the first choice becomes the scope's
+  // top-level default; later choices are per-skill overrides - unless they
+  // match the default, in which case the entries simply inherit it.
+  const override = await settleAgents(agents as AgentId[], scope, ctx);
+
   const spinner = p.spinner();
   spinner.start('Installing\u2026');
-  const installed = await opInstall(skills as string[], agents as AgentId[], scope, ctx);
+  const installed = await opInstall(skills as string[], override, scope, ctx);
   spinner.stop(`Installed ${installed.map((s) => `${s.name}@${s.version}`).join(', ')}`);
   p.outro('Done — your agents will pick the skills up on next launch.');
+}
+
+async function settleAgents(
+  chosen: AgentId[],
+  scope: Scope,
+  ctx: CliCtx,
+): Promise<AgentId[] | undefined> {
+  const state = await loadState(scope, ctx);
+  const current = state.agents ?? [];
+  if (current.length === 0) {
+    state.agents = chosen;
+    await saveState(scope, ctx, state);
+    return undefined;
+  }
+  const sameSet = chosen.length === current.length && chosen.every((a) => current.includes(a));
+  return sameSet ? undefined : chosen;
 }
 
 function cancel(): void {

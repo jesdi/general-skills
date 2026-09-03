@@ -32,7 +32,7 @@ async function fixtureFetch(version = '1.0.0') {
   const body = await readFile(tarball);
   return (async (url: RequestInfo | URL) => {
     const u = String(url);
-    if (u.endsWith('/latest')) {
+    if (u.endsWith('/latest') || u.endsWith(`/${version}`)) {
       return new Response(JSON.stringify({ version, dist: { tarball: 'https://r.test/p.tgz' } }));
     }
     return new Response(new Uint8Array(body));
@@ -66,6 +66,102 @@ describe('opSync', () => {
   it('errors when there is nothing to sync', async () => {
     const ctx = await makeCtx();
     await expect(opSync(ctx)).rejects.toThrow(/no .my-skills.json/i);
+  });
+});
+
+describe('opSync agent resolution', () => {
+  it('links an inheriting entry into every top-level agent and keeps it inherited', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        agents: ['claude', 'opencode'],
+        skills: { 'hello-world': { version: '0.1.0', package: '1.0.0' } },
+      }),
+    );
+    await opSync(ctx);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude', 'opencode']);
+    expect(state.skills['hello-world']).toEqual({ version: '0.1.0', package: '1.0.0' });
+  });
+
+  it('lets a per-skill override beat the top-level default', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        agents: ['claude'],
+        skills: {
+          'hello-world': { version: '0.1.0', package: '1.0.0', agents: ['opencode'] },
+          other: { version: '0.2.0', package: '1.0.0' },
+        },
+      }),
+    );
+    await opSync(ctx);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world'))).toBe(false);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'other', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'other'))).toBe(false);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world'].agents).toEqual(['opencode']);
+    expect('agents' in state.skills.other).toBe(false);
+  });
+
+  it('still syncs a legacy per-skill-only config', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: {
+          'hello-world': { version: '0.1.0', package: '1.0.0', agents: ['claude'] },
+          other: { version: '0.2.0', package: '1.0.0', agents: ['opencode'] },
+        },
+      }),
+    );
+    await opSync(ctx);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'other', 'SKILL.md'))).toBe(true);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect('agents' in state).toBe(false);
+    expect(state.skills['hello-world'].agents).toEqual(['claude']);
+    expect(state.skills.other.agents).toEqual(['opencode']);
+  });
+
+  it('errors with the friendly message when an entry has no agents anywhere', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.1.0', package: '1.0.0' } },
+      }),
+    );
+    await expect(opSync(ctx)).rejects.toThrow(
+      /no agents configured for hello-world: add a top-level "agents" to \.my-skills\.json or pass --agent/,
+    );
+    expect(existsSync(join(ctx.project, '.my-skills', 'hello-world'))).toBe(false);
+  });
+
+  it('never prompts, even when a prompt hook is available', async () => {
+    const ctx = {
+      ...(await makeCtx()),
+      promptAgents: async (): Promise<['claude']> => {
+        throw new Error('should not prompt');
+      },
+    };
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.1.0', package: '1.0.0' } },
+      }),
+    );
+    await expect(opSync(ctx)).rejects.toThrow(/no agents configured for hello-world/);
   });
 });
 

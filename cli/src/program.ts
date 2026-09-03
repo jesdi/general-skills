@@ -10,26 +10,34 @@ import {
   opUninstall,
   type CliCtx,
 } from './ops.js';
-import { AGENTS, type AgentId, type Scope } from './paths.js';
+import { type AgentId, type Scope } from './paths.js';
+import { validateAgents } from './state.js';
 
 const pkg = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
 );
 
 function parseAgents(value: string): AgentId[] {
-  const agents = value.split(',').map((a) => a.trim());
-  for (const a of agents) {
-    if (!(a in AGENTS)) throw new Error(`unknown agent: ${a} (expected claude|opencode)`);
-  }
-  return agents as AgentId[];
+  return validateAgents(value.split(',').map((a) => a.trim()));
 }
 
 function scopeOf(opts: { global?: boolean }): Scope {
   return opts.global ? 'global' : 'local';
 }
 
+/** Default context for a real run: prompts are only available on a terminal. */
+function defaultCtx(): CliCtx {
+  return {
+    home: homedir(),
+    project: process.cwd(),
+    promptAgents: process.stdin.isTTY
+      ? async () => (await import('./prompts.js')).promptAgentsInteractive()
+      : undefined,
+  };
+}
+
 export function buildProgram(ctx?: CliCtx): Command {
-  const cliCtx: CliCtx = ctx ?? { home: homedir(), project: process.cwd() };
+  const cliCtx: CliCtx = ctx ?? defaultCtx();
   const program = new Command('skills-cli');
   program
     .description("Install jesdi's agent skills into Claude Code and OpenCode")
@@ -38,10 +46,15 @@ export function buildProgram(ctx?: CliCtx): Command {
   program
     .command('install')
     .argument('<skills...>', 'skill names to install')
-    .option('--agent <list>', 'comma-separated agents: claude,opencode', 'claude')
+    .option(
+      '--agent <list>',
+      'comma-separated agents (claude,opencode); written as a per-skill override. ' +
+        'Omit to use the top-level "agents" default (asked once when missing)',
+    )
     .option('--global', 'install for the whole machine instead of this project')
-    .action(async (skills: string[], opts: { agent: string; global?: boolean }) => {
-      const installed = await opInstall(skills, parseAgents(opts.agent), scopeOf(opts), cliCtx);
+    .action(async (skills: string[], opts: { agent?: string; global?: boolean }) => {
+      const agents = opts.agent === undefined ? undefined : parseAgents(opts.agent);
+      const installed = await opInstall(skills, agents, scopeOf(opts), cliCtx);
       for (const s of installed) console.log(`installed ${s.name}@${s.version}`);
     });
 

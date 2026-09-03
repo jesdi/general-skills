@@ -89,6 +89,103 @@ describe('opInstall', () => {
   });
 });
 
+describe('opInstall agent resolution', () => {
+  it('inherits the top-level agents when none are given: entry has no agents key', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['claude', 'opencode'], skills: {} }),
+    );
+    await opInstall(['hello-world'], undefined, 'local', ctx);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude', 'opencode']);
+    expect(state.skills['hello-world']).toEqual({ version: '0.1.0', package: '1.0.0' });
+    expect('agents' in state.skills['hello-world']).toBe(false);
+  });
+
+  it('writes a per-skill override when agents are given and leaves the top-level untouched', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['claude'], skills: {} }),
+    );
+    await opInstall(['hello-world'], ['opencode'], 'local', ctx);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world'))).toBe(false);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude']);
+    expect(state.skills['hello-world'].agents).toEqual(['opencode']);
+  });
+
+  it('does not create a top-level default when agents are given explicitly', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'local', ctx);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect('agents' in state).toBe(false);
+    expect(state.skills['hello-world'].agents).toEqual(['claude']);
+  });
+
+  it('throws when nothing is configured and no prompt is available (non-TTY)', async () => {
+    const ctx = await makeCtx();
+    await expect(opInstall(['hello-world'], undefined, 'local', ctx)).rejects.toThrow(
+      /no agents configured.*--agent/,
+    );
+    expect(existsSync(join(ctx.project, '.my-skills.json'))).toBe(false);
+    expect(existsSync(join(ctx.project, '.my-skills'))).toBe(false);
+  });
+
+  it('asks once via the injected prompt, persists the answer as the top-level default and uses it', async () => {
+    let calls = 0;
+    const ctx = {
+      ...(await makeCtx()),
+      promptAgents: async () => {
+        calls++;
+        return ['claude', 'opencode'] as const;
+      },
+    };
+    await opInstall(['hello-world', 'other'], undefined, 'local', ctx);
+    expect(calls).toBe(1);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'other', 'SKILL.md'))).toBe(true);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude', 'opencode']);
+    expect(state.skills['hello-world']).toEqual({ version: '0.1.0', package: '1.0.0' });
+    expect(state.skills.other).toEqual({ version: '0.2.0', package: '1.0.0' });
+
+    // A second install does not ask again.
+    await opInstall(['hello-world'], undefined, 'local', ctx);
+    expect(calls).toBe(1);
+  });
+
+  it('does not prompt when the top-level default already exists', async () => {
+    const ctx = {
+      ...(await makeCtx()),
+      promptAgents: async (): Promise<['claude']> => {
+        throw new Error('should not prompt');
+      },
+    };
+    await mkdir(join(ctx.home, '.config', 'my-skills'), { recursive: true });
+    await writeFile(
+      join(ctx.home, '.config', 'my-skills', 'state.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['opencode'], skills: {}, declined: {} }),
+    );
+    await opInstall(['hello-world'], undefined, 'global', ctx);
+    expect(existsSync(join(ctx.home, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+  });
+
+  it('rejects an unknown agent id coming from the prompt', async () => {
+    const ctx = {
+      ...(await makeCtx()),
+      promptAgents: async () => ['cursor'] as never,
+    };
+    await expect(opInstall(['hello-world'], undefined, 'local', ctx)).rejects.toThrow(
+      /unknown agent: cursor/,
+    );
+  });
+});
+
 describe('opUninstall', () => {
   it('removes links, store copy and state entry', async () => {
     const ctx = await makeCtx();
@@ -105,5 +202,21 @@ describe('opUninstall', () => {
   it('errors when the skill is not installed', async () => {
     const ctx = await makeCtx();
     await expect(opUninstall('hello-world', 'global', ctx)).rejects.toThrow(/not installed/i);
+  });
+
+  it('removes links from the inherited top-level agents', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['claude', 'opencode'], skills: {} }),
+    );
+    await opInstall(['hello-world'], undefined, 'local', ctx);
+    await opUninstall('hello-world', 'local', ctx);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world'))).toBe(false);
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world'))).toBe(false);
+    expect(existsSync(join(ctx.project, '.my-skills', 'hello-world'))).toBe(false);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['claude', 'opencode']);
+    expect(state.skills['hello-world']).toBeUndefined();
   });
 });

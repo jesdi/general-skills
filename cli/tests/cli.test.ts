@@ -62,7 +62,9 @@ describe('cli wiring', () => {
   it('uninstall subcommand removes a global install', async () => {
     const ctx = await makeCtx();
     const program = buildProgram(ctx);
-    await program.parseAsync(['install', 'hello-world', '--global'], { from: 'user' });
+    await program.parseAsync(['install', 'hello-world', '--agent', 'claude', '--global'], {
+      from: 'user',
+    });
     await buildProgram(ctx).parseAsync(['uninstall', 'hello-world', '--global'], { from: 'user' });
     expect(existsSync(join(ctx.home, '.claude', 'skills', 'hello-world'))).toBe(false);
   });
@@ -74,5 +76,42 @@ describe('cli wiring', () => {
     await expect(
       program.parseAsync(['install', 'hello-world', '--agent', 'cursor'], { from: 'user' }),
     ).rejects.toThrow(/unknown agent/i);
+  });
+
+  it('install without --agent fails in a non-TTY when no default is configured', async () => {
+    const ctx = await makeCtx();
+    const program = buildProgram(ctx);
+    program.exitOverride();
+    await expect(
+      program.parseAsync(['install', 'hello-world'], { from: 'user' }),
+    ).rejects.toThrow(/no agents configured.*--agent/);
+    expect(existsSync(join(ctx.project, '.my-skills.json'))).toBe(false);
+  });
+
+  it('install without --agent inherits the committed top-level default', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['opencode'], skills: {} }),
+    );
+    await buildProgram(ctx).parseAsync(['install', 'hello-world'], { from: 'user' });
+    expect(existsSync(join(ctx.project, '.agents', 'skills', 'hello-world', 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(ctx.project, '.claude', 'skills', 'hello-world'))).toBe(false);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world']).toEqual({ version: '0.1.0', package: '1.0.0' });
+  });
+
+  it('install --agent writes a per-skill override', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({ schemaVersion: 1, agents: ['opencode'], skills: {} }),
+    );
+    await buildProgram(ctx).parseAsync(['install', 'hello-world', '--agent', 'claude'], {
+      from: 'user',
+    });
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.agents).toEqual(['opencode']);
+    expect(state.skills['hello-world'].agents).toEqual(['claude']);
   });
 });
