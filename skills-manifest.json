@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-08-30T22:42:44.950Z",
+  "generatedAt": "2026-09-03T08:16:37.503Z",
   "skills": [
     {
       "name": "backlog",
@@ -25,6 +25,12 @@
       "version": "0.1.1",
       "hash": "sha256-c4d66903f2d8b3d17b65e193f75ee0eea6dff9b8f47bd04a520a4f10778d895c",
       "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions > 15 and new functions > 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
+    },
+    {
+      "name": "deep-quality-review",
+      "version": "0.1.0",
+      "hash": "sha256-b3b3c00fd82175f1708d6042c583fedc7c393d663699e7dbee9579d19ecc9ce4",
+      "description": "Extremely strict maintainability review of a branch's changes: duplicated concepts, complexity that got rearranged instead of deleted, spaghetti branching, boundary leaks, weak type contracts, file sprawl, and \"temporary\" fixes that will outlive their reason. Use when the user asks for a \"deep code quality review\", \"thermonuclear review\", \"harsh maintainability review\", \"code judo\", \"is this making the codebase messier\", or before merging a change that touches shared code. Not a correctness, security, or test-coverage review."
     },
     {
       "name": "file-bug-issue",
