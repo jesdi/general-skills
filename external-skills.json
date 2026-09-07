@@ -1,6 +1,25 @@
 {
-  "schemaVersion": 1,
-  "comment": "Third-party skills used alongside this repo's own skills. They are NOT vendored here (they have their own authors and licenses); install them from upstream with the skills.sh CLI: `npx skills add <source>`. The skills.sh lockfile (~/.agents/.skill-lock.json) tracks installed versions.",
+  "schemaVersion": 2,
+  "comment": "Third-party skills used alongside this repo's own skills. They are NOT vendored here (they have their own authors and licenses); install them from upstream with the skills.sh CLI: `npx skills add <source>`. The skills.sh lockfile (~/.agents/.skill-lock.json) tracks installed versions. `pins` records the upstream commit the box set is taken from. The one exception to not vendoring is `forks`.",
+  "pins": {
+    "mattpocock/skills": {
+      "version": "1.2.3",
+      "ref": "3cca18b368ae95cdbdebbff572ccafa662551015"
+    }
+  },
+  "forks": {
+    "comment": "Modified copies vendored under skills/<name> with the upstream MIT LICENSE and a header naming the upstream commit. They keep their upstream names so the same command means the same thing everywhere, so the unmodified upstream copies of exactly these names must NEVER be installed globally alongside them: two skills with one name and different behavior is the worst outcome available.",
+    "source": "mattpocock/skills",
+    "doNotInstallUpstream": true,
+    "skills": ["prototype", "to-spec", "to-tickets", "wizard"]
+  },
+  "sets": {
+    "box": {
+      "comment": "The skill set the agent-ops box receives, vendored into its claude-home seed by agent-ops's refresh command. `own` come from @jesdi/skills (this repo), `external` from the pinned upstream at the path in skills[]. crap-gate is deliberately absent: it is a repository skill invoked through the target repo's gate command.",
+      "own": ["deep-quality-review", "prototype", "to-spec", "to-tickets", "wizard"],
+      "external": ["code-review", "codebase-design", "diagnosing-bugs", "resolving-merge-conflicts", "tdd", "to-questionnaire"]
+    }
+  },
   "skills": [
     {
       "name": "caveman",
@@ -37,18 +56,70 @@
       "name": "grill-me",
       "source": "mattpocock/skills",
       "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/grill-me",
       "install": "npx skills add mattpocock/skills"
     },
     {
       "name": "grill-with-docs",
       "source": "mattpocock/skills",
       "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/grill-with-docs",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "grilling",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/grilling",
       "install": "npx skills add mattpocock/skills"
     },
     {
       "name": "improve-codebase-architecture",
       "source": "mattpocock/skills",
       "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/improve-codebase-architecture",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "to-questionnaire",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/to-questionnaire",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "tdd",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/tdd",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "code-review",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/code-review",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "codebase-design",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/codebase-design",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "diagnosing-bugs",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/diagnosing-bugs",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "resolving-merge-conflicts",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/engineering/resolving-merge-conflicts",
       "install": "npx skills add mattpocock/skills"
     },
     {

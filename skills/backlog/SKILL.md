@@ -71,16 +71,19 @@ these labels (`setup` provisions them all) — never invent new ones.
 | `testing` | Test coverage, test infrastructure, flaky tests |
 | `dependencies` | Upgrading or managing third-party dependencies |
 
-**Pipeline — at most one, orthogonal to Type and Area:**
+**Pipeline — orthogonal to Type and Area:**
 
-Whether an issue is ready for an unattended agent to pick up. Leave both off
+Whether an issue is ready for an unattended agent to pick up, and what it
+carries. `auto` and `human-required` are mutually exclusive; leave both off
 when it is genuinely unclear — an unlabelled issue is simply not routed, which
-is the safe default. Dispatchers filter on `auto`; nothing else reads these.
+is the safe default. `spec-ready` may sit alongside `auto`. Dispatchers filter
+on `auto` and read `spec-ready`; nothing else reads these.
 
 | Label | Apply when |
 |-------|-----------|
 | `auto` | Trivial, or close enough to previously automated work — suitable for the unattended agents pipeline |
 | `human-required` | Substantial fog of war remains; needs heavy human interaction before an agent can take it |
+| `spec-ready` | The issue body already carries a settled design (Problem, Solution, Implementation and Testing Decisions), typically written by `to-spec` after a grilling session — the pipeline skips its own interview and reconciles the design against current code |
 
 ## `setup` — create the board once (idempotent)
 
@@ -92,7 +95,7 @@ dir.
 1. Ensure the `project` scope: `gh auth status`; if Projects calls 403, run
    `gh auth refresh -s project`.
 2. Follow `references/graphql.md` → **Setup**: create the Project, link the repo,
-   add the six fields, create the `inbox` label plus the 14 taxonomy labels
+   add the six fields, create the `inbox` label plus the 15 taxonomy labels
    (idempotent — `--force` reconciles color/description on re-runs). On a
    brand-new board the `Area`
    single-select is created with the generic default options
@@ -171,7 +174,9 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
 3. Otherwise infer labels from the idea text per the **Label taxonomy** above,
    then create it (see `references/graphql.md` → Capture): `--label inbox` plus
    one `--label` per inferred label, body = the idea as-is (one loose sentence
-   is fine; no required structure).
+   is fine; no required structure). Add `spec-ready` only when the body being
+   filed is a settled design (the `to-spec` skill does this itself); a one-line
+   idea is never spec-ready.
 4. Report the new issue URL and the labels applied. If mid-task, treat as a
    side-quest and return.
 
@@ -182,7 +187,8 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
    (skip = leave in inbox). Offer label corrections per the **Label taxonomy**
    above; apply via `gh issue edit N --add-label … --remove-label …`
    (graphql.md → Triage). Labels stay independent of the board `Area` gathered
-   next.
+   next. If the issue carries `spec-ready`, confirm the body really is a
+   settled design with its sections intact; remove the label when it is not.
 3. For a promoted issue, gather `Impact` (1–5), `Effort` (1–5), `Area` (**pick one
    from the options present in `.backlog/project-meta.json`** → `fields.Area.options`),
    and optional blockers.
