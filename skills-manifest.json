@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-03T09:39:52.864Z",
+  "generatedAt": "2026-09-07T15:08:46.060Z",
   "skills": [
     {
       "name": "backlog",
-      "version": "0.1.6",
-      "hash": "sha256-89423260dd0d35ceb16f536c1c3bd0e5fc43a30f36861e301a7a807351645582",
+      "version": "0.1.7",
+      "hash": "sha256-652964aebeadbd2a4ecafd5a588f0bd0c31b90442f3133f64d7d663893a1f7a0",
       "description": "Manage a GitHub-Issues-backed backlog and a Projects-v2 work graph via five verbs. Use when the user wants to CAPTURE an idea/research thread (\"add to backlog\", \"capture this\", \"note this idea\", \"log a task\"), TRIAGE the inbox (\"triage the backlog\", \"score the inbox\"), see what to work on NEXT (\"what's next\", \"what should I work on\", \"ranked backlog\", \"next actionable task\"), LAND a finished item (\"mark done\", \"close out #N\"), or SETUP the board the first time. Ranks open issues by impact÷effort, respecting `Blocked by:` edges, so only actionable work surfaces."
     },
     {
@@ -49,6 +49,30 @@
       "version": "0.1.0",
       "hash": "sha256-4e386dd175a34e55e89e0e29e37f5d0afd927560b7e3ba4c5f3ef482fb73f722",
       "description": "Capture before/after screenshots of UI views with Playwright and embed them in a PR. Use this skill whenever creating or preparing a pull request that touches frontend code (components, views, styles, layout, Tailwind classes) — even if the user just says \"open a PR\" or \"create the PR\" after UI work, and especially if they mention screenshots, visual diff, before/after, or \"show what changed\". Also use when the user asks to add screenshots to an existing PR."
+    },
+    {
+      "name": "prototype",
+      "version": "0.1.0",
+      "hash": "sha256-211e0e116ff6efbc4589ea7264835855b9495ba535f242733af913903fe7707d",
+      "description": "Build a throwaway prototype to answer a design question, delivered as one self-contained HTML file. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
+    },
+    {
+      "name": "to-spec",
+      "version": "0.1.0",
+      "hash": "sha256-146048bc0d698b92c330e860dc5c052b4645e1ba69f5b094270632daec82e40b",
+      "description": "Turn the current conversation into a design spec and write it where the next stage reads it: a GitHub issue body labelled spec-ready (after a grilling session), or a dated design file on the current branch (an unattended spec stage). No interview, just synthesis of what you've already discussed."
+    },
+    {
+      "name": "to-tickets",
+      "version": "0.1.0",
+      "hash": "sha256-23e1381b40dd4ffa151a2f89dcb82462464ea424228b45a31e6656406d34fedc",
+      "description": "Break a spec, plan, or the current conversation into numbered tracer-bullet ticket files under .agent/tickets/, each declaring its blocking edges and acceptance criteria phrased as observable behavior. Use after a spec is approved and before implementation starts."
+    },
+    {
+      "name": "wizard",
+      "version": "0.1.0",
+      "hash": "sha256-ebcd06573861f575707717ef65218b52436256c33a8cb1da12484c5b58ce9294",
+      "description": "Generate an interactive bash wizard that walks a human through steps only they can perform, and that says for every captured value whether it ends up in CI, on the agent-ops box (1Password), or local only. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself."
     }
   ]
 }
