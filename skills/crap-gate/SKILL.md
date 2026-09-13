@@ -2,7 +2,7 @@
 name: crap-gate
 description: >-
   Score every function a branch changed with CRAP (cyclomatic complexity ×
-  untested fraction), fail on existing functions > 15 and new functions > 9,
+  untested fraction), fail on existing functions above 15 and new functions above 9,
   and drive a fixer + independent reviewer loop until the gate passes. Use
   when implementation is done and before pushing, when the user says "run the
   crap gate", "check CRAP", "is this change tested enough", or when a push
@@ -21,16 +21,19 @@ is the human approval gate at push time.
 
 ## Running the engine
 
-The engine ships with this skill and is stdlib-only Python (plus `node` and
-the project's own `typescript` package for TS/TSX targets). Run it from
-anywhere inside the repo — it walks up to `.crap-gate.json`:
+Use the bundled launcher on macOS or Linux (x86_64/ARM64; Windows via WSL).
+It downloads checksum-verified uv 0.12.13 and provisions private Python 3.13.7
+on first use, then reuses them across repositories. No global Python, uv,
+virtualenv activation, or pip installation is needed. The engine uses only
+Python's standard library and supports Python source syntax through 3.13.
+Run from anywhere inside the repo — it walks up to `.crap-gate.json`:
 
 ```bash
-python3 <skill-dir>/crap.py            # human table, exit 1 on violations
-python3 <skill-dir>/crap.py --json     # same data for a subagent prompt
-python3 <skill-dir>/crap.py --no-run   # reuse the last coverage reports
-python3 <skill-dir>/crap.py --all      # whole-repo baseline (exploration only)
-python3 <skill-dir>/crap.py --base main --threshold-new 7   # local what-ifs
+sh "<skill-dir>/run.sh"            # human table, exit 1 on violations
+sh "<skill-dir>/run.sh" --json     # same data for a subagent prompt
+sh "<skill-dir>/run.sh" --no-run   # reuse the last coverage reports
+sh "<skill-dir>/run.sh" --all      # whole-repo baseline (exploration only)
+sh "<skill-dir>/run.sh" --base main --threshold-new 7   # local what-ifs
 ```
 
 `<skill-dir>` is wherever this skill is installed (`.agents/skills/crap-gate`,
@@ -40,12 +43,36 @@ wrap it (`make crap`); prefer the wrapper when one exists.
 When you point a wrapper at an agent symlink, that symlink only exists after
 `skills-cli sync` if the matching agent is declared for the skill in
 `.my-skills.json` — `claude` → `.claude/skills/crap-gate`, `opencode` →
-`.agents/skills/crap-gate`. A wrapper that runs `.agents/skills/crap-gate/crap.py`
+`.agents/skills/crap-gate`. A wrapper that runs `.agents/skills/crap-gate/run.sh`
 therefore needs `"agents": ["opencode"]` (or `["claude", "opencode"]`) on the
 `crap-gate` entry, or a fresh checkout/worktree will lack that path after `sync`.
-The store copy `.my-skills/crap-gate/crap.py` is always materialized regardless
+The store copy `.my-skills/crap-gate/run.sh` is always materialized regardless
 of declared agents, so wrapping against it avoids the agent/path coupling
 entirely.
+
+Existing `make crap` / `make crap-gate` wrappers must replace `python3 .../crap.py`
+with `sh .../run.sh` (quote the path). Prefer the store path, for example:
+
+```makefile
+crap crap-gate:
+	sh "$(CURDIR)/.my-skills/crap-gate/run.sh"
+```
+
+The launcher needs standard shell utilities, `curl`, `tar`, and `sha256sum`
+or `shasum`. Its cache defaults to `${XDG_CACHE_HOME:-$HOME/.cache}/crap-gate`;
+set `CRAP_GATE_CACHE_DIR` to an absolute path to relocate it. To pre-provision,
+run the launcher with `--help` while online. `CRAP_GATE_OFFLINE=1` then requires
+that populated cache and prevents runtime downloads. Runtime setup messages go
+to stderr; `--json` returns a structured error on setup failure, with exit 2.
+Do not bypass the gate or repair global Python when setup fails; resolve the
+reported download/cache problem and rerun the launcher.
+
+TypeScript targets still need `node` and the project's own `typescript` package.
+Coverage commands still need the project's test dependencies; configure them
+with its normal runner (for example, `cd backend && pipenv run pytest ...`).
+The launcher preserves PATH and the caller's environment for these commands;
+its private Python is only for the gate engine. It does not install project
+dependencies or edit project environments.
 
 By default the engine runs each target's coverage command only when that
 target has changed files, so a backend-only change never runs the frontend
