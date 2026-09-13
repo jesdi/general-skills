@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-07T15:08:46.060Z",
+  "generatedAt": "2026-09-13T13:58:48.949Z",
   "skills": [
     {
       "name": "backlog",
@@ -22,9 +22,9 @@
     },
     {
       "name": "crap-gate",
-      "version": "0.1.2",
-      "hash": "sha256-6f1e0de08917f0b0166959dd25328ed098ce1185cf52996093f2b18b151a9c0a",
-      "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions > 15 and new functions > 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
+      "version": "0.1.3",
+      "hash": "sha256-39041927a985061599a39bb287232b83655ecbac61b7de52486f485991a99d30",
+      "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions above 15 and new functions above 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
     },
     {
       "name": "deep-quality-review",
