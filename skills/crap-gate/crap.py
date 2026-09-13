@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """crap-gate engine: CRAP score for every function a branch changed.
 
-    python3 crap.py [--config PATH] [--base REF] [--threshold-existing N]
+    sh run.sh [--config PATH] [--base REF] [--threshold-existing N]
                     [--threshold-new N] [--run | --no-run] [--all] [--json]
 
 Exit 0 = no violations, 1 = violations, 2 = configuration/tool error.
@@ -11,11 +11,21 @@ project's own `typescript` package.
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+# Direct invocation remains useful for development, but should fail clearly
+# before importing an analyzer that requires newer AST nodes.
+if sys.version_info < (3, 10):
+    message = "Use the bundled run.sh launcher; direct execution requires Python >= 3.10"
+    print(f"crap: {message}", file=sys.stderr)
+    if "--json" in sys.argv:
+        print(json.dumps({"error": {"kind": "tooling", "message": message}}))
+    sys.exit(2)
 
 import crap_git
 import crap_python
@@ -201,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         result = run(cfg, run_mode=args.run_mode, all_functions=args.all)
     except ToolError as exc:
         print(f"crap: {exc}", file=sys.stderr)
+        if args.json:
+            print(json.dumps({"error": {"kind": "tooling", "message": str(exc)}}))
         return 2
     sys.stdout.write(render_json(result) if args.json else render_text(result))
     return 1 if result.summary["fail"] else 0

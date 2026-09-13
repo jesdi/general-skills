@@ -28,4 +28,9 @@ jobs:
       - run: pnpm test
       - run: pnpm --filter @jesdi/skills-cli build
       - run: python3 -m pytest skills/backlog -q
+      - run: sh skills/crap-gate/run.sh --help
+        env:
+          CRAP_GATE_CACHE_DIR: ${{ runner.temp }}/crap-gate-runtime
       - run: python3 -m pytest skills/crap-gate -q
+        env:
+          CRAP_GATE_TEST_CACHE: ${{ runner.temp }}/crap-gate-runtime
