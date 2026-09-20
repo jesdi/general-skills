@@ -123,6 +123,27 @@
       "install": "npx skills add mattpocock/skills"
     },
     {
+      "name": "handoff",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/handoff",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "teach",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/teach",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
+      "name": "wait-what",
+      "source": "mattpocock/skills",
+      "sourceUrl": "https://github.com/mattpocock/skills",
+      "path": "skills/productivity/wait-what",
+      "install": "npx skills add mattpocock/skills"
+    },
+    {
       "name": "vercel-react-best-practices",
       "source": "vercel-labs/agent-skills",
       "sourceUrl": "https://github.com/vercel-labs/agent-skills",
