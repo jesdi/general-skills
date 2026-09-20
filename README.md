@@ -58,7 +58,7 @@ which ones are part of the standard setup, where they come from, and (under
 upstream with the [skills.sh](https://skills.sh/) CLI:
 
 ```bash
-npx skills add mattpocock/skills          # grill-me, grill-with-docs, grilling, improve-codebase-architecture, to-questionnaire, tdd, code-review, codebase-design, diagnosing-bugs, resolving-merge-conflicts
+npx skills add mattpocock/skills          # grill-me, grill-with-docs, grilling, improve-codebase-architecture, to-questionnaire, tdd, code-review, codebase-design, diagnosing-bugs, resolving-merge-conflicts, handoff, teach, wait-what
 npx skills add JuliusBrussee/caveman      # caveman suite
 npx skills add vercel-labs/skills         # find-skills
 npx skills add vercel-labs/agent-skills   # vercel-react-best-practices
