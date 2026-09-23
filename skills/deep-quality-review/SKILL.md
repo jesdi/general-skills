@@ -34,23 +34,33 @@ size, orchestration.
 causes it (an invariant enforced by an optional parameter is a structure
 finding). Everything else belongs in a different review.
 
+**Repo conventions come first.** Read the repo's AGENTS.md (and CLAUDE.md,
+CONTRIBUTING.md, or coding-standards file) before the diff. A breach of a
+documented rule is a finding; cite the file and the rule. A documented rule
+overrides a smell: when the repo endorses a pattern the table would flag,
+don't flag it.
+
 ## The smells
 
 Run every meaningful change through this table, top to bottom. Each row is one
 concept; the *Ask* is the question that exposes it, the *Remedy* is what to
-push for.
+push for. Names in parentheses are the matching Fowler smells (*Refactoring*,
+ch. 3), folded into the row that already covers them.
 
 | # | Smell | Ask | Remedy |
 |---|-------|-----|--------|
-| 1 | **Duplicated concept** — one idea expressed twice: near-duplicate helper, parallel model, copy-pasted branch, a flag *and* an optional both meaning "off", the same predicate reimplemented instead of reused | What single concept are these copies of? Where is its canonical home? | Name the concept once; make the variants its data or parameters; delete the copies. Never accept a second copy because the first one exists. |
+| 1 | **Duplicated concept** — one idea expressed twice: near-duplicate helper, parallel model, copy-pasted branch (Duplicated Code), a flag *and* an optional both meaning "off", the same predicate reimplemented instead of reused, the same `switch`/`if`-cascade on the same type in two places (Repeated Switches) | What single concept are these copies of? Where is its canonical home? | Name the concept once; make the variants its data or parameters (one map or one polymorphic dispatch both sites share); delete the copies. Never accept a second copy because the first one exists. |
 | 2 | **Complexity rearranged, not deleted** — the diff moves code around but the reader still holds the same number of branches, modes, and helpers | Which reframing of the model or ownership makes these branches disappear? | Change the model so the special case becomes the default flow. Prefer the version that feels inevitable in hindsight. |
 | 3 | **Special case in a shared flow** — new `if`, one-off boolean, nullable mode, or feature check bolted into an unrelated path | Whose decision is this, and why is it made here? | Move it behind its own abstraction (policy, resolver, dispatcher, module); keep the shared path linear. |
-| 4 | **Wrong layer / boundary leak** — feature logic in a shared module, implementation details through an API, callers re-deriving what the owner already knows | Which module owns this concept? | Move the logic to the owner; callers receive results, not raw inputs to recompute. |
-| 5 | **Indirection without clarity** — thin wrapper, pass-through helper, "generic" mechanism hiding a simple data shape | What does the reader learn from this layer? | Delete it and keep the direct call. Boring and direct beats clever. |
-| 6 | **Weak contract** — `any`, `unknown`, casts, optional params, silent fallbacks that paper over an unclear invariant | What invariant is this hiding? | Make the boundary explicit in the type so the control flow simplifies. |
-| 7 | **File sprawl** — the diff pushes a file past a healthy size boundary (~1k lines) | Should this be decomposed *before* adding to it? | Split by concept first; waive only with a compelling structural reason. |
-| 8 | **Needless sequencing / non-atomic update** — independent work serialized, related updates that can leave state half-applied | Is this actually dependent? Can it be observed half-done? | Parallelize independent work; group related updates. Not micro-optimization — brittleness. |
-| 9 | **Short-horizon change** — "temporary", TODO-later, quick patch, deferred cleanup, a shape chosen because it is the smallest diff | What does this look like when its reason is gone? What does removing it cost? | Do the durable fix now, or structure the stopgap so removal is a pure deletion (one branch, one file), never a refactor of live callers. |
+| 4 | **Wrong layer / boundary leak** — feature logic in a shared module, implementation details through an API, callers re-deriving what the owner already knows, a function that works on another module's data more than its own (Feature Envy), callers walking `a.b().c().d()` to reach what they need (Message Chains) | Which module owns this concept? | Move the logic to the owner; callers receive results, not raw inputs to recompute. Hide a navigation walk behind one method on the first object. |
+| 5 | **Change doesn't follow module lines** — one logical change forces small edits scattered across many files (Shotgun Surgery), or one module is edited for several unrelated reasons (Divergent Change) | If this rule changes again, how many files move? Does this module have one reason to change? | Gather what changes together into one module; split a module that changes for unrelated reasons. |
+| 6 | **Indirection without clarity** — thin wrapper, pass-through helper or class that only delegates (Middle Man), "generic" mechanism hiding a simple data shape, parameters, hooks or abstractions for needs nobody has yet (Speculative Generality) | What does the reader learn from this layer? Who needs this flexibility today? | Delete it and keep the direct call. Boring and direct beats clever. |
+| 7 | **Refused inheritance** — a subclass or implementer that ignores, stubs out, or overrides most of what it inherits (Refused Bequest) | Is this really a kind of its parent? | Drop the inheritance; compose, or implement a narrower interface. |
+| 8 | **Weak contract** — `any`, `unknown`, casts, optional params, silent fallbacks that paper over an unclear invariant; a string or number standing in for a domain concept (Primitive Obsession); the same few fields or params always travelling together (Data Clumps) | What invariant is this hiding? Which type wants to be born? | Make the boundary explicit in the type, a small domain type or one bundled type, so the control flow simplifies. |
+| 9 | **Mysterious name** — a function, variable, or type whose name hides what it does or holds, or says something it no longer does | Could a reader predict the body from the name? | Rename it. If no honest name comes, the concept is murky: fix the design, not the name. |
+| 10 | **File sprawl** — the diff pushes a file past a healthy size boundary (~1k lines) | Should this be decomposed *before* adding to it? | Split by concept first; waive only with a compelling structural reason. |
+| 11 | **Needless sequencing / non-atomic update** — independent work serialized, related updates that can leave state half-applied | Is this actually dependent? Can it be observed half-done? | Parallelize independent work; group related updates. Not micro-optimization — brittleness. |
+| 12 | **Short-horizon change** — "temporary", TODO-later, quick patch, deferred cleanup, a shape chosen because it is the smallest diff | What does this look like when its reason is gone? What does removing it cost? | Do the durable fix now, or structure the stopgap so removal is a pure deletion (one branch, one file), never a refactor of live callers. |
 
 Short-horizon change is the long-term rule and it applies to every other smell: prefer
 consolidating now over a third copy later; prefer the simplification that
@@ -88,9 +98,11 @@ Write the review in this shape:
 
 Working code is not the bar. `REQUEST CHANGES` when any of Duplicated
 concept, Complexity rearranged, Special case in a shared flow, Wrong layer,
-Indirection without clarity, Weak contract, or Short-horizon change is present
-and unjustified, or when a visible code-judo move was skipped. File sprawl and
-Needless sequencing block when the cleaner structure is obvious.
+Change doesn't follow module lines, Indirection without clarity, Refused
+inheritance, Weak contract, or Short-horizon change is present and
+unjustified, when a documented repo rule is broken, or when a visible
+code-judo move was skipped. Mysterious name, File sprawl and Needless
+sequencing block when the cleaner structure is obvious.
 
 ## Author pushback
 
@@ -101,6 +113,9 @@ Needless sequencing block when the cleaner structure is obvious.
 | "It's just one flag / one `if`" | Every flag is a mode every future reader must hold in their head. |
 | "The existing code already does it this way" | Existing mess licenses fixing the concept, not adding a copy of it. |
 | "A restructure is out of scope" | If the restructure deletes the complexity this change adds, it is the scope. |
+
+The Fowler smell list is an idea from mattpocock/skills `code-review`; the
+wording here is ours.
 
 ## Review Tone
 
