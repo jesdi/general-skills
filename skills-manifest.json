@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-13T13:58:48.949Z",
+  "generatedAt": "2026-09-23T16:36:43.907Z",
   "skills": [
     {
       "name": "backlog",
@@ -28,8 +28,8 @@
     },
     {
       "name": "deep-quality-review",
-      "version": "0.1.1",
-      "hash": "sha256-da5ce29dc5349bcbed74589f3475fa12907ae7eed385e4ecc680bf67edae7e43",
+      "version": "0.1.2",
+      "hash": "sha256-134c1a194e9ec53f244e6500e68cf963b384759d8b5f5c934784665b6ef4b8f6",
       "description": "Extremely strict maintainability review of a branch's changes: duplicated concepts, complexity that got rearranged instead of deleted, spaghetti branching, boundary leaks, weak type contracts, file sprawl, and \"temporary\" fixes that will outlive their reason. Use when the user asks for a \"deep code quality review\", \"thermonuclear review\", \"harsh maintainability review\", \"code judo\", \"is this making the codebase messier\", or before merging a change that touches shared code. Not a correctness, security, or test-coverage review."
     },
     {
@@ -55,6 +55,12 @@
       "version": "0.1.0",
       "hash": "sha256-211e0e116ff6efbc4589ea7264835855b9495ba535f242733af913903fe7707d",
       "description": "Build a throwaway prototype to answer a design question, delivered as one self-contained HTML file. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
+    },
+    {
+      "name": "review-diff",
+      "version": "0.1.0",
+      "hash": "sha256-f1efdffdad0abf536777a3afcc733b2612ed51abad0b1a04d24f280bf2f223d3",
+      "description": "Review a branch before merge: first a gate (the repo's check command plus crap-gate), then three independent reviewers in parallel — spec (did we build what was asked, no more, no less), correctness via Codex (races, idempotency, money, time, authz, indexes, N+1, migrations, error paths, test quality) and structure (deep-quality-review). `--quick` runs only spec and correctness, shortened, for a live interview. Use when the user says \"/review-diff\", \"review this branch\", \"review this slice\", \"review before merge\", or before closing out a spec task."
     },
     {
       "name": "to-spec",
