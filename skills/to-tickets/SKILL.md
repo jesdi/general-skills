@@ -10,7 +10,8 @@ Changes: tickets always go to `.agent/tickets/<NN>-<slug>.md` (no tracker path);
 numbering is contiguous from 01 in dependency order; acceptance criteria must state
 observable behavior; every ticket names its **Seam** (the public interface its
 acceptance tests hit) and what it **Touches** (files and functions, for
-scheduling); the approval quiz is skipped when unattended; model invocation is
+scheduling); trivial slices fold into a neighbour; tickets never carry the
+implementation; the approval quiz is skipped when unattended; model invocation is
 allowed.
 -->
 
@@ -40,6 +41,7 @@ Break the work into **tracer bullet** tickets.
 - A completed slice is demoable or verifiable on its own
 - Each slice is sized to fit in a single fresh context window
 - Any prefactoring should be done first
+- No trivial tickets: when a slice's whole change is a small guard or fix (a few lines) and no other ticket is blocked by it, fold its acceptance criteria into the neighbouring ticket that touches the same behaviour. Every ticket costs a test-writer, implementer, reviewer and merger; a two-line guard doesn't earn four agents
 
 </vertical-slice-rules>
 
@@ -112,4 +114,6 @@ The **Touches** line is a best guess, for scheduling: `implement-spec` never run
 
 </touches-rule>
 
-Outside the **Touches** line, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+Never write the implementation into a ticket. `implement-spec`'s test-writer reads the ticket and must not know the solution, or its acceptance tests stop being independent of the code they judge. Describe behaviour, not the fix.
+
+Outside the **Touches** line, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, the shape of the decision, never the code that implements the ticket.
