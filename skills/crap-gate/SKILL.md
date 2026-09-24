@@ -71,8 +71,12 @@ TypeScript targets still need `node` and the project's own `typescript` package.
 Coverage commands still need the project's test dependencies; configure them
 with its normal runner (for example, `cd backend && pipenv run pytest ...`).
 The launcher preserves PATH and the caller's environment for these commands;
-its private Python is only for the gate engine. It does not install project
-dependencies or edit project environments.
+its private Python is only for the gate engine. One exception: when no
+virtualenv is active and the repo root has `.venv/bin`, that directory goes
+first on PATH, so a bare `python -m coverage` reaches the project's
+interpreter. It does not install project dependencies or edit project
+environments. When a command writes no report, the error ends with the last
+lines of its log.
 
 By default the engine runs each target's coverage command only when that
 target has changed files, so a backend-only change never runs the frontend

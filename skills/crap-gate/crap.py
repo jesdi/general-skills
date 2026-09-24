@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,18 @@ def _score_target(
 
 # ── coverage commands ───────────────────────────────────────────────────────
 
+def _coverage_env(root: Path) -> dict[str, str]:
+    """The caller's environment, plus the repo's `.venv/bin` first on PATH when
+    no virtualenv is active, so a bare `python -m coverage` finds the project's
+    interpreter instead of one without its test dependencies."""
+    env = dict(os.environ)
+    venv = root / ".venv"
+    if not env.get("VIRTUAL_ENV") and (venv / "bin").is_dir():
+        env["VIRTUAL_ENV"] = str(venv)
+        env["PATH"] = f"{venv / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def _maybe_run_coverage(target: Target, root: Path, run_mode: str, needed: bool) -> TargetRun:
     report = root / target.coverage_report
     should_run = run_mode == "run" or (run_mode == "auto" and needed)
@@ -126,13 +139,17 @@ def _maybe_run_coverage(target: Target, root: Path, run_mode: str, needed: bool)
     # config (same trust model as a Makefile or no-mistakes' commands.*), never
     # user input — it needs `cd … && …`, env assignments and pipes.
     with log.open("w") as fh:
-        proc = subprocess.run(target.coverage_command, shell=True, cwd=root, stdout=fh, stderr=subprocess.STDOUT)
+        proc = subprocess.run(
+            target.coverage_command, shell=True, cwd=root, env=_coverage_env(root),
+            stdout=fh, stderr=subprocess.STDOUT,
+        )
     seconds = time.monotonic() - started
     fresh = report.exists() and (before is None or report.stat().st_mtime_ns > before)
     if not fresh:
         raise ToolError(
             f"{target.name}: coverage command exited {proc.returncode} and wrote no report "
-            f"({target.coverage_report}); see {log.relative_to(root)}"
+            f"({target.coverage_report}); see {log.relative_to(root)}. Last lines:\n"
+            + "\n".join(log.read_text(errors="replace").splitlines()[-10:])
         )
     if proc.returncode != 0:
         print(

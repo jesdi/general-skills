@@ -43,12 +43,15 @@ the spec before the design is written. Don't write code.
 Run only when asked (for example "/to-openspec <slug> stage 2"), after the human has reviewed
 stage 1. Re-read `proposal.md` and `spec.md` first; the human may have edited them.
 
-1. Run the `red-team-data-model` skill against the data model. Print the top 5; don't write them
-   to a file.
+1. Run the `red-team-data-model` skill against the data model. Print the top 5, and its identity
+   inventory when the change widens a key; don't write them to a file.
 2. Write `specs/<slug>/design.md`:
    - **Decisions**: one line each with its tradeoff. Include the ones the red-team findings force.
    - **Data model**: every invariant a DB constraint can enforce (`CHECK`, `UNIQUE`, `NOT NULL`,
      FK, conditional `UPDATE ... WHERE`) goes in the table, not only in app code.
+   - **Identities**: when the change widens a key, every item of the red-team's identity
+     inventory, marked covered (task IDs filled in step 3) or out of scope (why). Otherwise "None." Add the
+     heading when the repo's template lacks it.
    - **Seams**: the endpoint, function, or command the tests drive through, marked existing or
      new. Prefer one high seam.
 3. Write `specs/<slug>/tasks.md`: vertical slices, each small enough for one commit and one green
@@ -58,6 +61,8 @@ stage 1. Re-read `proposal.md` and `spec.md` first; the human may have edited th
      makes the list a task graph `implement-spec` can run directly.
    - A slice adds only the tables and columns its own scenarios need, not the whole model up front.
    - No standalone "run the checks" task: every task already ends with the check command green.
+   - Then fill the task IDs into `design.md`'s **Identities**: every identity marked covered names
+     the task that rekeys it. A covered identity with no task is a missing task; add it.
 
 Print the task list, then **Open questions**: every red-team finding the design leaves
 unresolved, and every input the design assumes but the sources don't provide. Then stop. Don't
