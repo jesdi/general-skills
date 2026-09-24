@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-23T16:36:43.907Z",
+  "generatedAt": "2026-09-24T09:06:27.178Z",
   "skills": [
     {
       "name": "backlog",
@@ -45,6 +45,12 @@
       "description": "Minimal example skill proving the distribution pipeline works. Responds to \"test my skills setup\" by confirming the skill is loaded."
     },
     {
+      "name": "implement-spec",
+      "version": "0.1.0",
+      "hash": "sha256-95c4889bd41cbb8eb6522cbea5b074779b0964e521e6decbe801d52734921ecb",
+      "description": "Implement a specification in code."
+    },
+    {
       "name": "pr-visual-diff",
       "version": "0.1.0",
       "hash": "sha256-4e386dd175a34e55e89e0e29e37f5d0afd927560b7e3ba4c5f3ef482fb73f722",
@@ -70,8 +76,8 @@
     },
     {
       "name": "to-tickets",
-      "version": "0.1.0",
-      "hash": "sha256-23e1381b40dd4ffa151a2f89dcb82462464ea424228b45a31e6656406d34fedc",
+      "version": "0.1.1",
+      "hash": "sha256-4c838fa240c742353f77b3a3c1246a0948140587e81c9bc587f84c648e552bba",
       "description": "Break a spec, plan, or the current conversation into numbered tracer-bullet ticket files under .agent/tickets/, each declaring its blocking edges and acceptance criteria phrased as observable behavior. Use after a spec is approved and before implementation starts."
     },
     {
