@@ -31,7 +31,7 @@ Run ticket subagents in the background where possible for **maximum concurrency*
 
 **Every dispatch prompt says: never `git stash`, reset or check out other branches; worktrees share one stash and one ref store.**
 
-**Name the model on every dispatch.** Omitted, it inherits yours. Exploration, test-writer, reviewer: mid tier (reviewer higher for risky diffs). Implementer: mid tier; cheapest when the ticket carries the complete code; most capable for design judgment or broad codebase work. Merger: cheapest. Escalations: one tier above the agent that got stuck. Final reviewer: most capable.
+**Name the model on every dispatch.** Omitted, it inherits yours. Exploration, test-writer, reviewer: mid tier (reviewer higher for risky diffs). Implementer: mid tier; cheapest for a small, fully specified ticket; most capable for design judgment or broad codebase work. Merger: cheapest. Escalations: one tier above the agent that got stuck. Final reviewer: most capable.
 
 **Rule, don't stall.** Keep a **ledger** file in the notes directory: every decision as `Ruling: <what> — <why> — <cost if wrong>`, and each ticket's state, so you can resume after compaction. Don't check in between tickets. Stop and ask only for: an irreversible or destructive operation, a security-sensitive action, a side effect outside the worktrees (a push to a shared branch, a publish), or a spec so broken that every path forward is a guess.
 
