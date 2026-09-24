@@ -8,7 +8,8 @@ Modified copy of https://github.com/mattpocock/skills/tree/3cca18b368ae95cdbdebb
 (mattpocock-skills v1.2.3). Copyright (c) 2026 Matt Pocock, MIT — see LICENSE.
 Changes: tickets always go to `.agent/tickets/<NN>-<slug>.md` (no tracker path);
 numbering is contiguous from 01 in dependency order; acceptance criteria must state
-observable behavior; the approval quiz is skipped when unattended; model
+observable behavior; every ticket names its **Seam** (the public interface its
+acceptance tests hit); the approval quiz is skipped when unattended; model
 invocation is allowed.
 -->
 
@@ -51,6 +52,7 @@ When a human is in the loop, present the proposed breakdown as a numbered list. 
 
 - **Title**: short descriptive name
 - **Blocked by**: which other tickets (if any) must complete first
+- **Seam**: the public interface its acceptance tests hit
 - **What it delivers**: the end-to-end behaviour this ticket makes work
 
 Ask the user:
@@ -81,6 +83,8 @@ Do NOT close or modify any parent issue.
 
 **Blocked by:** the numbers/titles of the tickets that gate this one, or "None (can start immediately)".
 
+**Seam:** the public interface the acceptance tests hit (a function, an HTTP route, a CLI command, a config loader…), or `none — refactor`.
+
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
 
@@ -91,5 +95,11 @@ Do NOT close or modify any parent issue.
 Every acceptance criterion states **observable behavior**: something a reviewer can check by running the product, a command, or a test, without reading the implementation. "Running `make test` passes with the new endpoint covered" and "A user with an expired token sees the login page" are criteria. "Add a `TokenExpiry` class" and "Refactor the auth module" are implementation steps and do not belong here.
 
 </acceptance-criteria-rule>
+
+<seam-rule>
+
+Every ticket carries a **Seam** line: the one public interface through which its acceptance criteria are tested, black-box. `implement-spec` hands it to a test-writer that sees nothing else of the code, so name it precisely enough to write a test against, and never an internal helper. A ticket with no behavioral criteria (a pure prefactor or refactor) says `none — refactor`: its existing tests are the contract.
+
+</seam-rule>
 
 Avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.

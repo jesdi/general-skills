@@ -70,13 +70,13 @@ versions; `npx skills update` refreshes them.
 
 ### Forks (the one exception)
 
-`to-spec`, `to-tickets`, `prototype` and `wizard` are modified copies of the
-mattpocock/skills originals, vendored under `skills/<name>/` with the upstream
-MIT `LICENSE` and a header naming the upstream commit. They keep their upstream
-names on purpose, so **never install the upstream copies of those four names
-alongside them** (`npx skills add mattpocock/skills` installs the whole set —
-deselect those four, or uninstall them afterwards). `external-skills.json`
-lists them under `forks`.
+`implement-spec`, `to-spec`, `to-tickets`, `prototype` and `wizard` are
+modified copies of the mattpocock/skills originals, vendored under
+`skills/<name>/` with the upstream MIT `LICENSE` and a header naming the
+upstream commit. They keep their upstream names on purpose, so **never install
+the upstream copies of those five names alongside them** (`npx skills add
+mattpocock/skills` installs the whole set — deselect those five, or uninstall
+them afterwards). `external-skills.json` lists them under `forks`.
 
 ### The box set
 
