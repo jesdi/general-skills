@@ -18,7 +18,7 @@ Read `git diff <range>` in full, then only the surrounding code a check needs
 | N+1 | One query per loop iteration where a join or `IN (…)` would do. |
 | Migrations | Not reversible, or unsafe on a live table (a NOT NULL column without a default, a rewrite under lock). |
 | Failure paths | A payment-provider, checkout or stock-decrement call whose failure (timeout, decline, provider error) is unhandled or silently swallowed. |
-| Test quality | Tautological tests (asserting a mock's return value, or a value the test just set with no code in between) and tests on internals instead of the public seam. Say what they should assert. |
+| Test quality | Tautological tests (asserting a mock's return value, or a value the test just set with no code in between) and tests on internals instead of the public seam. Unreadable tests, which protect nothing because nobody can tell what they guarantee: a name that doesn't state the behavior, one test asserting several behaviors, logic in the test (`if`, loops), setup that hides what the test depends on, fixtures shared and mutated across tests. Say what they should assert, or how to split them. |
 
 Every finding: `file:line`, the concrete failure scenario (inputs or
 interleaving → wrong result), and the fix. "Consider reviewing" is not a
