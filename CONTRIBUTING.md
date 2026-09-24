@@ -43,4 +43,4 @@ python3 -m pytest skills/backlog -q    # Python tests for the backlog skill
 
 ## Releases
 
-Publishing to npm is automated: merges to `main` trigger the publish workflows, which version-bump and publish `@jesdi/skills` and `@jesdi/skills-cli` when their contents change. Contributors never need to touch versions.
+Publishing to npm is automated: merges to `main` trigger the publish workflows, which patch-bump and publish `@jesdi/skills` when a skill changes and `@jesdi/skills-cli` when `cli/src` or `cli/package.json` changes. Contributors never need to touch versions; bump `cli/package.json` by hand only for a minor or major CLI release, and the workflow publishes that version as-is.
