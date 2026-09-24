@@ -69,7 +69,8 @@ if [ ! -x "$uv" ]; then
 fi
 
 # Limit uv settings to this subprocess. Do not activate a venv or change PATH:
-# coverage commands must inherit the caller's project environment unchanged.
+# coverage commands inherit the caller's project environment (the engine adds
+# only the repo's own .venv/bin, when no virtualenv is active).
 managed_uv() (
     unset UV_NO_MANAGED_PYTHON UV_PYTHON UV_PYTHON_DOWNLOADS UV_PYTHON_BIN_DIR
     export UV_PYTHON_INSTALL_DIR="$cache/python"

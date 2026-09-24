@@ -150,3 +150,27 @@ def test_config_not_at_git_toplevel_is_a_tool_error(tmp_path, monkeypatch, capsy
     monkeypatch.chdir(sub)
     assert crap.main([]) == 2
     assert "git repository root" in capsys.readouterr().err
+
+
+def test_coverage_command_prefers_the_repo_venv(repo, monkeypatch, capsys):
+    # A bare `python` in the command must reach the repo's .venv, not whatever
+    # interpreter the caller's PATH has (which may lack coverage).
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    venv_bin = repo / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "venvpy").write_text('#!/bin/sh\nexec python3 "$@"\n')
+    (venv_bin / "venvpy").chmod(0o755)
+    cfg = json.loads((repo / ".crap-gate.json").read_text())
+    cfg["targets"][0]["coverage"]["command"] = "venvpy fake_cov.py"
+    (repo / ".crap-gate.json").write_text(json.dumps(cfg))
+    (repo / "pkg" / "m.py").write_text(BASE_SRC + "\n\ndef k():\n    return 1\n")
+    assert crap.main([]) == 0
+
+
+def test_coverage_command_without_report_shows_the_log_tail(repo, capsys):
+    cfg = json.loads((repo / ".crap-gate.json").read_text())
+    cfg["targets"][0]["coverage"]["command"] = "echo 'No module named coverage' && exit 1"
+    (repo / ".crap-gate.json").write_text(json.dumps(cfg))
+    (repo / "pkg" / "m.py").write_text(BASE_SRC + "\n\ndef k():\n    return 1\n")
+    assert crap.main([]) == 2
+    assert "No module named coverage" in capsys.readouterr().err
