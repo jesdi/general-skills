@@ -36,6 +36,7 @@ jobs:
             pnpm version patch --no-git-tag-version
             git add skills-manifest.json package.json
             git commit -m "chore: release skills [skip ci]"
+            git pull --rebase origin main
             git push
           fi
           VERSION=$(node -p "require('./package.json').version")
