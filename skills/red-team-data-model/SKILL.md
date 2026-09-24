@@ -40,11 +40,30 @@ Given the tables/fields (from `design.md` or a sketch), produce:
 4. **Permissions** — who can see or mutate what; staff vs. customer vs. owner
    boundaries; what an authenticated-but-wrong-role request can still reach.
 
+## Identity inventory (when the change widens a key)
+
+When the change widens an identity or key space (`issue` becomes
+`target#issue`, `user` becomes `tenant+user`), the top 5 is not enough: one
+missed identity is a cross-tenant bug. After the top 5, grep the code for every
+identity built from the old key and list each one as **covered** (the design
+rekeys it) or **out of scope** (with the reason). Look for:
+
+- file and directory names (`task-{N}.json`, `messages/{issue}.jsonl`),
+  including legacy files a save or migration retires;
+- hashes, fingerprints and dedupe keys;
+- cache keys, lock names, markers, dict and set keys;
+- command and URL arguments that take the bare key (`/attach N`);
+- log and event fields other code reads back.
+
+This list is exhaustive, not ranked. It is not a fix: say what is keyed by
+the old identity, not how to rekey it.
+
 ## What NOT to do
 
 - Don't suggest schema changes, indexes, or constraints — that's the design
   session's job, after this list exists.
 - Don't hedge with "it depends" — pick the worst plausible interpretation and
   state its consequence.
-- Don't produce more than 5. Rank and cut; the top failure matters more than
-  a complete list.
+- Don't produce more than 5 failure scenarios. Rank and cut; the top failure
+  matters more than a complete list. (The identity inventory is the one
+  exhaustive list.)
