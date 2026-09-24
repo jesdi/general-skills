@@ -54,6 +54,9 @@ stage 1. Re-read `proposal.md` and `spec.md` first; the human may have edited th
      heading when the repo's template lacks it.
    - **Seams**: the endpoint, function, or command the tests drive through, marked existing or
      new. Prefer one high seam.
+   - No implementation code anywhere in the spec folder. `implement-spec`'s test-writer reads it
+     and must not know the solution. A decision's shape (a type, a schema, a state machine, a
+     seam's signature) may appear; the function bodies that make the tasks pass may not.
 3. Write `specs/<slug>/tasks.md`: vertical slices, each small enough for one commit and one green
    check command. Tests come first in each slice.
    - Every task has its `_Goal:_` line, its **Seam** (one of the seams from `design.md`, precise
