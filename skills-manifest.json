@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-24T09:06:27.178Z",
+  "generatedAt": "2026-09-24T09:54:20.128Z",
   "skills": [
     {
       "name": "backlog",
@@ -63,10 +63,22 @@
       "description": "Build a throwaway prototype to answer a design question, delivered as one self-contained HTML file. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
     },
     {
+      "name": "red-team-data-model",
+      "version": "0.1.0",
+      "hash": "sha256-3c7a00bbb05190a431ea101db79b6e27bbfc6c8b24b14b0fe560a82a201afdb9",
+      "description": "Attack a proposed or existing data model for the ways it breaks under real conditions — concurrency, time windows, money, permissions — without proposing a redesign. Use right after sketching a data model, before writing the spec, so the top failure scenarios shape the spec's requirements and tests instead of getting discovered mid-build. Trigger on \"red-team my data model\", \"what breaks in this schema\", or \"/red-team\"."
+    },
+    {
       "name": "review-diff",
       "version": "0.1.0",
       "hash": "sha256-f1efdffdad0abf536777a3afcc733b2612ed51abad0b1a04d24f280bf2f223d3",
       "description": "Review a branch before merge: first a gate (the repo's check command plus crap-gate), then three independent reviewers in parallel — spec (did we build what was asked, no more, no less), correctness via Codex (races, idempotency, money, time, authz, indexes, N+1, migrations, error paths, test quality) and structure (deep-quality-review). `--quick` runs only spec and correctness, shortened, for a live interview. Use when the user says \"/review-diff\", \"review this branch\", \"review this slice\", \"review before merge\", or before closing out a spec task."
+    },
+    {
+      "name": "to-openspec",
+      "version": "0.1.0",
+      "hash": "sha256-c3c66a08fe27afa1f530989b77c7b4fd2d6a379cc844a9ca5f55072bede9b64a",
+      "description": "Turn settled discovery notes and a sketched data model into a spec folder in openspec shape (proposal, spec, design, tasks) under specs/<slug>/. Runs in two stages with a human review between them. No interview, just synthesis of decisions already made. Trigger on \"write the spec\", \"to-openspec\", or \"/to-openspec <slug> [stage 2]\"."
     },
     {
       "name": "to-spec",
