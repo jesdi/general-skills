@@ -31,9 +31,9 @@ describe('external-skills.json', () => {
     }
   });
 
-  it('box own set is the box forks plus deep-quality-review, all present in skills/', () => {
+  it('box own set is the box forks plus the review skills, all present in skills/', () => {
     const boxForks = FORKS.filter((f) => !OPERATOR_ONLY_FORKS.includes(f));
-    expect([...file.sets.box.own].sort()).toEqual([...boxForks, 'deep-quality-review'].sort());
+    expect([...file.sets.box.own].sort()).toEqual([...boxForks, 'deep-quality-review', 'review-diff'].sort());
     for (const name of file.sets.box.own) {
       expect(existsSync(join(root, 'skills', name, 'SKILL.md')), name).toBe(true);
     }
