@@ -15,7 +15,8 @@ a per-ticket gate (check command + crap-gate) before DONE, re-run by the reviewe
 already-green locked tests need a demonstrated mutation; a Codex correctness
 pass per risky ticket; tickets touching the same functions run in sequence;
 check command after each merge; final /review-diff on the most capable model, one
-fixer; closes tickets only if they are issues. Review loop and ledger adapt
+fixer; closes tickets only if they are issues; no push and no PR until every
+ticket is merged and the final review has passed. Review loop and ledger adapt
 superpowers' subagent-driven-development (obra/superpowers, MIT).
 -->
 
@@ -41,7 +42,10 @@ Run ticket subagents in the background where possible for **maximum concurrency*
 
 2. Create a notes directory outside the repo, readable by all subagents, and start the ledger there. (optional) An **exploration subagent** saves its notes on relevant code and docs there, so implementers focus on implementation.
 
-3. Create a branch, and a draft PR. If the spec and tickets are issues, mark the PR as 'closing' them.
+3. Create the PR branch locally. Do **not** push it and do **not** open a PR yet: nothing leaves the
+   machine until every ticket is merged and the final review has passed (step 10). Intermediate
+   states (red tests, half-merged tickets) are never pushed. If the spec and tickets are issues,
+   note their numbers in the ledger so the PR can close them later.
 
 4. Each ticket gets its own worktree and branch. For a ticket with behavioral criteria, a **test-writer subagent** goes first. It sees ONLY the spec, the ticket, CONTEXT.md/ADRs and the public interface of the ticket's **Seam** line (pointers, not summaries), never the implementer's plan or code. It writes one black-box acceptance test per criterion through that interface (defining the interface if it doesn't exist yet), confirms each fails for the right reason (missing behavior, not an import or syntax error), commits them red, and reports the SHA and files. A test that is already green before any implementation is vacuous until proven otherwise (an earlier guard or early return often satisfies it for an unrelated reason): the test-writer rewrites it to fail, or, when the criterion truly holds already, reports the production-code mutation that turns it red and the red output. Those files are now **locked**. A ticket with no behavioral criteria (Seam: `none — refactor`) skips this: its existing tests are the contract, unmodified.
 
@@ -59,6 +63,8 @@ Run ticket subagents in the background where possible for **maximum concurrency*
 
 9. Once all tickets are complete, a reviewer on the most capable model runs /review-diff on the PR branch, given the ledger's minor findings and rulings. One **implementer subagent** fixes every finding, then re-review that fix once. Rule on anything left.
 
-10. Mark the PR as ready for review. List every ruling from the ledger in your final message.
+10. Now, and only now, push the PR branch once and open the PR, ready for review (not draft). If the
+    spec and tickets are issues, mark the PR as 'closing' them. List every ruling from the ledger in
+    your final message.
 
 11. Clean up all ticket worktrees.
