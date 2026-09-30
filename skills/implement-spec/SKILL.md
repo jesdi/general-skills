@@ -55,7 +55,7 @@ Run ticket subagents in the background where possible for **maximum concurrency*
 
 7. Once a ticket passes review, a **merger subagent** merges it to the PR branch and runs the repo's check command (lint, typecheck, full suite). If it fails, an implementer fixes the PR branch before the next merge.
 
-8. If this changes the **frontier** of available tickets, start the next tickets. This allows for maximum concurrency. Exception: two ready tickets that change the same function never run at once. Compare their **Touches** lines (or ask the exploration subagent where each will land); on overlap, start one and hold the other until the first merges, then branch it from the updated PR branch. Record the hold as a ruling.
+8. If this changes the **frontier** of available tickets, start the next tickets. This allows for maximum concurrency. Exception: two ready tickets that change the same function never run at once. Compare their **Touches** lines (or ask the exploration subagent where each will land); on overlap, start one and hold the other until the first merges, then branch it from the updated PR branch. When in doubt, hold: a ticket you suspect builds on another ready or running ticket waits for it, even without a declared edge. Record the hold as a ruling.
 
 9. Once all tickets are complete, a reviewer on the most capable model runs /review-diff on the PR branch, given the ledger's minor findings and rulings. One **implementer subagent** fixes every finding, then re-review that fix once. Rule on anything left.
 
