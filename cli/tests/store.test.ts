@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, readlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readlink, symlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +37,23 @@ describe('installSkill', () => {
     const { sourceDir, storeDir, agentDir } = await setup();
     await mkdir(join(agentDir, 'hello-world'), { recursive: true });
     await writeFile(join(agentDir, 'hello-world', 'SKILL.md'), 'user-made');
+    await expect(
+      installSkill({ name: 'hello-world', sourceDir, storeDir, agentDirs: [agentDir] }),
+    ).rejects.toThrow(ForeignEntryError);
+  });
+
+  it('replaces a relative symlink that points into the store', async () => {
+    const { sourceDir, storeDir, agentDir } = await setup();
+    await mkdir(agentDir, { recursive: true });
+    await symlink('../../store/hello-world', join(agentDir, 'hello-world'), 'dir');
+    await installSkill({ name: 'hello-world', sourceDir, storeDir, agentDirs: [agentDir] });
+    expect(await readlink(join(agentDir, 'hello-world'))).toBe(join(storeDir, 'hello-world'));
+  });
+
+  it('refuses a symlink that points outside the store', async () => {
+    const { root, sourceDir, storeDir, agentDir } = await setup();
+    await mkdir(agentDir, { recursive: true });
+    await symlink(join(root, 'store-other'), join(agentDir, 'hello-world'), 'dir');
     await expect(
       installSkill({ name: 'hello-world', sourceDir, storeDir, agentDirs: [agentDir] }),
     ).rejects.toThrow(ForeignEntryError);

@@ -1,5 +1,5 @@
 import { cp, lstat, mkdir, readlink, rm, symlink } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 export class ForeignEntryError extends Error {}
 
@@ -12,7 +12,8 @@ async function removeOurEntry(linkPath: string, storeDir: string): Promise<void>
     );
   }
   const target = await readlink(linkPath);
-  if (!resolve(target).startsWith(resolve(storeDir))) {
+  // A relative target is relative to the link's directory, not the cwd.
+  if (!resolve(dirname(linkPath), target).startsWith(resolve(storeDir) + sep)) {
     throw new ForeignEntryError(
       `${linkPath} is a symlink to ${target}, outside the skills-cli store — refusing to touch it`,
     );
