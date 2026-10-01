@@ -6,7 +6,8 @@ description: Capture before/after screenshots of UI views with Playwright and em
 # PR Visual Diff
 
 Produce before/after screenshots of the views affected by a branch's frontend
-changes, commit them on the PR branch, and embed them in the PR body. Reviewers
+changes, push them to a hidden ref (never the PR branch), and embed them in the
+PR body. Reviewers
 should see what changed visually without checking out the branch.
 
 The approach leans on the project's existing Playwright e2e harness with the
@@ -44,7 +45,6 @@ file as JSON:
 | `deviceProjects` | the config's `projects` (default to a desktop + a mobile project) |
 | `baseBranch` | the repo's default branch (`main`/`master`; `git symbolic-ref refs/remotes/origin/HEAD`) |
 | `packageManager` | infer from lockfile: `pnpm-lock.yaml`→pnpm, `package-lock.json`→npm, `yarn.lock`→yarn, `bun.lockb`→bun |
-| `screenshotDir` | default `docs/pr-screenshots` |
 | `spinnerSelector` | the app's loading-indicator selector (search for a spinner/`role="status"`/`aria-busy` component) |
 
 ### Preconditions gate
@@ -66,14 +66,14 @@ screenshots.
 ## Always run the capture in a subagent
 
 Steps 2–6 (writing the spec, capturing, **reading every PNG back to eyeball
-it**, committing, embedding) MUST run inside a single dispatched subagent — not
+it**, pushing them to the hidden ref, embedding) MUST run inside a single dispatched subagent — not
 in the main context. Reading screenshots back is this skill's dominant token
 cost, and those image bytes are worthless to the main thread; keeping them in a
 subagent's throwaway context is the whole savings, with no loss of verification.
 
 Main context does only: step 1 (map the diff, get the user's go-ahead), then
 dispatch a subagent with the plan and the config values. The subagent returns a
-compact report: the committed screenshot paths + pinned URLs, the PR-body
+compact report: the screenshot file names + pinned URLs, the PR-body
 markdown, and any views it flagged. The main context creates/edits the PR from
 that report — it never reads a PNG.
 
@@ -88,11 +88,11 @@ make it visible (open a modal, select a tab). Classify each view as **changed**
 (existed at the merge base) or **new** (introduced by this branch) — new ones
 get an after-only shot.
 
-This capture is heavy (temp worktree, two Playwright passes, a commit pushed to
-the branch, PR body rewritten). ALWAYS confirm with AskUserQuestion before
+This capture is heavy (temp worktree, two Playwright passes, images pushed to a
+hidden ref, PR body rewritten). ALWAYS confirm with AskUserQuestion before
 running any of it. The question must cover **both** (a) whether to run the whole
-before/after capture at all, and (b) that it will commit the screenshots and
-embed them in the PR. Include the proposed plan: which routes/states, and which
+before/after capture at all, and (b) that it will push the screenshots to a
+hidden ref on the remote and embed them in the PR. Include the proposed plan: which routes/states, and which
 device projects — default to the config's `deviceProjects`; add more only when
 the change is layout-sensitive. If they decline, create the PR normally and stop.
 
@@ -167,24 +167,43 @@ Remove the worktree when done:
 `git worktree remove --force <scratchpad>/pr-before-shots` (`--force` because
 install left untracked artifacts).
 
-### 5. Commit the images on the PR branch
+### 5. Push the images to a hidden ref
 
-```
-<screenshotDir>/<branch-slug>/<view>--<project>--{before|after}.png
+The images must never land on the PR branch: once merged they would sit in the
+base branch's history forever and every clone would download them. Instead,
+build an orphan commit that holds only the PNGs and push it to a ref outside
+`refs/heads/*`, which clones and fetches never transfer (GitHub's own
+`refs/pull/*` works the same way). The working tree, the index and the PR
+branch are not touched.
+
+Collect the shots you'll reference into one flat directory, named
+`<view>--<project>--{before|after}.png`, then:
+
+```bash
+SLUG=$(git branch --show-current | tr / -)
+TREE=$(for f in <scratchpad>/shots/*.png; do
+  printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
+done | git mktree)
+SHA=$(git commit-tree "$TREE" -m "pr-screenshots: ${SLUG}")
+git push origin "${SHA}:refs/pr-screenshots/${SLUG}/${SHA}"
 ```
 
-`<branch-slug>` = branch name with `/` → `-`. Keep only the shots you'll
-reference. Commit them, delete the temp spec, and push.
+Keep the braces in `${SHA}:` — zsh reads a bare `$SHA:r` as a modifier and
+mangles the refspec. Each capture gets its own ref (the commit SHA is part of
+the name), so a re-capture never needs a force push, two machines never
+collide, and URLs from earlier captures keep working. Never delete these refs:
+they are what keeps the images alive on GitHub.
+
+Delete the temp spec. Nothing from this skill is committed to the PR branch.
 
 ### 6. Embed in the PR body
 
-After pushing, pin image URLs to the exact commit so they keep rendering after
-later force-pushes or branch deletion:
+Pin image URLs to the orphan commit; they render regardless of what happens to
+the PR branch:
 
 ```bash
-SHA=$(git rev-parse HEAD)
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-# → https://github.com/$REPO/blob/$SHA/<screenshotDir>/<slug>/<file>.png?raw=true
+# → https://github.com/$REPO/blob/$SHA/<file>.png?raw=true
 ```
 
 Per view, one table. Put **Before on the left and After on the right** (one
@@ -201,12 +220,11 @@ side:
 ```
 
 If the repo is private, GitHub's image proxy may refuse to inline blob URLs in
-the PR body. Add a one-line note under the tables linking to the
-`<screenshotDir>/<slug>/` directory on the branch as a fallback — the images
-always render in the Files-changed tab and in blob view for authenticated
-viewers.
+the PR body. Add a one-line note under the tables linking to the orphan
+commit's tree (`https://github.com/$REPO/tree/$SHA`) as a fallback — the images
+always render there for authenticated viewers.
 
-The subagent's job ends here: it has pushed the commit and produced the PR-body
+The subagent's job ends here: it has pushed the hidden ref and produced the PR-body
 markdown, and returns both. The **main context** creates (or edits) the PR with
 that body, then opens it (`gh pr view --web`) so the user can confirm the embeds
 render.
