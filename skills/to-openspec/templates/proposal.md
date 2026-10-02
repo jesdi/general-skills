@@ -10,8 +10,7 @@ The actor(s) this serves (e.g. customer, staff, owner).
 
 ## Goal
 
-What "done" looks like for this slice. One or two sentences — this is what every task links back
-to.
+What "done" looks like for this slice. One or two sentences — this is what every ticket serves.
 
 ## Non-goals
 
