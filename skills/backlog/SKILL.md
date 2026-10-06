@@ -199,10 +199,9 @@ Reuse the **dedup discipline** from the `file-bug-issue` skill, but take the
      sink an issue below the unboosted pack. Dispatchers set 99 for "work on this
      next". `--json` rows carry `"boost"`.
 4. Apply, in order, the `references/graphql.md` → Triage commands:
-   add to project → set Impact/Effort (`--number`) → set
-   `Score` = round(Impact ÷ Effort, 1) (`--number`) → set Area +
-   `Status: Ready` (`--single-select-option-id`) → append `Blocked by: #…`
-   to the body if any → `--remove-label inbox`.
+   add to project → set Impact, Effort, `Score` = round(Impact ÷ Effort, 1),
+   Area and `Status: Ready` in the single mutation given there → append
+   `Blocked by: #…` to the body if any → `--remove-label inbox`.
 5. After each, confirm it is now triaged (fields set, `inbox` gone). Report a
    summary of promoted vs. left-in-inbox.
 
@@ -223,7 +222,9 @@ python3 .claude/skills/backlog/rank.py --json   # machine-readable rows for
 `.agents/skills/backlog/rank.py`. The key is that the working directory stays at
 or below the repo root so `rank.py` can walk up to `.backlog/`.)
 
-`rank.py` pulls Project items + issue bodies via `gh`, parses `Blocked by:`
+`rank.py` pulls Project items (one narrow GraphQL query per 100 items, so it is
+cheap to run often; it warns on stderr when the hourly GraphQL budget is low)
++ issue bodies via `gh`, parses `Blocked by:`
 edges, drops closed/`Done` blockers, and prints:
 
 - **Available** issues ranked boost-band first, then Impact÷Effort within a band
