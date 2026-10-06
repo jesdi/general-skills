@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 
 _BLOCKED_LINE = re.compile(r"^\s*Blocked by:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _ISSUE_REF = re.compile(r"#(\d+)")
@@ -187,8 +188,14 @@ def render(result):
 
 
 def _gh_json(args, env=None):
-    completed = subprocess.run(args, capture_output=True, text=True, check=True,
-                               env=env)
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True,
+                                   check=True, env=env)
+    except subprocess.CalledProcessError as error:
+        # gh's own message (rate limit, auth, scope) is the diagnosis; a
+        # traceback quoting the whole query buries it.
+        sys.exit(f"gh {' '.join(args[1:3])} failed: "
+                 f"{(error.stderr or '').strip() or error}")
     return json.loads(completed.stdout)
 
 
@@ -200,12 +207,64 @@ def _project_env():
     return {**os.environ, "GH_TOKEN": token} if token else None
 
 
-def main(owner, project_number, repo, as_json=False):
-    payload = _gh_json([
-        "gh", "project", "item-list", str(project_number),
-        "--owner", owner, "--format", "json", "--limit", "200",
-    ], env=_project_env())
-    project_items = payload.get("items", [])
+# One page of board items with only what ranking reads. `gh project item-list`
+# asks for every field and several nested connections per item, which costs
+# on the order of 100 rate-limit points per call on a ~100-item board; this
+# costs about 1 per page. Aliases mirror the item-list JSON keys so
+# merge_sources takes either shape.
+_BOARD_QUERY = """
+query($project: ID!, $cursor: String) {
+  rateLimit { remaining }
+  node(id: $project) { ... on ProjectV2 { items(first: 100, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id
+      content { ... on Issue { number title url } }
+      title: fieldValueByName(name: "Title") { ... on ProjectV2ItemFieldTextValue { text } }
+      status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+      area: fieldValueByName(name: "Area") { ... on ProjectV2ItemFieldSingleSelectValue { name } }
+      impact: fieldValueByName(name: "Impact") { ... on ProjectV2ItemFieldNumberValue { number } }
+      effort: fieldValueByName(name: "Effort") { ... on ProjectV2ItemFieldNumberValue { number } }
+      boost: fieldValueByName(name: "Boost") { ... on ProjectV2ItemFieldNumberValue { number } }
+    }
+  } } }
+}
+"""
+LOW_BUDGET = 500  # GraphQL points left (of 5000/h) below which main() warns
+
+
+def _field(node, alias):
+    value = node.get(alias) or {}
+    return next(iter(value.values()), None)
+
+
+def fetch_board(project_id):
+    """Every board item as item-list-shaped rows, plus the GraphQL budget left."""
+    items, cursor, remaining = [], None, None
+    while True:
+        args = ["gh", "api", "graphql", "-f", f"query={_BOARD_QUERY}",
+                "-f", f"project={project_id}"]
+        if cursor:
+            args += ["-f", f"cursor={cursor}"]
+        data = _gh_json(args, env=_project_env())["data"]
+        remaining = data["rateLimit"]["remaining"]
+        page = data["node"]["items"]
+        for node in page["nodes"]:
+            items.append({
+                "id": node["id"], "content": node.get("content") or {},
+                **{alias: _field(node, alias) for alias in
+                   ("title", "status", "area", "impact", "effort", "boost")},
+            })
+        if not page["pageInfo"]["hasNextPage"]:
+            return items, remaining
+        cursor = page["pageInfo"]["endCursor"]
+
+
+def main(project_id, repo, as_json=False):
+    project_items, remaining = fetch_board(project_id)
+    if remaining < LOW_BUDGET:
+        print(f"warning: GitHub GraphQL budget is low ({remaining} points left "
+              f"this hour)", file=sys.stderr)
     issue_rows = _gh_json([
         "gh", "issue", "list", "--repo", repo, "--state", "all",
         "--limit", "500", "--json", "number,title,url,body,state,labels",
@@ -240,9 +299,7 @@ def find_project_meta(start=None):
 
 
 if __name__ == "__main__":
-    import sys
     config_path = find_project_meta()
     with open(config_path) as handle:
         meta = json.load(handle)
-    main(meta["owner"], meta["projectNumber"], meta["repo"],
-         as_json="--json" in sys.argv[1:])
+    main(meta["projectId"], meta["repo"], as_json="--json" in sys.argv[1:])

@@ -279,30 +279,122 @@ def test_json_rows_flags_blocked_and_keeps_rank_order():
     assert "url" in row
 
 
+def _board_page(nodes, next_cursor=None, remaining=4000):
+    import json as jsonlib
+    return jsonlib.dumps({"data": {
+        "rateLimit": {"remaining": remaining},
+        "node": {"items": {
+            "pageInfo": {"hasNextPage": next_cursor is not None,
+                         "endCursor": next_cursor},
+            "nodes": nodes}}}})
+
+
+def _board_node(number, title="Task", **fields):
+    """A GraphQL item node: `content` is None when the token cannot see the repo."""
+    node = {"id": f"PVTI_{number}",
+            "content": ({"number": number, "title": title, "url": f"u/{number}"}
+                        if number is not None else None),
+            "title": {"text": title}}
+    wrap = {"status": "name", "area": "name"}
+    for alias in ("status", "area", "impact", "effort", "boost"):
+        value = fields.get(alias)
+        node[alias] = None if value is None else {wrap.get(alias, "number"): value}
+    return node
+
+
+def _fake_gh(pages, issues="[]", calls=None):
+    """subprocess.run stand-in: board pages in order, then the issue list."""
+    pages = list(pages)
+
+    def fake_run(args, capture_output, text, check, env=None):
+        if calls is not None:
+            calls.append((args, env))
+
+        class R:
+            stdout = pages.pop(0) if args[1] == "api" else issues
+        return R()
+    return fake_run
+
+
 def test_main_json_emits_machine_readable_rows(monkeypatch, capsys):
     import json as jsonlib
     monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
-    def fake_run(args, capture_output, text, check, env=None):
-        class R:
-            if args[1] == "project":
-                stdout = jsonlib.dumps({"items": [
-                    {"content": {"number": 5, "title": "Task", "url": "u/5"},
-                     "status": "Ready", "impact": 4, "effort": 2}]})
-            else:
-                fields = args[args.index("--json") + 1]
-                assert "labels" in fields
-                assert "title" in fields and "url" in fields  # title-join keys
-                stdout = jsonlib.dumps([
-                    {"number": 5, "body": "", "state": "open",
-                     "labels": [{"name": "auto"}]}])
-        return R()
-
-    monkeypatch.setattr(rank.subprocess, "run", fake_run)
-    rank.main("acme", 1, "acme/private-repo", as_json=True)
+    calls = []
+    issues = jsonlib.dumps([{"number": 5, "body": "", "state": "open",
+                             "labels": [{"name": "auto"}]}])
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh(
+        [_board_page([_board_node(5, status="Ready", impact=4.0, effort=2.0)])],
+        issues, calls))
+    rank.main("PVT_1", "acme/private-repo", as_json=True)
     rows = jsonlib.loads(capsys.readouterr().out)
     assert rows == [{"number": 5, "title": "Task", "url": "u/5",
                      "status": "Ready", "labels": ["auto"],
                      "blocked": False, "score": 2.0, "boost": 0}]
+    fields = calls[1][0][calls[1][0].index("--json") + 1]
+    assert "labels" in fields
+    assert "title" in fields and "url" in fields  # title-join keys
+
+
+def test_board_read_never_uses_item_list(monkeypatch):
+    """`gh project item-list` costs ~100 rate-limit points a call; the board
+    is read with one narrow GraphQL query per 100 items instead."""
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    calls = []
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh([_board_page([])], calls=calls))
+    rank.main("PVT_1", "acme/repo")
+    board_args = calls[0][0]
+    assert board_args[:3] == ["gh", "api", "graphql"]
+    assert "project=PVT_1" in board_args
+    assert not any(args[1] == "project" for args, _ in calls)
+
+
+def test_fetch_board_follows_pagination(monkeypatch):
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    calls = []
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh(
+        [_board_page([_board_node(1)], next_cursor="c1"),
+         _board_page([_board_node(2)], remaining=3990)], calls=calls))
+    items, remaining = rank.fetch_board("PVT_1")
+    assert [i["content"]["number"] for i in items] == [1, 2]
+    assert remaining == 3990
+    assert "cursor=c1" not in calls[0][0] and "cursor=c1" in calls[1][0]
+
+
+def test_fetch_board_redacted_content_keeps_title_for_the_join(monkeypatch):
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh(
+        [_board_page([_board_node(None, title="Private task", status="Ready")])]))
+    items, _ = rank.fetch_board("PVT_1")
+    assert items[0]["content"] == {} and items[0]["title"] == "Private task"
+    merged = rank.merge_sources(items, [
+        {"number": 9, "title": "Private task", "url": "u/9", "state": "open"}])
+    assert [(i["number"], i["status"]) for i in merged] == [(9, "Ready")]
+
+
+def test_a_failing_gh_call_exits_with_ghs_own_message(monkeypatch):
+    def refused(args, capture_output, text, check, env=None):
+        raise rank.subprocess.CalledProcessError(
+            1, args, stderr="GraphQL: API rate limit exceeded for user ID 1.\n")
+    monkeypatch.setattr(rank.subprocess, "run", refused)
+    with pytest.raises(SystemExit) as exc:
+        rank.main("PVT_1", "acme/repo")
+    assert str(exc.value) == ("gh api graphql failed: GraphQL: API rate limit "
+                              "exceeded for user ID 1.")
+
+
+def test_main_warns_when_graphql_budget_is_low(monkeypatch, capsys):
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh(
+        [_board_page([], remaining=120)]))
+    rank.main("PVT_1", "acme/repo")
+    assert "120 points left" in capsys.readouterr().err
+
+
+def test_main_is_quiet_when_graphql_budget_is_healthy(monkeypatch, capsys):
+    monkeypatch.delenv("GH_PROJECT_TOKEN", raising=False)
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh([_board_page([])]))
+    rank.main("PVT_1", "acme/repo")
+    assert capsys.readouterr().err == ""
 
 
 def test_project_env_absent_without_token(monkeypatch):
@@ -319,19 +411,10 @@ def test_project_env_swaps_gh_token(monkeypatch):
 def test_main_uses_project_token_only_for_project_call(monkeypatch):
     monkeypatch.setenv("GH_PROJECT_TOKEN", "classic-tok")
     calls = []
-
-    def fake_run(args, capture_output, text, check, env=None):
-        calls.append((args, env))
-
-        class R:
-            stdout = "{\"items\": []}" if args[1] == "project" else "[]"
-
-        return R()
-
-    monkeypatch.setattr(rank.subprocess, "run", fake_run)
-    rank.main("acme", 1, "acme/private-repo")
+    monkeypatch.setattr(rank.subprocess, "run", _fake_gh([_board_page([])], calls=calls))
+    rank.main("PVT_1", "acme/private-repo")
     project_call, issue_call = calls
-    assert project_call[0][1] == "project"
+    assert project_call[0][1] == "api"
     assert project_call[1]["GH_TOKEN"] == "classic-tok"
     assert issue_call[0][1] == "issue"
     assert issue_call[1] is None  # stored gh auth (repo PAT) stays active

@@ -11,6 +11,17 @@ gh auth status                     # confirm login
 gh auth refresh -s project         # add Projects-v2 write scope (one-time)
 ```
 
+## Rate limit — do not read the whole board for one item
+
+GitHub allows 5000 GraphQL points per hour per user, shared by every tool and
+agent on that login. `gh project item-list` costs on the order of 100 points
+per call on a ~100-item board, so a few dozen calls empty the budget. Read the
+true budget with `gh api graphql -f query='{rateLimit{remaining resetAt}}'`
+(`gh api rate_limit` can show a different number). `rank.py` reads the board
+with a narrow query (about 1 point per 100 items); the lookups below go from
+the issue to its item (1 point). Use `item-list` only for the first read of a
+triage session, and reuse its output.
+
 ## Setup — create the board (idempotent; skip a step if it already exists)
 
 ```bash
@@ -77,22 +88,16 @@ gh issue create --repo <repo> \
 # Add issue to the project (prints the item id; capture it)
 gh project item-add <projectNumber> --owner <owner> --url <issueUrl>
 
-# Set number fields
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Impact.id> --number <1-5>
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Effort.id> --number <1-5>
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Score.id> --number <round(impact/effort, 1)>
-# Optional: manual priority override (default 0; positive boosts above unboosted, negative sinks below)
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Boost.id> --number <n>
-
-# Set single-selects (use the option id from .backlog/project-meta.json)
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Area.id> --single-select-option-id <fields.Area.options[area]>
-gh project item-edit --project-id <projectId> --id <itemId> \
-  --field-id <fields.Status.id> --single-select-option-id <fields.Status.options.Ready>
+# Set all five fields in ONE request (one point, one round trip). Values come
+# from .backlog/project-meta.json; Score = round(impact/effort, 1). Add a
+# `boost:` alias with <fields.Boost.id> for a manual priority override.
+gh api graphql -F p=<projectId> -F i=<itemId> -f query='mutation($p:ID!,$i:ID!){
+  impact:updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:"<fields.Impact.id>",value:{number:<1-5>}}){clientMutationId}
+  effort:updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:"<fields.Effort.id>",value:{number:<1-5>}}){clientMutationId}
+  score:updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:"<fields.Score.id>",value:{number:<score>}}){clientMutationId}
+  area:updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:"<fields.Area.id>",value:{singleSelectOptionId:"<fields.Area.options[area]>"}}){clientMutationId}
+  status:updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:"<fields.Status.id>",value:{singleSelectOptionId:"<fields.Status.options.Ready>"}}){clientMutationId}
+}'
 
 # Record blocking edges (append a line; keep any existing body)
 gh issue edit <number> --repo <repo> --body "<body>\n\nBlocked by: #<a>, #<b>"
@@ -121,8 +126,12 @@ gh api graphql -f query='mutation($parent:ID!,$child:ID!){
 
 ```bash
 gh issue view <number> --repo <repo> --json state --jq .state
-gh project item-list <projectNumber> --owner <owner> --format json \
-  --jq '.items[] | select(.content.number==<number>) | {id, status}'
+gh api graphql -f query='query($owner:String!,$repo:String!,$n:Int!){
+  repository(owner:$owner,name:$repo){issue(number:$n){projectItems(first:10){nodes{
+    id project{id}
+    status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}' \
+  -F owner=<owner> -F repo=<repoName> -F n=<number> \
+  --jq '.data.repository.issue.projectItems.nodes[] | select(.project.id=="<projectId>") | {id, status: .status.name}'
 # repair only if needed:
 gh issue close <number> --repo <repo>
 gh project item-edit --project-id <projectId> --id <itemId> \
@@ -133,8 +142,12 @@ gh project item-edit --project-id <projectId> --id <itemId> \
 
 ```bash
 # 1. Item id + live status
-gh project item-list <projectNumber> --owner <owner> --format json \
-  --jq '.items[] | select(.content.number==<number>) | {id, status}'
+gh api graphql -f query='query($owner:String!,$repo:String!,$n:Int!){
+  repository(owner:$owner,name:$repo){issue(number:$n){projectItems(first:10){nodes{
+    id project{id}
+    status:fieldValueByName(name:"Status"){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}}}' \
+  -F owner=<owner> -F repo=<repoName> -F n=<number> \
+  --jq '.data.repository.issue.projectItems.nodes[] | select(.project.id=="<projectId>") | {id, status: .status.name}'
 # 2. If status == "In progress": abort (already claimed).
 # 3. Claim:
 gh project item-edit --project-id <projectId> --id <itemId> \
