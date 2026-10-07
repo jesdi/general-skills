@@ -174,9 +174,9 @@ body[data-mode="questionnaire"] #approve { display: none }
 // Fixed part of the template: collect, post, restore. The session never edits this.
 const V = 1;
 const mode = document.body.dataset.mode;
-const state = document.getElementById('state');
-const send = document.getElementById('send');
-const approve = document.getElementById('approve');
+const bar = document.querySelector('.bar');   // the controls live here, never in a slot
+const state = bar.querySelector('#state'), send = bar.querySelector('#send');
+const approve = bar.querySelector('#approve');
 const embedded = window.parent !== window;
 const questions = () => [...document.querySelectorAll('.q[data-q]')];
 let armed = false, sent = 'nothing sent';
