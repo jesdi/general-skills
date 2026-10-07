@@ -53,7 +53,7 @@ The dispatcher writes `.agent/review-answers.json` (plan) or `.agent/questionnai
 - `submitted`: `null` for a draft, `"changes"` or `"approve"` for a submission.
 - `submitted_at`: the time of the intent that was applied, or `null` for a draft.
 - `actor`: the operator's console login, or `"text"` when the session wrote the file from a typed reply.
-- `revision`: the page revision the answers were made on (the request's `revision`); a session that writes the file from a typed reply may leave it out.
+- `revision`: the page revision the answers were made on (the request's `revision`). A session that writes the file from a typed reply leaves it out; such a submission blocks later drafts until the page changes.
 - `answers`: the object above.
 
 The file holds no option texts.
