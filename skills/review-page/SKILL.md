@@ -60,7 +60,7 @@ Track pills, in `track`. Check the proposed track:
 ## Rules
 
 - Never edit the `<script>` or the CSS. Only fill slots.
-- Every question has an id that matches `[a-z0-9_-]{1,64}`.
+- Every question has an id that matches `[a-z0-9_-]{1,64}`. The id `track` is reserved for the track pills. Slot content never carries the ids `send`, `approve` or `state`, or the name `track` outside the track slot: the script owns them.
 - Every question has exactly one recommended option, marked with `chip rec`. It is one recommended option, never zero and never two.
 - Option values are short ids. Put no option text in a value.
 - The page has no network, no storage and no external file: no script `src`, no `<link>`, no image or font URL.
