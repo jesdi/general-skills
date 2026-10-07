@@ -43,6 +43,7 @@ The dispatcher writes `.agent/review-answers.json` (plan) or `.agent/questionnai
   "submitted": "changes",
   "submitted_at": "2026-10-12T10:12:03+00:00",
   "actor": "jesdi",
+  "revision": "9f2c…",
   "answers": {"debounce": "draft", "debounce.note": "flush on pagehide", "track": "standard"}
 }
 ```
@@ -51,7 +52,8 @@ The dispatcher writes `.agent/review-answers.json` (plan) or `.agent/questionnai
 - `stage`: `"plan"` for `.agent/review-answers.json`, `"spec"` for `.agent/questionnaire-answers.json`.
 - `submitted`: `null` for a draft, `"changes"` or `"approve"` for a submission.
 - `submitted_at`: the time of the intent that was applied, or `null` for a draft.
-- `actor`: the operator's console login.
+- `actor`: the operator's console login, or `"text"` when the session wrote the file from a typed reply.
+- `revision`: the page revision the answers were made on (the request's `revision`); a session that writes the file from a typed reply may leave it out.
 - `answers`: the object above.
 
 The file holds no option texts.
