@@ -11,8 +11,10 @@ The session fills a fixed template. The console shows the page in an iframe and 
 
 Set the mode on the body: `<body data-mode="plan">` or `<body data-mode="questionnaire">`.
 
-- `plan`: tickets, open questions, corrections, a track, and a bar with "Send changes" and "Approve". "Approve" needs a second tap.
-- `questionnaire`: questions only, and one button "Send answers". The template hides the other sections and "Approve".
+- `plan`: tickets, open questions, corrections, a track, and a bar with the count of answered questions.
+- `questionnaire`: questions only. The template hides the other sections.
+
+The page has no buttons. The console shows "Send changes" and "Approve" (or "Send answers") outside the page, so a page can never submit or approve. Never add a button or a `submit` value to the page.
 
 ## Steps
 
@@ -60,7 +62,7 @@ Track pills, in `track`. Check the proposed track:
 ## Rules
 
 - Never edit the `<script>` or the CSS. Only fill slots.
-- Every question has an id that matches `[a-z0-9_-]{1,64}`. The id `track` is reserved for the track pills. Slot content never carries the ids `send`, `approve` or `state`, or the name `track` outside the track slot: the script owns them.
+- Every question has an id that matches `[a-z0-9_-]{1,64}`. The id `track` is reserved for the track pills. Slot content never carries the id `state`, or the name `track` outside the track slot: the script owns them.
 - Every question has exactly one recommended option, marked with `chip rec`. It is one recommended option, never zero and never two.
 - Option values are short ids. Put no option text in a value.
 - The page has no network, no storage and no external file: no script `src`, no `<link>`, no image or font URL.

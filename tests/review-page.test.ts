@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
 // - <body data-mode="plan"> by default; "questionnaire" is the other mode.
 // - Sections <section data-slot="tickets|questions|corrections|track">, never
 //   nested <section>s inside a slot. The session fills a slot's content.
-// - Bar <div class="bar"> with #send and (plan mode only) #approve.
+// - Bar <div class="bar"> with #state and no button: the console owns the
+//   buttons, and every answers message has submit null.
 // - A question: <div class="q" data-q="ID"> with radios name="ID" and
 //   <textarea id="note-ID">. Track pills: radios name="track".
 // - The script reads the DOM present at load and at event time.
@@ -198,55 +199,36 @@ describe('review-page template.html (stylesheet)', () => {
 // ---- template.html: behaviour ---------------------------------------------
 
 describe('review-page template.html (plan mode)', () => {
-  it('shows the four sections, a recommended chip and a bar with two buttons', async () => {
+  it('shows the four sections, a recommended chip and a bar with no button', async () => {
     const p = await load('plan');
     for (const slot of ['tickets', 'questions', 'corrections', 'track']) {
       expect(visible(p.win, p.doc.querySelector(`section[data-slot="${slot}"]`)), slot).toBe(true);
     }
     expect(p.doc.querySelector('.q .chip.rec')).not.toBeNull();
     expect(visible(p.win, p.doc.querySelector('.bar'))).toBe(true);
-    expect(p.doc.querySelector('#send')?.textContent?.trim()).toBe('Send changes');
-    expect(p.doc.querySelector('#approve')?.textContent?.trim()).toBe('Approve');
+    // The console owns the buttons: a page that could submit could approve itself.
+    expect(p.doc.querySelectorAll('button')).toHaveLength(0);
   });
 
-  it('needs a second tap on Approve and posts only then', async () => {
+  it('never posts a submission: every answers message is a draft', async () => {
     const p = await load('plan');
-    const before = p.sent.length;
-    const label = p.doc.querySelector('#approve')!.textContent;
-    click(p, '#approve');
-    expect(p.doc.querySelector('#approve')!.textContent).not.toBe(label);
-    expect(p.sent.length).toBe(before);
-    click(p, '#approve');
-    expect(p.sent.length).toBe(before + 1);
-    expect(p.sent.at(-1)).toMatchObject({ type: 'answers', v: 1, submit: 'approve' });
-  });
-
-  it('posts submit "changes" on Send changes', async () => {
-    const p = await load('plan');
-    click(p, '#send');
-    expect(p.sent.at(-1)).toMatchObject({ type: 'answers', v: 1, submit: 'changes' });
+    pick(p, 'format', 'a');
+    const sets = p.sent.filter((m) => m.type === 'answers');
+    expect(sets.length).toBeGreaterThan(0);
+    expect(sets.every((m) => m.submit === null)).toBe(true);
+    expect(read('template.html')).not.toMatch(/submit: *['"`]|'approve'|"approve"/);
   });
 });
 
 describe('review-page template.html (questionnaire mode)', () => {
-  it('hides tickets, corrections, track and Approve and shows one button "Send answers"', async () => {
+  it('hides tickets, corrections and track and has no button', async () => {
     const p = await load('questionnaire');
     expect(visible(p.win, p.doc.querySelector('section[data-slot="questions"]'))).toBe(true);
     for (const slot of ['tickets', 'corrections', 'track']) {
       const el = p.doc.querySelector(`section[data-slot="${slot}"]`);
       expect(el === null || !visible(p.win, el), slot).toBe(true);
     }
-    const approve = p.doc.querySelector('#approve');
-    expect(approve === null || !visible(p.win, approve)).toBe(true);
-    expect(p.doc.querySelector('#send')?.textContent?.trim()).toBe('Send answers');
-  });
-
-  it('posts submit "changes" on Send answers', async () => {
-    const p = await load('questionnaire');
-    pick(p, 'format', 'a');
-    click(p, '#send');
-    expect(p.sent.at(-1)).toMatchObject({ type: 'answers', v: 1, submit: 'changes' });
-    expect(p.sent.at(-1)!.answers.format).toBe('a');
+    expect(p.doc.querySelectorAll('button')).toHaveLength(0);
   });
 });
 

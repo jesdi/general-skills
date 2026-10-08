@@ -10,13 +10,13 @@ Page to console, once, when its script listens:
 {"type": "ready", "v": 1}
 ```
 
-Page to console, on every change and on every button:
+Page to console, on every change:
 
 ```json
 {"type": "answers", "v": 1, "answers": {"format": "a", "track": "standard"}, "submit": null}
 ```
 
-`submit` is `null` for a draft, `"changes"` for "Send changes" or "Send answers", and `"approve"` for the second tap on "Approve". The console adds the request's `revision` when it posts the set to the box.
+`submit` is always `null`: a page sends drafts only, and the console ignores any other value. The buttons belong to the console: when the operator presses "Send changes" or "Send answers" it posts the last set with `"changes"`, and on the second tap on "Approve" with `"approve"`. The console adds the request's `revision` when it posts the set to the box.
 
 Console to page, after `ready` and whenever saved answers arrive:
 
