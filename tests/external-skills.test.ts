@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 const root = new URL('..', import.meta.url).pathname;
 const file = JSON.parse(readFileSync(join(root, 'external-skills.json'), 'utf8'));
-const FORKS = ['implement-spec', 'prototype', 'to-spec', 'to-tickets', 'wizard'];
+const FORKS = ['implement-spec', 'pr', 'prototype', 'to-spec', 'to-tickets', 'wizard'];
 const OPERATOR_ONLY_FORKS = ['implement-spec'];
 
 describe('external-skills.json', () => {
-  it('declares exactly the five forks as vendored copies that must not be installed from upstream', () => {
+  it('declares the vendored copies that must not be installed from upstream', () => {
     expect(file.schemaVersion).toBe(2);
     expect([...file.forks.skills].sort()).toEqual(FORKS);
     expect(file.forks.source).toBe('mattpocock/skills');

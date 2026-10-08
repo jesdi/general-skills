@@ -68,20 +68,22 @@ npx skills add anthropics/skills          # frontend-design (skip if using the C
 The skills.sh lockfile (`~/.agents/.skill-lock.json`) tracks installed
 versions; `npx skills update` refreshes them.
 
-### Forks (the one exception)
+### Vendored upstream skills (the one exception)
 
 `implement-spec`, `to-spec`, `to-tickets`, `prototype` and `wizard` are
-modified copies of the mattpocock/skills originals, vendored under
+modified copies of the mattpocock/skills originals. `pr` carries the upstream
+instructions intact, with their `show-me` credits. These six skills live under
 `skills/<name>/` with the upstream MIT `LICENSE` and a header naming the
 upstream commit. They keep their upstream names on purpose, so **never install
-the upstream copies of those five names alongside them** (`npx skills add
-mattpocock/skills` installs the whole set — deselect those five, or uninstall
-them afterwards). `external-skills.json` lists them under `forks`.
+the upstream copies of those names alongside them** (`npx skills add
+mattpocock/skills` installs the whole set — deselect these names, or uninstall
+them afterwards). `external-skills.json` lists the vendored copies under `forks`.
 
 ### The box set
 
 `external-skills.json` → `sets.box` names the skills the agent-ops box
-receives: `own` from this package, `external` from the pinned upstream.
+receives: `own` from this package, including `pr` for PR bodies, and `external`
+from the pinned upstream.
 agent-ops vendors that set into its claude-home seed with its own refresh
 command; this repo's job is to publish the set and keep the pins resolvable.
 
