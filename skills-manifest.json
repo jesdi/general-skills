@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-06T10:03:53.513Z",
+  "generatedAt": "2026-10-08T10:41:10.504Z",
   "skills": [
     {
       "name": "backlog",
@@ -46,8 +46,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.5",
-      "hash": "sha256-43b1b1b97386b96b2cc8124ca906ffc0a5a4b35362413b52ac154c1faaa0b43e",
+      "version": "0.1.6",
+      "hash": "sha256-836f28be9230179d7389ef5ed8e1dacadd43d649a20a06f32adb891d5a4c1357",
       "description": "Implement a specification in code."
     },
     {
@@ -70,8 +70,8 @@
     },
     {
       "name": "review-diff",
-      "version": "0.1.1",
-      "hash": "sha256-ac4b526f0436f06acc4e5e2254b83b5318a14065caab3f922f20fa7da9e87c5f",
+      "version": "0.1.2",
+      "hash": "sha256-70beaf1478820d66e1831d45739ce97ced50224b46c5003d887ea62c8438f251",
       "description": "Review a branch before merge: first a gate (the repo's check command plus crap-gate), then three independent reviewers in parallel — spec (did we build what was asked, no more, no less), correctness via Codex (races, idempotency, money, time, authz, indexes, N+1, migrations, error paths, test quality) and structure (deep-quality-review). `--quick` runs only spec and correctness, shortened, for a live interview. Use when the user says \"/review-diff\", \"review this branch\", \"review this slice\", \"review before merge\", or before closing out a spec task."
     },
     {
