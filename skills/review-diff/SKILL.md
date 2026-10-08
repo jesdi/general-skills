@@ -122,7 +122,7 @@ in full and quick reviews, and label a failed gate `review not run` rather
 than calling its endpoint reviewed. Name skipped or failed reviewers so the
 coverage line cannot imply they ran. If the branch tip changed, list each
 commit in `<reviewed-tip>..<current-tip>` with its subject. If the reviewed tip
-is no longer an ancestor (for example, after a rebase), state that this review
+is no longer an ancestor (for example, after a rebase or history cleanup), state that this review
 does not cover the current history. Report a dirty worktree as unreviewed
 local changes even when the tips match.
 
