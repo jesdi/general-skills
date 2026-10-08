@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parseCatalogue } from '../cli/src/external-catalogue.js';
 
 const root = new URL('..', import.meta.url).pathname;
 const file = JSON.parse(readFileSync(join(root, 'external-skills.json'), 'utf8'));
@@ -8,6 +9,9 @@ const FORKS = ['implement-spec', 'prototype', 'to-spec', 'to-tickets', 'wizard']
 const OPERATOR_ONLY_FORKS = ['implement-spec'];
 
 describe('external-skills.json', () => {
+  it('gives every external skill a safe path and immutable source ref', () => {
+    expect(parseCatalogue(file)).toHaveLength(file.skills.length);
+  });
   it('declares exactly the five forks as vendored copies that must not be installed from upstream', () => {
     expect(file.schemaVersion).toBe(2);
     expect([...file.forks.skills].sort()).toEqual(FORKS);

@@ -1,0 +1,7 @@
+[run]
+branch = True
+data_file = .crap/.coverage
+source =
+    skills/backlog
+    skills/crap-gate
+omit = skills/**/test_*.py

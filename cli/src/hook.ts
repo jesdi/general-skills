@@ -8,10 +8,8 @@ const pkg = JSON.parse(
 );
 
 /**
- * Runs at the start of an agent session. The first session of a day starts
- * `update --all --global` in the background, so the session does not wait for
- * the network; pinned skills are not update candidates. Later sessions only
- * read the stamp.
+ * Runs a background check on every session. The CLI verifies external skills
+ * each time, refreshes their catalogue and updates own skills once a day.
  *
  * The session's directory can be an untrusted checkout, so the script leaves
  * it before npx reads a project `.npmrc` or `node_modules`. The CLI runs at
@@ -21,10 +19,7 @@ const SESSION_UPDATE_SCRIPT = `#!/bin/sh
 # Written by @jesdi/skills-cli; a global install or \`skills-cli hook\` writes it again.
 dir="$HOME/.my-skills"
 cd "$dir" || exit 0
-stamp="$dir/.session-update.stamp"
-[ -n "$(find "$stamp" -mtime -1 2>/dev/null)" ] && exit 0
-touch "$stamp" 2>/dev/null || exit 0
-(npx -y @jesdi/skills-cli@${pkg.version} update --all --global </dev/null >"$dir/.session-update.log" 2>&1 &)
+(npx -y @jesdi/skills-cli@${pkg.version} session-update </dev/null >>"$dir/.session-update.log" 2>&1 &)
 exit 0
 `;
 

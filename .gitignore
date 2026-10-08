@@ -10,3 +10,6 @@ skills/*/pr-visual-diff.*.json
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Local CRAP scores, coverage reports and test logs
+.crap/

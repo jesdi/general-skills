@@ -50,19 +50,27 @@ npx @jesdi/skills-cli uninstall <skill> [--global]
 npx @jesdi/skills-cli pin <skill> [--global]     # keep the installed version
 npx @jesdi/skills-cli unpin <skill> [--global]
 npx @jesdi/skills-cli hook                 # register the session update hook
+npx @jesdi/skills-cli session-update       # run the session checks now
 ```
 
 ## Automatic updates
 
 A global install registers a session-start hook in Claude Code
 (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`), for each one
-that is present. The first session of a day runs
-`skills-cli update --all --global` in the background; the result is in
-`~/.my-skills/.session-update.log`. Project installs do not change: they stay
+that is present. Every session runs `skills-cli session-update` in the
+background. It checks all external skills on every run and updates own global
+skills once a day. The result is in `~/.my-skills/.session-update.log`.
+Claude and Codex share a lock so concurrent starts cannot change the installs
+at the same time. External checks run before npm updates, whose requests have
+a 30-second deadline. Because the check runs in the background, a repaired skill
+may appear in the next session. Project installs stay
 at the versions committed in `.my-skills.json`.
 
+Existing hooks keep the CLI version that registered them. After a CLI release,
+run `npx -y @jesdi/skills-cli@latest hook` once to register the new behavior.
+
 To keep a skill at its installed version, pin it: `skills-cli pin <skill>
---global`. No update touches a pinned skill until `unpin`. To stop all
+--global`. No own-skill update touches a pinned skill until `unpin`. To stop all
 automatic updates, remove the hook entry from the two config files; the next
 global install or `skills-cli hook` adds it again.
 
@@ -71,8 +79,39 @@ global install or `skills-cli hook` adds it again.
 Skills authored by other people are **not** copied into this repo — they keep
 their own authors, upstreams, and licenses. `external-skills.json` records
 which ones are part of the standard setup, where they come from, and (under
-`pins`) the upstream commit the box set is taken from. Install them from
-upstream with the [skills.sh](https://skills.sh/) CLI:
+`pins`) the upstream commits for the standard setup and the box set.
+Session checks fetch this catalogue from this repository's `main` branch at
+most once a day. They compare installed files, including resources and executable
+permissions, with the files at each pinned ref. Missing or different files
+are repaired from upstream or a verified local cache. A failed or invalid
+catalogue refresh uses the last valid cached catalogue and reports the error.
+Ref changes take effect
+even when the version label stays the same. Sources without version labels
+are identified by their commit ref.
+
+External installs live in `~/.agents/skills/` for Codex and OpenCode, with links
+in `~/.claude/skills/` when Claude Code is present. Their source, path, ref,
+optional version and content hash are recorded in
+`~/.config/my-skills/external.json`. Upstream attribution and the identities
+of directories created by the updater establish
+ownership. Interrupted swaps retain ownership only of their known directory
+identities; failed replacements roll back uncommitted provenance. Existing
+skills.sh entries from the same
+source can be adopted, including Claude copies with matching content and current
+source attribution. Copies awaiting recovery also retain their directory identity.
+Publication and rollback use the OS's atomic no-replace rename through Koffi:
+[`RENAME_EXCL`](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/APFS_Guide/ToolsandAPIs/ToolsandAPIs.html)
+on macOS, [`RENAME_NOREPLACE`](https://man7.org/linux/man-pages/man2/rename.2.html)
+on Linux, and [`MoveFileExW`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-movefileexw)
+without replacement flags on Windows. Unsupported filesystems fail without a
+replacement fallback. If a concurrent install blocks rollback, both copies are
+preserved and the log names the backup location. Current
+conflicting skills.sh provenance and independently replaced Claude directories
+are preserved and reported in
+the log. An enabled Claude frontend-design plugin takes precedence over a
+direct Claude install of that skill; the Codex entry is still installed.
+
+For a manual setup, use the [skills.sh](https://skills.sh/) CLI:
 
 ```bash
 npx skills add mattpocock/skills          # grill-me, grill-with-docs, grilling, improve-codebase-architecture, to-questionnaire, tdd, code-review, codebase-design, diagnosing-bugs, resolving-merge-conflicts, pr, handoff, teach, wait-what
@@ -82,8 +121,10 @@ npx skills add vercel-labs/agent-skills   # vercel-react-best-practices
 npx skills add anthropics/skills          # frontend-design (skip if using the Claude Code plugin)
 ```
 
-The skills.sh lockfile (`~/.agents/.skill-lock.json`) tracks installed
-versions; `npx skills update` refreshes them.
+The skills.sh lockfile (`~/.agents/.skill-lock.json`) records its own installs.
+Session checks leave that file in place. `npx skills update` can move an install
+away from the configured pin; the next session check restores the catalogue's
+version.
 
 ### Forks (the one exception)
 

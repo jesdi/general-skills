@@ -1,6 +1,6 @@
 {
   "name": "@jesdi/skills",
-  "version": "0.0.28",
+  "version": "0.0.29",
   "description": "jesdi's agent skills (content package consumed by @jesdi/skills-cli)",
   "license": "MIT",
   "repository": {
@@ -15,10 +15,16 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage --coverage.reportOnFailure",
+    "test:python": "mkdir -p .crap && python3 -m coverage run -m pytest skills/backlog skills/crap-gate -q && python3 -m coverage json -o .crap/python.json",
+    "crap-gate": "sh skills/crap-gate/run.sh",
+    "check": "sh scripts/check.sh",
     "generate-manifest": "tsx scripts/generate-manifest.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@vitest/coverage-istanbul": "2.1.9",
     "gray-matter": "^4.0.3",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
