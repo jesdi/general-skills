@@ -12,6 +12,7 @@ import {
   type CliCtx,
 } from './ops.js';
 import { ensureSessionHook } from './hook.js';
+import { opSessionUpdate } from './session.js';
 import { type AgentId, type Scope } from './paths.js';
 import { validateAgents } from './state.js';
 
@@ -132,6 +133,11 @@ export function buildProgram(ctx?: CliCtx): Command {
       await opSetPinned(skill, false, scopeOf(opts), cliCtx);
       console.log(`unpinned ${skill}`);
     });
+
+  program
+    .command('session-update')
+    .description('check external skills each session and update own global skills once a day')
+    .action(async () => { await opSessionUpdate(cliCtx); });
 
   program
     .command('hook')

@@ -1,10 +1,22 @@
 {
   "schemaVersion": 2,
-  "comment": "Third-party skills used alongside this repo's own skills. They are NOT vendored here (they have their own authors and licenses); install them from upstream with the skills.sh CLI: `npx skills add <source>`. The skills.sh lockfile (~/.agents/.skill-lock.json) tracks installed versions. `pins` records the upstream commit the box set is taken from. The one exception to not vendoring is `forks`.",
+  "comment": "Third-party skills used alongside this repo's own skills. They are NOT vendored here (they have their own authors and licenses). Session checks reconcile every skills[] entry with its source, path and pins[source].ref, and record pins[source].version when provided. Refs select immutable upstream files; version is an optional upstream label. The skills.sh lockfile can identify existing installs for adoption. The one exception to not vendoring is forks.",
   "pins": {
     "mattpocock/skills": {
       "version": "1.2.3",
       "ref": "3cca18b368ae95cdbdebbff572ccafa662551015"
+    },
+    "JuliusBrussee/caveman": {
+      "ref": "2e08b9177c07bb7249a8a2d1a6758e5db281d002"
+    },
+    "vercel-labs/skills": {
+      "ref": "87a266971d9460a3d2606075b8e91edc83325472"
+    },
+    "vercel-labs/agent-skills": {
+      "ref": "063bee94c3f4df8453406c830b0a7df0f2860278"
+    },
+    "anthropics/skills": {
+      "ref": "683bc88e56f3e09ba94f7055977f3d3aa499f202"
     }
   },
   "forks": {
@@ -26,31 +38,36 @@
       "source": "JuliusBrussee/caveman",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman",
       "install": "npx skills add JuliusBrussee/caveman",
-      "notes": "Suite: caveman, caveman-commit, caveman-compress, caveman-help, compress. `compress` duplicates `caveman-compress` — install only one."
+      "notes": "Install the four listed caveman skills; do not also install the duplicate compress command.",
+      "path": "skills/caveman"
     },
     {
       "name": "caveman-commit",
       "source": "JuliusBrussee/caveman",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman",
-      "install": "npx skills add JuliusBrussee/caveman"
+      "install": "npx skills add JuliusBrussee/caveman",
+      "path": "skills/caveman-commit"
     },
     {
       "name": "caveman-compress",
       "source": "JuliusBrussee/caveman",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman",
-      "install": "npx skills add JuliusBrussee/caveman"
+      "install": "npx skills add JuliusBrussee/caveman",
+      "path": "skills/caveman-compress"
     },
     {
       "name": "caveman-help",
       "source": "JuliusBrussee/caveman",
       "sourceUrl": "https://github.com/JuliusBrussee/caveman",
-      "install": "npx skills add JuliusBrussee/caveman"
+      "install": "npx skills add JuliusBrussee/caveman",
+      "path": "skills/caveman-help"
     },
     {
       "name": "find-skills",
       "source": "vercel-labs/skills",
       "sourceUrl": "https://github.com/vercel-labs/skills",
-      "install": "npx skills add vercel-labs/skills"
+      "install": "npx skills add vercel-labs/skills",
+      "path": "skills/find-skills"
     },
     {
       "name": "grill-me",
@@ -148,14 +165,16 @@
       "source": "vercel-labs/agent-skills",
       "sourceUrl": "https://github.com/vercel-labs/agent-skills",
       "install": "npx skills add vercel-labs/agent-skills",
-      "license": "MIT"
+      "license": "MIT",
+      "path": "skills/react-best-practices"
     },
     {
       "name": "frontend-design",
       "source": "anthropics/skills",
       "sourceUrl": "https://github.com/anthropics/skills",
       "install": "npx skills add anthropics/skills",
-      "notes": "Also ships as a Claude Code plugin — prefer the plugin; skip this install if the plugin is enabled."
+      "notes": "Also ships as a Claude Code plugin — prefer the plugin; skip this install if the plugin is enabled.",
+      "path": "skills/frontend-design"
     }
   ]
 }

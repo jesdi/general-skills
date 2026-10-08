@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, realpath, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -109,17 +109,16 @@ describe('session-update.sh', () => {
     );
     const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
     expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
-    expect(args).toBe(`-y @jesdi/skills-cli@${version} update --all --global`);
+    expect(args).toBe(`-y @jesdi/skills-cli@${version} session-update`);
   });
 
-  it('does nothing on later sessions of the same day, and runs again the next day', async () => {
+  it('checks on every session, even when the daily update stamp is recent', async () => {
     const { ctx, run, callCount } = await setup();
     run();
-    run();
-    expect(await callCount()).toBe(1);
-    const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000);
-    await utimes(join(ctx.home, '.my-skills', '.session-update.stamp'), twoDaysAgo, twoDaysAgo);
+    await callCount();
     run();
     expect(await callCount()).toBe(2);
+    run();
+    expect(await callCount()).toBe(3);
   });
 });
