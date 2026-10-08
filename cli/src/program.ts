@@ -39,6 +39,47 @@ function defaultCtx(): CliCtx {
   };
 }
 
+async function installSkills(skills: string[], opts: { agent?: string; global?: boolean }, cliCtx: CliCtx): Promise<void> {
+  const agents = opts.agent === undefined ? undefined : parseAgents(opts.agent);
+  const installed = await opInstall(skills, agents, scopeOf(opts), cliCtx);
+  for (const s of installed) console.log(`installed ${s.name}@${s.version}`);
+}
+
+async function updateSkills(skill: string | undefined, opts: { all?: boolean; global?: boolean }, cliCtx: CliCtx): Promise<void> {
+  const scope = scopeOf(opts);
+  const candidates = await opCheckUpdates(scope, cliCtx);
+  if (candidates.length === 0) {
+    console.log('everything is up to date');
+    return;
+  }
+  const names = skill ? [skill] : opts.all ? candidates.map((c) => c.name) : null;
+  if (!names) {
+    for (const c of candidates) console.log(`${c.name}: ${c.from} -> ${c.to}`);
+    console.log('run `skills-cli update --all` or `skills-cli update <skill>` to apply');
+    return;
+  }
+  await opApplyUpdates(names, scope, cliCtx);
+  for (const n of names) console.log(`updated ${n}`);
+}
+
+async function listSkills(cliCtx: CliCtx): Promise<void> {
+  for (const s of await opList(cliCtx)) {
+    const marks = [
+      s.installedGlobal ? `global@${s.installedGlobal}` : null,
+      s.installedLocal ? `local@${s.installedLocal}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    console.log(`${s.name}@${s.latest}${marks ? ` [${marks}]` : ''} — ${s.description}`);
+  }
+}
+
+async function registerHook(cliCtx: CliCtx): Promise<void> {
+  const changed = await ensureSessionHook(cliCtx);
+  for (const file of changed) console.log(`registered in ${file}`);
+  if (changed.length === 0) console.log('already registered');
+}
+
 export function buildProgram(ctx?: CliCtx): Command {
   const cliCtx: CliCtx = ctx ?? defaultCtx();
   const program = new Command('skills-cli');
@@ -55,33 +96,14 @@ export function buildProgram(ctx?: CliCtx): Command {
         'Omit to use the top-level "agents" default (asked once when missing)',
     )
     .option('--global', 'install for the whole machine instead of this project')
-    .action(async (skills: string[], opts: { agent?: string; global?: boolean }) => {
-      const agents = opts.agent === undefined ? undefined : parseAgents(opts.agent);
-      const installed = await opInstall(skills, agents, scopeOf(opts), cliCtx);
-      for (const s of installed) console.log(`installed ${s.name}@${s.version}`);
-    });
+    .action((skills, opts) => installSkills(skills, opts, cliCtx));
 
   program
     .command('update')
     .argument('[skill]', 'update a single skill')
     .option('--all', 'apply every available update')
     .option('--global', 'operate on the global scope')
-    .action(async (skill: string | undefined, opts: { all?: boolean; global?: boolean }) => {
-      const scope = scopeOf(opts);
-      const candidates = await opCheckUpdates(scope, cliCtx);
-      if (candidates.length === 0) {
-        console.log('everything is up to date');
-        return;
-      }
-      const names = skill ? [skill] : opts.all ? candidates.map((c) => c.name) : null;
-      if (!names) {
-        for (const c of candidates) console.log(`${c.name}: ${c.from} -> ${c.to}`);
-        console.log('run `skills-cli update --all` or `skills-cli update <skill>` to apply');
-        return;
-      }
-      await opApplyUpdates(names, scope, cliCtx);
-      for (const n of names) console.log(`updated ${n}`);
-    });
+    .action((skill, opts) => updateSkills(skill, opts, cliCtx));
 
   program
     .command('sync')
@@ -94,17 +116,7 @@ export function buildProgram(ctx?: CliCtx): Command {
   program
     .command('list')
     .description('list available skills and where they are installed')
-    .action(async () => {
-      for (const s of await opList(cliCtx)) {
-        const marks = [
-          s.installedGlobal ? `global@${s.installedGlobal}` : null,
-          s.installedLocal ? `local@${s.installedLocal}` : null,
-        ]
-          .filter(Boolean)
-          .join(', ');
-        console.log(`${s.name}@${s.latest}${marks ? ` [${marks}]` : ''} — ${s.description}`);
-      }
-    });
+    .action(() => listSkills(cliCtx));
 
   program
     .command('uninstall')
@@ -142,11 +154,7 @@ export function buildProgram(ctx?: CliCtx): Command {
   program
     .command('hook')
     .description('register the session-start hook that keeps global skills up to date')
-    .action(async () => {
-      const changed = await ensureSessionHook(cliCtx);
-      for (const file of changed) console.log(`registered in ${file}`);
-      if (changed.length === 0) console.log('already registered');
-    });
+    .action(() => registerHook(cliCtx));
 
   program.action(async () => {
     const { runWizard } = await import('./wizard.js');

@@ -171,6 +171,47 @@ describe('session-update external skills', () => {
     expect(await readFile(join(f.canonical(), 'rule.txt'), 'utf8')).toBe(`resource at ${REF}`);
   });
 
+  it.each([undefined, [], ['invalid'], ['1:2:3', '4:5:6', '7:8:9'], [123]])(
+    'refuses invalid canonical ownership %j without changing the install', async (canonicalIds) => {
+      const f = await fixture();
+      await f.run();
+      const state = await json(f.stateFile);
+      state['external-a'].canonicalIds = canonicalIds;
+      await save(f.stateFile, state);
+      await expect(f.run()).rejects.toThrow('invalid managed external ownership');
+      expect(await readFile(join(f.canonical(), 'rule.txt'), 'utf8')).toBe(`resource at ${REF}`);
+    },
+  );
+
+  it.each([{ id: 'foreign', hash: 'a'.repeat(64) }, { id: '1:2:3', hash: 'invalid' }])(
+    'refuses invalid legacy directory recovery metadata %j', async (claudeDirectory) => {
+      const f = await fixture();
+      await f.run();
+      const state = await json(f.stateFile);
+      state['external-a'].claudeDirectory = claudeDirectory;
+      await save(f.stateFile, state);
+      await expect(f.run()).rejects.toThrow(/invalid (Claude directory identity|external content hash)/);
+      expect(await readlink(f.claude())).toBe(f.canonical());
+    },
+  );
+
+  it('installs the full catalogue when Claude is not configured', async () => {
+    const f = await fixture();
+    await rm(join(f.ctx.home, '.claude'), { recursive: true });
+    await f.run();
+    expect(existsSync(join(f.canonical(), 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(f.ctx.home, '.claude'))).toBe(false);
+  });
+
+  it('refreshes own skills when the daily stamp is invalid', async () => {
+    const f = await fixture();
+    await f.run();
+    await writeFile(join(f.ctx.home, '.my-skills', '.session-update.stamp'), 'invalid');
+    await f.run();
+    expect(f.calls.filter((url) => url.endsWith('/latest'))).toHaveLength(2);
+    expect(Number(await readFile(join(f.ctx.home, '.my-skills', '.session-update.stamp'), 'utf8'))).toBeGreaterThan(0);
+  });
+
   it('follows a new ref even when the declared version label stays the same', async () => {
     const f = await fixture();
     await f.run();

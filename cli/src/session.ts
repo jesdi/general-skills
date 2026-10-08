@@ -6,6 +6,16 @@ import { storeDir } from './paths.js';
 import { DAY } from './external-catalogue.js';
 import { opSyncExternal } from './external.js';
 
+/** Daily own-skill refresh is separate from the per-session external check. */
+async function updateOwnSkills(ctx: CliCtx, stamp: string, last: number): Promise<void> {
+  if (Number.isFinite(last) && Date.now() - last < DAY) return;
+  const boundedCtx: CliCtx = { ...ctx, fetchImpl: (input, init) =>
+    (ctx.fetchImpl ?? fetch)(input, { ...init, signal: AbortSignal.timeout(30_000) }) };
+  const candidates = await opCheckUpdates('global', boundedCtx);
+  if (candidates.length) await opApplyUpdates(candidates.map((c) => c.name), 'global', boundedCtx);
+  await writeFile(stamp, String(Date.now()));
+}
+
 /** Called in the background by both agents. One reconciler owns the stores at a time. */
 export async function opSessionUpdate(ctx: CliCtx): Promise<void> {
   const store = storeDir('global', ctx);
@@ -26,15 +36,8 @@ export async function opSessionUpdate(ctx: CliCtx): Promise<void> {
     // Cached external repairs must not wait for the npm registry.
     try { await opSyncExternal(ctx); }
     catch (error) { errors.push(String(error)); }
-    if (!Number.isFinite(last) || Date.now() - last >= DAY) {
-      try {
-        const boundedCtx: CliCtx = { ...ctx, fetchImpl: (input, init) =>
-          (ctx.fetchImpl ?? fetch)(input, { ...init, signal: AbortSignal.timeout(30_000) }) };
-        const candidates = await opCheckUpdates('global', boundedCtx);
-        if (candidates.length) await opApplyUpdates(candidates.map((c) => c.name), 'global', boundedCtx);
-        await writeFile(stamp, String(Date.now()));
-      } catch (error) { errors.push(`own skill update: ${error}`); }
-    }
+    try { await updateOwnSkills(ctx, stamp, last); }
+    catch (error) { errors.push(`own skill update: ${error}`); }
     if (errors.length) throw new Error(errors.join('\n'));
   } finally { await release(); }
 }

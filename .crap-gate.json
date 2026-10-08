@@ -1,0 +1,29 @@
+{
+  "thresholds": { "existing": 15, "new": 9 },
+  "base": "origin/main",
+  "targets": [
+    {
+      "name": "typescript",
+      "paths": ["cli/src/**/*.ts", "lib/**/*.ts", "scripts/**/*.ts"],
+      "exclude": ["**/*.test.ts", "**/*.d.ts"],
+      "complexity": { "tool": "typescript", "cwd": "." },
+      "coverage": {
+        "format": "istanbul",
+        "report": ".crap/typescript/coverage-final.json",
+        "command": "pnpm test:coverage"
+      }
+    },
+    {
+      "name": "python",
+      "paths": ["skills/backlog/**/*.py", "skills/crap-gate/**/*.py"],
+      "exclude": ["**/test_*.py"],
+      "complexity": { "tool": "python" },
+      "coverage": {
+        "format": "coverage.py",
+        "root": ".",
+        "report": ".crap/python.json",
+        "command": "pnpm test:python"
+      }
+    }
+  ]
+}
