@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as tar from 'tar';
 import { describe, expect, it } from 'vitest';
-import { opApplyUpdates, opCheckUpdates, opDecline, opInstall } from '../src/ops.js';
+import {
+  opApplyUpdates,
+  opCheckUpdates,
+  opDecline,
+  opInstall,
+  opSetPinned,
+  opSync,
+} from '../src/ops.js';
 
 async function fixtureFetch(pkgVersion: string, skillVersion: string) {
   const root = await mkdtemp(join(tmpdir(), 'fix-'));
@@ -128,5 +135,84 @@ describe('updates', () => {
     expect(await opCheckUpdates('global', ctx)).toEqual([
       { name: 'hello-world', from: '0.1.0', to: '0.1.2' },
     ]);
+  });
+});
+
+describe('pinned skills', () => {
+  it('a pinned skill is not an update candidate; unpinned, it is again', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    await opSetPinned('hello-world', true, 'global', ctx);
+    ctx.fetchImpl = await fixtureFetch('1.0.1', '0.1.1');
+    expect(await opCheckUpdates('global', ctx)).toEqual([]);
+    await opSetPinned('hello-world', false, 'global', ctx);
+    expect(await opCheckUpdates('global', ctx)).toEqual([
+      { name: 'hello-world', from: '0.1.0', to: '0.1.1' },
+    ]);
+  });
+
+  it('records the pin on the entry and removes the key on unpin', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'local', ctx);
+    const read = async () =>
+      JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8')).skills['hello-world'];
+    await opSetPinned('hello-world', true, 'local', ctx);
+    expect(await read()).toEqual({ version: '0.1.0', package: '1.0.0', agents: ['claude'], pinned: true });
+    await opSetPinned('hello-world', false, 'local', ctx);
+    expect(await read()).toEqual({ version: '0.1.0', package: '1.0.0', agents: ['claude'] });
+  });
+
+  it('refuses to update or reinstall a pinned skill and leaves its content', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    await opSetPinned('hello-world', true, 'global', ctx);
+    ctx.fetchImpl = await fixtureFetch('1.0.1', '0.1.1');
+    await expect(opApplyUpdates(['hello-world'], 'global', ctx)).rejects.toThrow(
+      /hello-world is pinned at 0\.1\.0/,
+    );
+    await expect(opInstall(['hello-world'], ['claude'], 'global', ctx)).rejects.toThrow(
+      /hello-world is pinned at 0\.1\.0/,
+    );
+    const content = await readFile(
+      join(ctx.home, '.claude', 'skills', 'hello-world', 'SKILL.md'),
+      'utf8',
+    );
+    expect(content).toContain('content 0.1.0');
+  });
+
+  it('errors when the skill to pin is not installed', async () => {
+    const ctx = await makeCtx();
+    await expect(opSetPinned('hello-world', true, 'global', ctx)).rejects.toThrow(
+      /skill not installed \(global\): hello-world/,
+    );
+  });
+
+  it('sync keeps the pin of a committed entry', async () => {
+    const ctx = await makeCtx();
+    await writeFile(
+      join(ctx.project, '.my-skills.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        skills: { 'hello-world': { version: '0.1.0', agents: ['claude'], pinned: true } },
+      }),
+    );
+    await opSync(ctx);
+    const state = JSON.parse(await readFile(join(ctx.project, '.my-skills.json'), 'utf8'));
+    expect(state.skills['hello-world'].pinned).toBe(true);
+  });
+});
+
+describe('global install', () => {
+  it('registers the session update hook', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    const settings = await readFile(join(ctx.home, '.claude', 'settings.json'), 'utf8');
+    expect(settings).toContain('.session-update.sh');
+  });
+
+  it('a project install registers no hook', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'local', ctx);
+    expect(existsSync(join(ctx.home, '.my-skills'))).toBe(false);
   });
 });

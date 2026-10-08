@@ -6,10 +6,12 @@ import {
   opCheckUpdates,
   opInstall,
   opList,
+  opSetPinned,
   opSync,
   opUninstall,
   type CliCtx,
 } from './ops.js';
+import { ensureSessionHook } from './hook.js';
 import { type AgentId, type Scope } from './paths.js';
 import { validateAgents } from './state.js';
 
@@ -110,6 +112,34 @@ export function buildProgram(ctx?: CliCtx): Command {
     .action(async (skill: string, opts: { global?: boolean }) => {
       await opUninstall(skill, scopeOf(opts), cliCtx);
       console.log(`uninstalled ${skill}`);
+    });
+
+  program
+    .command('pin')
+    .description('keep a skill at its installed version: updates skip it')
+    .argument('<skill>')
+    .option('--global', 'pin in the global scope')
+    .action(async (skill: string, opts: { global?: boolean }) => {
+      const version = await opSetPinned(skill, true, scopeOf(opts), cliCtx);
+      console.log(`pinned ${skill}@${version}`);
+    });
+
+  program
+    .command('unpin')
+    .argument('<skill>')
+    .option('--global', 'unpin in the global scope')
+    .action(async (skill: string, opts: { global?: boolean }) => {
+      await opSetPinned(skill, false, scopeOf(opts), cliCtx);
+      console.log(`unpinned ${skill}`);
+    });
+
+  program
+    .command('hook')
+    .description('register the session-start hook that keeps global skills up to date')
+    .action(async () => {
+      const changed = await ensureSessionHook(cliCtx);
+      for (const file of changed) console.log(`registered in ${file}`);
+      if (changed.length === 0) console.log('already registered');
     });
 
   program.action(async () => {

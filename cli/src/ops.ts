@@ -16,8 +16,11 @@ import {
   loadGlobalState,
   saveGlobalState,
   validateAgents,
+  type GlobalState,
   type InstalledSkill,
+  type ProjectState,
 } from './state.js';
+import { ensureSessionHook } from './hook.js';
 import { installSkill, uninstallSkill } from './store.js';
 import { join } from 'node:path';
 
@@ -59,6 +62,7 @@ async function installFromFetched(
   const state = await loadState(scope, ctx);
   const entry: InstalledSkill = { version: skill.version, package: fetched.packageVersion };
   if (override) entry.agents = validateAgents(override);
+  if (state.skills[name]?.pinned) entry.pinned = true;
   state.skills[name] = entry;
   const agents = agentsFor(state, name);
   await installSkill({
@@ -69,6 +73,16 @@ async function installFromFetched(
   });
   await saveState(scope, ctx, state);
   return { name, version: skill.version };
+}
+
+/** A pinned skill changes version only after `unpin`: fail before anything is touched. */
+function refusePinned(state: GlobalState | ProjectState, names: string[]): void {
+  for (const name of names) {
+    const entry = state.skills[name];
+    if (entry?.pinned) {
+      throw new Error(`${name} is pinned at ${entry.version} — run \`skills-cli unpin ${name}\` first`);
+    }
+  }
 }
 
 /**
@@ -104,12 +118,15 @@ export async function opInstall(
   for (const name of names) {
     if (!available.has(name)) throw new Error(`unknown skill: ${name}`);
   }
+  refusePinned(await loadState(scope, ctx), names);
   if (agents) validateAgents(agents);
   else await ensureDefaultAgents(scope, ctx);
   const installed: { name: string; version: string }[] = [];
   for (const name of names) {
     installed.push(await installFromFetched(fetched, name, agents, scope, ctx));
   }
+  // Global skills keep themselves up to date from the first install on.
+  if (scope === 'global') await ensureSessionHook(ctx);
   return installed;
 }
 
@@ -139,7 +156,7 @@ export async function opCheckUpdates(scope: Scope, ctx: CliCtx): Promise<UpdateC
   const candidates: UpdateCandidate[] = [];
   for (const [name, installed] of Object.entries(state.skills)) {
     const latest = available.get(name);
-    if (!latest || latest.version === installed.version) continue;
+    if (!latest || latest.version === installed.version || installed.pinned) continue;
     if (globalState.declined[name] === latest.version) continue;
     candidates.push({ name, from: installed.version, to: latest.version });
   }
@@ -153,6 +170,7 @@ export async function opApplyUpdates(names: string[], scope: Scope, ctx: CliCtx)
     if (!state.skills[name]) throw new Error(`skill not installed (${scope}): ${name}`);
     agentsFor(state, name); // fail before touching anything if the config is unresolvable
   }
+  refusePinned(state, names);
   const fetched = await fetchSkills(ctx);
   for (const name of names) {
     // Reinstall with the entry's own shape: an inherited entry stays inherited.
@@ -162,6 +180,21 @@ export async function opApplyUpdates(names: string[], scope: Scope, ctx: CliCtx)
       await saveGlobalState(ctx, globalState);
     }
   }
+}
+
+export async function opSetPinned(
+  name: string,
+  pinned: boolean,
+  scope: Scope,
+  ctx: CliCtx,
+): Promise<string> {
+  const state = await loadState(scope, ctx);
+  const entry = state.skills[name];
+  if (!entry) throw new Error(`skill not installed (${scope}): ${name}`);
+  if (pinned) entry.pinned = true;
+  else delete entry.pinned;
+  await saveState(scope, ctx, state);
+  return entry.version;
 }
 
 export async function opDecline(name: string, version: string, ctx: CliCtx): Promise<void> {
