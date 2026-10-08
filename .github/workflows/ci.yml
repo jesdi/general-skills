@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -23,14 +25,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
-      - run: pip install pytest
+      - run: pip install -r requirements-dev.txt
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
-      - run: pnpm --filter @jesdi/skills-cli build
-      - run: python3 -m pytest skills/backlog -q
-      - run: sh skills/crap-gate/run.sh --help
+      - run: pnpm check --base "$CRAP_GATE_BASE"
         env:
+          CRAP_GATE_BASE: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha || 'origin/main' }}
           CRAP_GATE_CACHE_DIR: ${{ runner.temp }}/crap-gate-runtime
-      - run: python3 -m pytest skills/crap-gate -q
-        env:
           CRAP_GATE_TEST_CACHE: ${{ runner.temp }}/crap-gate-runtime

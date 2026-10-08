@@ -34,21 +34,29 @@ function contentHash(value: unknown): string {
   return value;
 }
 
+function canonicalIds(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 2 ||
+      !value.every((id) => typeof id === 'string' && /^\d+:\d+:\d+$/.test(id))) {
+    throw new Error(`invalid managed external ownership: ${name}`);
+  }
+  return value;
+}
+
+function legacyClaudeDirectory(value: unknown): NonNullable<ManagedExternal['claudeDirectory']> {
+  const entry = object(value);
+  if (typeof entry.id !== 'string' || !/^\d+:\d+:\d+$/.test(entry.id)) throw new Error('invalid Claude directory identity');
+  return { id: entry.id, hash: contentHash(entry.hash) };
+}
+
 function managedState(value: unknown): ManagedState {
   const result: ManagedState = {};
   for (const [name, entry] of Object.entries(object(value))) {
     const item = object(entry);
     const skill = parseExternalSkill(item);
-    if (skill.name !== name || !Array.isArray(item.canonicalIds) || item.canonicalIds.length < 1 ||
-        item.canonicalIds.length > 2 || !item.canonicalIds.every((id) => typeof id === 'string' && /^\d+:\d+:\d+$/.test(id))) {
-      throw new Error(`invalid managed external ownership: ${name}`);
-    }
-    result[name] = { ...skill, hash: contentHash(item.hash), canonicalIds: item.canonicalIds };
-    if (item.claudeDirectory !== undefined) {
-      const entry = object(item.claudeDirectory);
-      if (typeof entry.id !== 'string' || !/^\d+:\d+:\d+$/.test(entry.id)) throw new Error('invalid Claude directory identity');
-      result[name].claudeDirectory = { id: entry.id, hash: contentHash(entry.hash) };
-    }
+    if (skill.name !== name) throw new Error(`invalid managed external ownership: ${name}`);
+    const ids = canonicalIds(item.canonicalIds, name);
+    result[name] = { ...skill, hash: contentHash(item.hash), canonicalIds: ids };
+    if (item.claudeDirectory !== undefined) result[name].claudeDirectory = legacyClaudeDirectory(item.claudeDirectory);
   }
   return result;
 }
@@ -97,6 +105,14 @@ function checkClaude(entry: Snapshot | undefined, file: string, canonical: strin
   throw new Error(`${file} is an unrelated install; refusing to replace it`);
 }
 
+async function cleanupSwap(temp: string, prepared: string, installed: boolean, moved: boolean): Promise<void> {
+  // If rollback failed, preserve its captured copy for recovery.
+  try {
+    if (installed || !moved) await rm(temp, { recursive: true, force: true });
+    else await rm(prepared, { recursive: true, force: true });
+  } catch (error) { console.warn(`external swap cleanup failed at ${temp}: ${error}`); }
+}
+
 /** Both directory and link replacement capture and validate the entry they remove. */
 async function replaceEntry(opts: {
   destination: string;
@@ -132,72 +148,127 @@ async function replaceEntry(opts: {
       throw error;
     }
   } finally {
-    // If rollback failed, preserve its captured copy for recovery.
-    try {
-      if (installed || !moved) await rm(temp, { recursive: true, force: true });
-      else await rm(prepared, { recursive: true, force: true });
-    } catch (error) { console.warn(`external swap cleanup failed at ${temp}: ${error}`); }
+    await cleanupSwap(temp, prepared, installed, moved);
   }
 }
 
-async function reconcile(
-  skill: ResolvedExternalSkill,
-  target: { canonical: string; claude: string | undefined; managed: ManagedState; stateFile: string; lockFile: string },
-): Promise<boolean> {
-  const { canonical, claude, managed, stateFile, lockFile } = target;
-  const previousRecord = managed[skill.name];
-  const before = await snapshot(canonical);
-  const attributed = await attributedToSource(skill, lockFile);
-  const owned = attributed || (before !== undefined && previousRecord?.canonicalIds.includes(before.id) === true);
+interface ReconcileTarget {
+  canonical: string;
+  claude: string | undefined;
+  managed: ManagedState;
+  stateFile: string;
+  lockFile: string;
+}
+type LegacyDirectory = ManagedExternal['claudeDirectory'];
+type DesiredRecord = Omit<ResolvedExternalSkill, 'dir'>;
+interface PreparedInstallation {
+  readonly skill: ResolvedExternalSkill;
+  readonly desired: DesiredRecord;
+  readonly target: ReconcileTarget;
+  readonly before: Snapshot | undefined;
+  readonly claudeBefore: Snapshot | undefined;
+  readonly legacyDirectory: LegacyDirectory;
+  readonly previousRecord: ManagedExternal | undefined;
+  readonly verifySource: () => Promise<void>;
+}
+
+function authorizeCanonical(before: Snapshot | undefined, previous: ManagedExternal | undefined, attributed: boolean, canonical: string): void {
+  const owned = attributed || (before !== undefined && previous?.canonicalIds.includes(before.id) === true);
   if (before && (before.kind !== 'directory' || !owned)) {
     throw new Error(`${canonical} is an unrelated install; refusing to replace it`);
   }
-  const claudeBefore = claude ? await snapshot(claude) : undefined;
-  const recoveringClaude = claudeBefore?.kind === 'directory' && previousRecord?.claudeDirectory?.id === claudeBefore.id &&
-    previousRecord.claudeDirectory.hash === claudeBefore.hash;
-  const hashes = attributed || recoveringClaude ? [skill.hash, before?.kind === 'directory' ? before.hash : undefined,
-    recoveringClaude ? claudeBefore.hash : undefined].filter((h): h is string => h !== undefined) : [];
-  if (claude) checkClaude(claudeBefore, claude, canonical, hashes);
-  const { dir, ...desired } = skill;
-  const legacyHash = claudeBefore?.kind === 'directory' ? claudeBefore.hash : undefined;
+}
+
+/** Claude directory adoption needs current attribution or an exact recovery record. */
+function trustedClaudeHashes(skill: ResolvedExternalSkill, before: Snapshot | undefined, claudeBefore: Snapshot | undefined,
+  previous: ManagedExternal | undefined, attributed: boolean): string[] {
+  const recovering = claudeBefore?.kind === 'directory' && previous?.claudeDirectory?.id === claudeBefore.id &&
+    previous.claudeDirectory.hash === claudeBefore.hash;
+  if (!attributed && !recovering) return [];
+  const hashes = [skill.hash];
+  if (before?.kind === 'directory') hashes.push(before.hash);
+  if (recovering) hashes.push(claudeBefore.hash);
+  return hashes;
+}
+
+/** Bind the checked entries and derived ownership record to one resolved installation. */
+async function inspectInstallation(skill: ResolvedExternalSkill, target: ReconcileTarget): Promise<PreparedInstallation> {
+  const previousRecord = target.managed[skill.name];
+  const before = await snapshot(target.canonical);
+  const attributed = await attributedToSource(skill, target.lockFile);
+  authorizeCanonical(before, previousRecord, attributed, target.canonical);
+  const claudeBefore = target.claude ? await snapshot(target.claude) : undefined;
+  if (target.claude) checkClaude(claudeBefore, target.claude, target.canonical,
+    trustedClaudeHashes(skill, before, claudeBefore, previousRecord, attributed));
   const legacyDirectory = claudeBefore?.kind === 'directory' ? { id: claudeBefore.id, hash: claudeBefore.hash } : undefined;
-  const verifySource = async () => { await attributedToSource(skill, lockFile); };
+  const { dir: _dir, ...desired } = skill;
+  const verifySource = async () => { await attributedToSource(skill, target.lockFile); };
+  return { skill, desired, target, before, claudeBefore, legacyDirectory, previousRecord, verifySource };
+}
+
+function ownershipRecord(desired: DesiredRecord, ids: string[], legacyDirectory: LegacyDirectory): ManagedExternal {
+  return { ...desired, canonicalIds: ids, ...(legacyDirectory ? { claudeDirectory: legacyDirectory } : {}) };
+}
+
+/** Persist the exact staged identity before publication so interrupted swaps are recoverable. */
+async function stageCanonical(installation: PreparedInstallation, file: string): Promise<void> {
+  const { skill, target, before, desired, legacyDirectory } = installation;
+  await cp(skill.dir, file, { recursive: true });
+  const staged = await snapshot(file);
+  if (!staged || staged.kind !== 'directory' || staged.hash !== skill.hash) throw new Error('staged external skill mismatch');
+  target.managed[skill.name] = ownershipRecord(desired, before ? [before.id, staged.id] : [staged.id], legacyDirectory);
+  await writeJson(target.stateFile, target.managed);
+}
+
+async function publishCanonical(installation: PreparedInstallation): Promise<boolean> {
+  const { skill, target, before, verifySource } = installation;
+  if (before?.kind === 'directory' && before.hash === skill.hash) return false;
+  await replaceEntry({ destination: target.canonical, previous: before, verifySource,
+    prepare: (file) => stageCanonical(installation, file) });
+  return true;
+}
+
+async function verifiedCanonical(installation: PreparedInstallation, committed: boolean): Promise<Snapshot & { kind: 'directory' }> {
+  const { skill, target, before } = installation;
+  const current = await snapshot(target.canonical);
+  if (!current || current.kind !== 'directory' || current.hash !== skill.hash) throw new Error(`${target.canonical} changed after installation`);
+  const verifiedIds = committed ? target.managed[skill.name].canonicalIds : before ? [before.id] : [];
+  if (!verifiedIds.includes(current.id)) throw new Error(`${target.canonical} identity changed after installation`);
+  return current;
+}
+
+async function commitOwnership(installation: PreparedInstallation, currentId: string): Promise<boolean> {
+  const { skill, desired, target, legacyDirectory, verifySource } = installation;
+  const pending = ownershipRecord(desired, [currentId], legacyDirectory);
+  if (JSON.stringify(target.managed[skill.name]) === JSON.stringify(pending)) return false;
+  await verifySource();
+  target.managed[skill.name] = pending;
+  await writeJson(target.stateFile, target.managed);
+  return true;
+}
+
+async function publishClaude(installation: PreparedInstallation): Promise<boolean> {
+  const { target, claudeBefore: before, verifySource } = installation;
+  const { claude, canonical } = target;
+  if (!claude || (before?.kind === 'link' && resolve(dirname(claude), before.target) === resolve(canonical))) return false;
+  await replaceEntry({ destination: claude, previous: before, verifySource,
+    prepare: async (file) => { await symlink(canonical, file, 'dir'); } });
+  return true;
+}
+
+async function reconcile(skill: ResolvedExternalSkill, target: ReconcileTarget): Promise<boolean> {
+  const { managed, stateFile } = target;
+  const installation = await inspectInstallation(skill, target);
+  const { desired, legacyDirectory, previousRecord } = installation;
   let canonicalCommitted = false;
-  let changed = false;
   try {
-    if (!before || before.kind !== 'directory' || before.hash !== skill.hash) {
-      await replaceEntry({ destination: canonical, previous: before, verifySource, prepare: async (file) => {
-        await cp(dir, file, { recursive: true });
-        const staged = await snapshot(file);
-        if (!staged || staged.kind !== 'directory' || staged.hash !== skill.hash) throw new Error('staged external skill mismatch');
-        // A journal authorizes only the old attributed directory and this exact
-        // staged inode. A refused install cannot authorize a foreign replacement.
-        managed[skill.name] = { ...desired, canonicalIds: before ? [before.id, staged.id] : [staged.id],
-          ...(legacyDirectory ? { claudeDirectory: legacyDirectory } : {}) };
-        await writeJson(stateFile, managed);
-      } });
-      canonicalCommitted = true;
-      changed = true;
-    }
-    const current = await snapshot(canonical);
-    if (!current || current.kind !== 'directory' || current.hash !== skill.hash) throw new Error(`${canonical} changed after installation`);
-    const verifiedIds = canonicalCommitted ? managed[skill.name].canonicalIds : before ? [before.id] : [];
-    if (!verifiedIds.includes(current.id)) throw new Error(`${canonical} identity changed after installation`);
-    const pending: ManagedExternal = { ...desired, canonicalIds: [current.id],
-      ...(legacyDirectory ? { claudeDirectory: legacyDirectory } : {}) };
-    if (JSON.stringify(managed[skill.name]) !== JSON.stringify(pending)) {
-      await verifySource();
-      managed[skill.name] = pending;
-      await writeJson(stateFile, managed);
-      changed = true;
-    }
-    if (claude && !(claudeBefore?.kind === 'link' && resolve(dirname(claude), claudeBefore.target) === resolve(canonical))) {
-      await replaceEntry({ destination: claude, previous: claudeBefore, verifySource,
-        prepare: async (file) => { await symlink(canonical, file, 'dir'); } });
-      changed = true;
-    }
-    if (legacyHash) {
-      managed[skill.name] = { ...desired, canonicalIds: [current.id] };
+    canonicalCommitted = await publishCanonical(installation);
+    const current = await verifiedCanonical(installation, canonicalCommitted);
+    let changed = canonicalCommitted;
+    changed = await commitOwnership(installation, current.id) || changed;
+    changed = await publishClaude(installation) || changed;
+    if (legacyDirectory) {
+      managed[skill.name] = ownershipRecord(desired, [current.id], undefined);
       await writeJson(stateFile, managed);
     }
     return changed;
@@ -211,17 +282,7 @@ async function reconcile(
   }
 }
 
-/** Reconcile every catalogue entry. External files stay outside the repository. */
-export async function opSyncExternal(ctx: CliCtx): Promise<string[]> {
-  const skills = await loadCatalogue(ctx);
-  const stateFile = join(ctx.home, '.config', 'my-skills', 'external.json');
-  const managed = managedState(await readOptionalJson(stateFile));
-  const lockFile = join(ctx.home, '.agents', '.skill-lock.json');
-  const global = await loadGlobalState(ctx);
-  const claudeInstalled = await entryStat(join(ctx.home, '.claude')).then((stat) => stat !== undefined);
-  const settings = object(claudeInstalled ? await readOptionalJson(join(ctx.home, '.claude', 'settings.json')) : {});
-  const frontendPlugin = Object.entries(object(settings.enabledPlugins ?? {})).some(([name, enabled]) =>
-    name.startsWith('frontend-design@') && enabled === true);
+function groupSources(skills: ExternalSkill[]): ExternalGroup[] {
   const groups = new Map<string, ExternalGroup>();
   for (const skill of skills) {
     const key = `${skill.source}@${skill.ref}`;
@@ -229,25 +290,60 @@ export async function opSyncExternal(ctx: CliCtx): Promise<string[]> {
     if (group) group.push(skill);
     else groups.set(key, [skill]);
   }
+  return [...groups.values()];
+}
+
+async function claudeConfiguration(ctx: CliCtx): Promise<{ installed: boolean; frontendPlugin: boolean }> {
+  const installed = await entryStat(join(ctx.home, '.claude')).then((stat) => stat !== undefined);
+  const settings = object(installed ? await readOptionalJson(join(ctx.home, '.claude', 'settings.json')) : {});
+  const frontendPlugin = Object.entries(object(settings.enabledPlugins ?? {})).some(([name, enabled]) =>
+    name.startsWith('frontend-design@') && enabled === true);
+  return { installed, frontendPlugin };
+}
+
+interface ReconcileContext {
+  ctx: CliCtx;
+  managed: ManagedState;
+  stateFile: string;
+  lockFile: string;
+  global: Awaited<ReturnType<typeof loadGlobalState>>;
+  claude: Awaited<ReturnType<typeof claudeConfiguration>>;
+}
+
+async function reconcileSkill(skill: ResolvedExternalSkill, context: ReconcileContext): Promise<boolean> {
+  const { ctx, managed, stateFile, lockFile, global, claude: configuration } = context;
+  if (global.skills[skill.name]) throw new Error(`${skill.name} is an own skill; refusing an external replacement`);
+  const canonical = join(ctx.home, '.agents', 'skills', skill.name);
+  const claude = configuration.installed && !(skill.name === 'frontend-design' && configuration.frontendPlugin)
+    ? join(ctx.home, '.claude', 'skills', skill.name) : undefined;
+  const changed = await reconcile(skill, { canonical, claude, managed, stateFile, lockFile });
+  if (changed) console.log(`reconciled external ${skill.name}: ${skill.source}@${skill.ref}${skill.version ? ` (${skill.version})` : ''}`);
+  return changed;
+}
+
+/** A failed source or install does not prevent checks for other catalogue entries. */
+async function reconcileGroup(group: ExternalGroup, context: ReconcileContext, repaired: string[], errors: string[]): Promise<void> {
+  let fetched: ResolvedExternalSkill[];
+  try { fetched = await fetchExternalSource(group, context.ctx); }
+  catch (error) { errors.push(`${group[0].source}: ${error}`); return; }
+  for (const skill of fetched) {
+    try { if (await reconcileSkill(skill, context)) repaired.push(skill.name); }
+    catch (error) { errors.push(`${skill.name}: ${error}`); }
+  }
+}
+
+/** Reconcile every catalogue entry. External files stay outside the repository. */
+export async function opSyncExternal(ctx: CliCtx): Promise<string[]> {
+  const skills = await loadCatalogue(ctx);
+  const stateFile = join(ctx.home, '.config', 'my-skills', 'external.json');
+  const managed = managedState(await readOptionalJson(stateFile));
+  const lockFile = join(ctx.home, '.agents', '.skill-lock.json');
+  const global = await loadGlobalState(ctx);
+  const claude = await claudeConfiguration(ctx);
+  const context: ReconcileContext = { ctx, managed, stateFile, lockFile, global, claude };
   const repaired: string[] = [];
   const errors: string[] = [];
-  for (const group of groups.values()) {
-    let fetched: ResolvedExternalSkill[];
-    try { fetched = await fetchExternalSource(group, ctx); }
-    catch (error) { errors.push(`${group[0].source}: ${error}`); continue; }
-    for (const skill of fetched) {
-      try {
-        if (global.skills[skill.name]) throw new Error(`${skill.name} is an own skill; refusing an external replacement`);
-        const canonical = join(ctx.home, '.agents', 'skills', skill.name);
-        const claude = claudeInstalled && !(skill.name === 'frontend-design' && frontendPlugin)
-          ? join(ctx.home, '.claude', 'skills', skill.name) : undefined;
-        if (await reconcile(skill, { canonical, claude, managed, stateFile, lockFile })) {
-          repaired.push(skill.name);
-          console.log(`reconciled external ${skill.name}: ${skill.source}@${skill.ref}${skill.version ? ` (${skill.version})` : ''}`);
-        }
-      } catch (error) { errors.push(`${skill.name}: ${error}`); }
-    }
-  }
+  for (const group of groupSources(skills)) await reconcileGroup(group, context, repaired, errors);
   if (errors.length) throw new Error(`external skill check failed:\n${errors.join('\n')}`);
   console.log(`verified ${skills.length} external skills`);
   return repaired;

@@ -18,10 +18,11 @@ Requirements:
 
 - Node.js >= 20
 - [pnpm](https://pnpm.io) 10 (pinned via the `packageManager` field — `corepack enable` handles it)
-- Python 3.13+ with `pytest` (only needed for skills that ship Python tests)
+- Python 3.13+ with the dependencies in `requirements-dev.txt`
 
 ```bash
 pnpm install
+python3 -m pip install -r requirements-dev.txt
 ```
 
 ## Running tests
@@ -29,10 +30,25 @@ pnpm install
 All of these run in CI on every pull request and must pass:
 
 ```bash
-pnpm test                              # vitest: root tests/ and cli/tests/
-pnpm --filter @jesdi/skills-cli build  # CLI must build cleanly
-python3 -m pytest skills/backlog -q    # Python tests for the backlog skill
+pnpm check
 ```
+
+This command runs the TypeScript and Python suites once with branch coverage,
+builds the CLI, checks types, then scores every changed runtime function with
+CRAP. `.crap-gate.json` uses the same limits as our other repositories: existing
+functions must score at most 15 and new functions at most 9. It compares the
+working tree with the merge-base of `origin/main`; fetch that ref before checking
+a fresh clone. Tests and declarations are excluded from scoring. Reports and
+logs stay in the ignored `.crap/` directory.
+
+`pnpm check --base <commit>` chooses another comparison point. CI passes the
+target branch SHA for pull requests and the previous main SHA for pushes, so
+direct pushes are scored even after `origin/main` has advanced to the new tip.
+
+For a focused check, `pnpm crap-gate` runs coverage only for changed targets.
+`pnpm crap-gate --no-run` reuses existing reports; use it only when those reports
+match the current source and tests. `pnpm test` remains available for a quick
+TypeScript test run without coverage.
 
 ## Guidelines
 
