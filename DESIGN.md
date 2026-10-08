@@ -75,6 +75,8 @@ A malformed state file is an error naming the file — it is never silently trea
 ## Updates
 
 - On every CLI run: compare installed versions (state) against the freshly fetched manifest; prompt to update outdated skills.
+- A **pinned** entry (`"pinned": true`, set by `pin` / `unpin`, valid in both state files) is never an update candidate, and `update <skill>` and `install <skill>` refuse it until `unpin`. `sync` keeps the flag.
+- Global skills update themselves. A global install (or `skills-cli hook`) writes `~/.my-skills/.session-update.sh` and registers it as a `SessionStart` hook in `~/.claude/settings.json` and `~/.codex/hooks.json`, for each config directory that exists. The script holds a daily stamp (`~/.my-skills/.session-update.stamp`): the first session of a day starts `npx @jesdi/skills-cli@latest update --all --global` in the background and returns at once, so a session never waits for the network. Project scope is left out on purpose: `.my-skills.json` is committed, and a version change there belongs in a commit.
 - Declines are remembered **per version**: declining `1.2.3` silences prompts for `1.2.3` only; the next release asks again. `update` still lists declined versions as available.
 
 ## CLI surface
@@ -87,6 +89,8 @@ update  [skill]
 sync                  # materialize from committed .my-skills.json
 list
 uninstall <skill>
+pin <skill> / unpin <skill> [--global]
+hook                  # write the session update script and register it
 ```
 
 Stack: TypeScript, `@clack/prompts` (wizard), `commander` (subcommands).

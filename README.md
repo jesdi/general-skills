@@ -47,7 +47,24 @@ npx @jesdi/skills-cli update [skill] [--all] [--global]
 npx @jesdi/skills-cli sync
 npx @jesdi/skills-cli list
 npx @jesdi/skills-cli uninstall <skill> [--global]
+npx @jesdi/skills-cli pin <skill> [--global]     # keep the installed version
+npx @jesdi/skills-cli unpin <skill> [--global]
+npx @jesdi/skills-cli hook                 # register the session update hook
 ```
+
+## Automatic updates
+
+A global install registers a session-start hook in Claude Code
+(`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`), for each one
+that is present. The first session of a day runs
+`skills-cli update --all --global` in the background; the result is in
+`~/.my-skills/.session-update.log`. Project installs do not change: they stay
+at the versions committed in `.my-skills.json`.
+
+To keep a skill at its installed version, pin it: `skills-cli pin <skill>
+--global`. No update touches a pinned skill until `unpin`. To stop all
+automatic updates, remove the hook entry from the two config files; the next
+global install or `skills-cli hook` adds it again.
 
 ## Third-party skills (not vendored)
 

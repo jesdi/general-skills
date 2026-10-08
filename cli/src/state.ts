@@ -14,6 +14,8 @@ export interface InstalledSkill {
   package?: string;
   /** Per-skill override; when absent the entry inherits the state's top-level `agents`. */
   agents?: AgentId[];
+  /** Stays at `version`: no update, in any scope, until it is unpinned. */
+  pinned?: true;
 }
 
 export interface GlobalState {

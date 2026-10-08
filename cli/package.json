@@ -1,6 +1,6 @@
 {
   "name": "@jesdi/skills-cli",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Install jesdi's agent skills into Claude Code and OpenCode",
   "license": "MIT",
   "repository": {
