@@ -33,6 +33,7 @@ async function packageRealSkills() {
 
 describe('box skill set at the packaging seam', () => {
   it('every own box skill and backlog appear in the generated manifest with a version', async () => {
+    expect(box).toContain('pr');
     const manifest = await generateManifest(join(root, 'skills'), null);
     for (const name of [...box, 'backlog']) {
       const skill = manifest.skills.find((s) => s.name === name);
@@ -58,9 +59,14 @@ describe('box skill set at the packaging seam', () => {
       JSON.stringify({ schemaVersion: 1, agents: ['claude'], skills }),
     );
     const result = await opSync(ctx);
+    expect(result.map((r) => r.name)).toContain('pr');
     expect(result.map((r) => r.name).sort()).toEqual([...box].sort());
     for (const name of box) {
       expect(existsSync(join(ctx.project, '.claude', 'skills', name, 'SKILL.md')), name).toBe(true);
+    }
+    for (const file of ['SKILL.md', 'CREDITS.md', 'LICENSE']) {
+      const installed = await readFile(join(ctx.project, '.claude', 'skills', 'pr', file), 'utf8');
+      expect(installed).toBe(await readFile(join(root, 'skills', 'pr', file), 'utf8'));
     }
   });
 });
