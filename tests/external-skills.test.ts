@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 
 const root = new URL('..', import.meta.url).pathname;
 const file = JSON.parse(readFileSync(join(root, 'external-skills.json'), 'utf8'));
-const FORKS = ['implement-spec', 'pr', 'prototype', 'to-spec', 'to-tickets', 'wizard'];
+const FORKS = ['implement-spec', 'prototype', 'to-spec', 'to-tickets', 'wizard'];
 const OPERATOR_ONLY_FORKS = ['implement-spec'];
 
 describe('external-skills.json', () => {
-  it('declares the vendored copies that must not be installed from upstream', () => {
+  it('declares exactly the five forks as vendored copies that must not be installed from upstream', () => {
     expect(file.schemaVersion).toBe(2);
     expect([...file.forks.skills].sort()).toEqual(FORKS);
     expect(file.forks.source).toBe('mattpocock/skills');
@@ -29,6 +29,17 @@ describe('external-skills.json', () => {
       expect(src, `${name} must be listed in skills[]`).toBeDefined();
       expect(file.pins[src as string]?.ref, `${src} must be pinned`).toMatch(/^[0-9a-f]{40}$/);
     }
+  });
+
+  it('resolves pr from upstream for the box instead of the content package', () => {
+    expect(file.sets.box.external).toContain('pr');
+    expect(file.sets.box.own).not.toContain('pr');
+    expect(file.forks.skills).not.toContain('pr');
+    expect(file.skills.find((s: { name: string }) => s.name === 'pr')).toMatchObject({
+      source: 'mattpocock/skills',
+      path: 'skills/in-progress/pr',
+    });
+    expect(existsSync(join(root, 'skills', 'pr', 'SKILL.md'))).toBe(false);
   });
 
   it('box own set is the box forks plus the review skills, all present in skills/', () => {
