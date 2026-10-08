@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-08T12:46:28.852Z",
+  "generatedAt": "2026-10-08T23:26:31.695Z",
   "skills": [
     {
       "name": "backlog",
@@ -73,6 +73,12 @@
       "version": "0.1.2",
       "hash": "sha256-70beaf1478820d66e1831d45739ce97ced50224b46c5003d887ea62c8438f251",
       "description": "Review a branch before merge: first a gate (the repo's check command plus crap-gate), then three independent reviewers in parallel — spec (did we build what was asked, no more, no less), correctness via Codex (races, idempotency, money, time, authz, indexes, N+1, migrations, error paths, test quality) and structure (deep-quality-review). `--quick` runs only spec and correctness, shortened, for a live interview. Use when the user says \"/review-diff\", \"review this branch\", \"review this slice\", \"review before merge\", or before closing out a spec task."
+    },
+    {
+      "name": "review-page",
+      "version": "0.1.0",
+      "hash": "sha256-f5fc0964e0558c6b9ca5d9ed77c3647b22cbc1d9710a9dfdf270d8c062caa741",
+      "description": "One interactive HTML page for a plan review or a questionnaire, built from a fixed template. Use when a pipeline session must deliver a plan review or a questionnaire as an interactive page the console shows."
     },
     {
       "name": "to-openspec",
