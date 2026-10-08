@@ -37,6 +37,15 @@ on one axis must not hide a failure on another.
 Before anything else, confirm the range resolves and the diff is non-empty. A
 bad ref fails here, not inside three reviewers.
 
+Resolve the diff endpoints to commit SHAs once, before the gate, and use that
+immutable range for every reviewer and the commit list. For a base ref, the
+start is its merge-base with the captured `HEAD`; for an explicit range, keep
+its requested diff semantics. Record the reviewed tip (the right endpoint)
+and the branch tip at the start. Run the gate on that reviewed tip in a clean
+worktree; an explicit range ending at another commit needs a worktree at that
+commit. Local changes must be committed or removed before review so the range
+accounts for everything checked.
+
 ## Step 0 — gate (sequential, a precondition, not a reviewer)
 
 1. Run the repo's check command: `make check` if the Makefile has it,
@@ -70,7 +79,7 @@ paste one reviewer's output into another's prompt.
   ```bash
   out=$(mktemp) && codex exec -s read-only --ephemeral -o "$out" \
     "Read and follow <skill-dir>/correctness.md. Range: <range>. Commits: <list>.<quick>" \
-    >/dev/null 2>&1; cat "$out"
+    < /dev/null >/dev/null 2>&1; cat "$out"
   ```
 
   No Codex → spawn a subagent with the same instruction and note "Correctness:
@@ -88,6 +97,7 @@ fresh context if you can, and say so.
 
 ```
 Gate: `make check` green · crap-gate green
+Coverage: <resolved range> · reviewed tip: <SHA> · current branch tip: <SHA> · tip matches: yes/no
 
 ## Spec
 <report, verbatim or lightly cleaned>
@@ -106,6 +116,15 @@ Structure: REQUEST CHANGES, 2 findings — worst: <one line>
 A skipped step keeps its place with its one-line note (in the gate line, or
 as the section body and summary line). `--quick` has no Structure section and
 no Structure summary line. A clean reviewer's summary line is `0 findings`.
+
+Read the original branch tip again when reporting. Include the coverage line
+in full and quick reviews, and label a failed gate `review not run` rather
+than calling its endpoint reviewed. Name skipped or failed reviewers so the
+coverage line cannot imply they ran. If the branch tip changed, list each
+commit in `<reviewed-tip>..<current-tip>` with its subject. If the reviewed tip
+is no longer an ancestor (for example, after a rebase), state that this review
+does not cover the current history. Report a dirty worktree as unreviewed
+local changes even when the tips match.
 
 Do not merge, dedupe or re-rank findings across reviewers, and do not pick an
 overall winner. A finding two reviewers both raise stays in both reports; that
