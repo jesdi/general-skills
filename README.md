@@ -114,7 +114,7 @@ direct Claude install of that skill; the Codex entry is still installed.
 For a manual setup, use the [skills.sh](https://skills.sh/) CLI:
 
 ```bash
-npx skills add mattpocock/skills          # grill-me, grill-with-docs, grilling, improve-codebase-architecture, to-questionnaire, tdd, code-review, codebase-design, diagnosing-bugs, resolving-merge-conflicts, handoff, teach, wait-what
+npx skills add mattpocock/skills          # grill-me, grill-with-docs, grilling, improve-codebase-architecture, to-questionnaire, tdd, code-review, codebase-design, diagnosing-bugs, resolving-merge-conflicts, pr, handoff, teach, wait-what
 npx skills add JuliusBrussee/caveman      # caveman suite
 npx skills add vercel-labs/skills         # find-skills
 npx skills add vercel-labs/agent-skills   # vercel-react-best-practices
@@ -140,6 +140,7 @@ them afterwards). `external-skills.json` lists them under `forks`.
 
 `external-skills.json` → `sets.box` names the skills the agent-ops box
 receives: `own` from this package, `external` from the pinned upstream.
+`pr` is in the external set and is installed directly from mattpocock/skills.
 agent-ops vendors that set into its claude-home seed with its own refresh
 command; this repo's job is to publish the set and keep the pins resolvable.
 
