@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -83,10 +83,11 @@ describe('session-update.sh', () => {
     const bin = join(ctx.home, 'bin');
     await mkdir(bin);
     const calls = join(ctx.home, 'npx-calls');
-    await writeFile(join(bin, 'npx'), `#!/bin/sh\necho "$@" >> '${calls}'\n`);
+    await writeFile(join(bin, 'npx'), `#!/bin/sh\necho "$PWD: $@" >> '${calls}'\n`);
     await chmod(join(bin, 'npx'), 0o755);
     const run = () => {
       execFileSync('sh', [join(ctx.home, '.my-skills', '.session-update.sh')], {
+        cwd: ctx.project,
         env: { HOME: ctx.home, PATH: `${bin}:/usr/bin:/bin` },
         input: '{}',
       });
@@ -99,13 +100,16 @@ describe('session-update.sh', () => {
     return { ctx, calls, run, callCount };
   }
 
-  it('updates the unpinned global skills on the first session', async () => {
-    const { calls, run, callCount } = await setup();
+  it('updates the global skills on the first session, outside the project, with this CLI version', async () => {
+    const { ctx, calls, run, callCount } = await setup();
     run();
     expect(await callCount()).toBe(1);
-    expect((await readFile(calls, 'utf8')).trim()).toBe(
-      '-y @jesdi/skills-cli@latest update --all --global',
+    const { version } = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
     );
+    const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
+    expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
+    expect(args).toBe(`-y @jesdi/skills-cli@${version} update --all --global`);
   });
 
   it('does nothing on later sessions of the same day, and runs again the next day', async () => {

@@ -1,21 +1,30 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { storeDir, type Ctx } from './paths.js';
+
+const pkg = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+);
 
 /**
  * Runs at the start of an agent session. The first session of a day starts
  * `update --all --global` in the background, so the session does not wait for
  * the network; pinned skills are not update candidates. Later sessions only
  * read the stamp.
+ *
+ * The session's directory can be an untrusted checkout, so the script leaves
+ * it before npx reads a project `.npmrc` or `node_modules`. The CLI runs at
+ * the version that wrote the script, never at an unseen newer one.
  */
 const SESSION_UPDATE_SCRIPT = `#!/bin/sh
 # Written by @jesdi/skills-cli; a global install or \`skills-cli hook\` writes it again.
 dir="$HOME/.my-skills"
+cd "$dir" || exit 0
 stamp="$dir/.session-update.stamp"
 [ -n "$(find "$stamp" -mtime -1 2>/dev/null)" ] && exit 0
 touch "$stamp" 2>/dev/null || exit 0
-(npx -y @jesdi/skills-cli@latest update --all --global </dev/null >"$dir/.session-update.log" 2>&1 &)
+(npx -y @jesdi/skills-cli@${pkg.version} update --all --global </dev/null >"$dir/.session-update.log" 2>&1 &)
 exit 0
 `;
 
