@@ -12,6 +12,7 @@ import driver
 import driver_agents
 import driver_fixloop
 import driver_report
+import driver_run
 import driver_review
 import test_review
 from test_cli import three
@@ -359,11 +360,11 @@ def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_t
     tip = subprocess.run(["git", "-C", str(rig.repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     (rig.repo / "junk.txt").write_text("x\n")
     context, shared = {"repo": str(rig.repo), "branch": "feat/csv", "start": tip}, lambda: False
-    assert "first revert each edit of the earlier attempt" in driver._timed_out("correctness", 30, context, shared)
+    assert "first revert each edit of the earlier attempt" in driver_run._timeout_lines("correctness", 30, context, shared)
     assert (rig.repo / "junk.txt").exists()
-    assert "in the tree: continue from it" in driver._timed_out("fixer", 60, context, shared) and (rig.repo / "junk.txt").exists()
+    assert "in the tree: continue from it" in driver_run._timeout_lines("fixer", 60, context, shared) and (rig.repo / "junk.txt").exists()
     # `--only reviewer`: one agent
-    assert f"restored the worktree to {tip}" in driver._timed_out("reviewer", 45, context, lambda: True)
+    assert f"restored the worktree to {tip}" in driver_run._timeout_lines("reviewer", 45, context, lambda: True)
     assert not (rig.repo / "junk.txt").exists()
 
 
