@@ -10,7 +10,8 @@ Changes: tickets always go to `.agent/tickets/<NN>-<slug>.md` (no tracker path);
 numbering is contiguous from 01 in dependency order; acceptance criteria must state
 observable behavior; every ticket names its **Seam** (the public interface its
 acceptance tests hit) and what it **Touches** (files and functions, for
-scheduling); trivial slices fold into a neighbour; tickets never carry the
+scheduling) and may carry optional **Risk** and **Suspicions** lines for
+the review; trivial slices fold into a neighbour; tickets never carry the
 implementation; the approval quiz is skipped when unattended; model invocation is
 allowed.
 -->
@@ -41,7 +42,7 @@ Break the work into **tracer bullet** tickets.
 - A completed slice is demoable or verifiable on its own
 - Each slice is sized to fit in a single fresh context window
 - Any prefactoring should be done first
-- No trivial tickets: when a slice's whole change is a small guard or fix (a few lines) and no other ticket is blocked by it, fold its acceptance criteria into the neighbouring ticket that touches the same behaviour. Every ticket costs a test-writer, implementer, reviewer and merger; a two-line guard doesn't earn four agents
+- No trivial tickets: when a slice's whole change is a small guard or fix (a few lines) and no other ticket is blocked by it, fold its acceptance criteria into the neighbouring ticket that touches the same behaviour. Every ticket costs a test-writer, an implementer and a reviewer; a two-line guard doesn't earn three agents
 
 </vertical-slice-rules>
 
@@ -93,6 +94,10 @@ Do NOT close or modify any parent issue.
 
 **Touches:** the files, and the functions within them, this ticket expects to change.
 
+**Risk:** optional. The shared state, persistence, concurrency, money or auth this ticket touches. Omit the line when there is none.
+
+**Suspicions:** optional. What the reviewer should test first: a sibling caller, a key built from the old identity, a guard another ticket added.
+
 - [ ] Acceptance criterion 1
 - [ ] Acceptance criterion 2
 
@@ -115,6 +120,18 @@ Every ticket carries a **Seam** line: the one public interface through which its
 The **Touches** line is a best guess, for scheduling: `implement-spec` never runs two tickets at once that change the same function, because parallel restructures of one function turn into rebase churn and broken locked tests. Name functions, not only files, when a file is shared (`dispatcher/main.py: _run_pass, _resume_woken`). Two tickets restructuring the same function is also a hint to add a blocking edge between them, or to merge them.
 
 </touches-rule>
+
+<risk-rule>
+
+The optional **Risk** line names the shared state, persistence keys or identities, concurrency, money or auth the ticket touches, and turns on `implement-spec`'s correctness pass: a second, independent reviewer on another provider, or the reviewer itself with the correctness checks when no CLI of another provider is installed. Any text on the line turns the pass on, so a ticket with no such risk has no **Risk** line, never `**Risk:** none`.
+
+</risk-rule>
+
+<suspicions-rule>
+
+The optional **Suspicions** line is passed verbatim to `implement-spec`'s reviewer, which tests each one: named suspicions find regressions a generic review misses.
+
+</suspicions-rule>
 
 Never write the implementation into a ticket. `implement-spec`'s test-writer reads the ticket and must not know the solution, or its acceptance tests stop being independent of the code they judge. Describe behaviour, not the fix.
 

@@ -71,13 +71,15 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     repo(t01=ticket("01"))
     monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None if cli == "codex" else cli)
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
-    models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], "reviewer": ["claude-opus-5@medium"],
+    # The default reviewer and final-reviewer start on codex, so this file gives both a claude entry.
+    claude = {"reviewer": ["claude-opus-5@medium"], "final-reviewer": ["claude-opus-5@medium"]}
+    models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude,
                                   "correctness": ["openai/gpt-sol@medium"], "fixer": ["other/x@low"]}))
     assert run(capsys, "--models", str(models)) == (
         3, "implementer: codex is not on PATH (first model entry openai/gpt-sol@medium)\n"
            "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n")
     # Requirement 2 names the first entry only: the fix loop skips a later implementer entry whose CLI is missing.
-    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"]}))
+    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"], **claude}))
     assert run(capsys, "--models", str(models)) == (0, "max frontier width: 1\n")
 
 
@@ -148,9 +150,9 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
     assert code == 0
     tip = subprocess.run(["git", "rev-parse", "--short=7", "feat/x"], capture_output=True, text=True).stdout.strip()
     assert [line.partition(" for ")[0] for line in ledger] == [
-        "Ticket 01: test-writer ran on sonnet@medium", "Ticket 01: implementer ran on opus@medium",
+        "Ticket 01: test-writer ran on claude-sonnet-5@medium", "Ticket 01: implementer ran on claude-sonnet-5@medium",
         f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
-        "Ticket 01: reviewer ran on sonnet@high",
+        "Ticket 01: reviewer ran on openai/gpt-astra@medium",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
     assert ledger[1].endswith(", cost 0.25 USD: report accepted.")
     assert branches() == ["feat/x"] and "nothing to commit" in subprocess.run(
@@ -362,7 +364,7 @@ def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gate
     number, tip = line[7:9], out_of("git", "rev-parse", "feat/x")
     assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
     assert f"Ticket {number}: the gate is green on {tip[:7]}, record .agent/implement/{number}/gate-{tip[:7]}.log." in ledger
-    assert "| gates run | 3 |" in out and "| agents, conflict on opus@medium | 1 |" in out
+    assert "| gates run | 3 |" in out and "| agents, conflict on claude-opus-5@medium | 1 |" in out
     assert state_of(tmp_path)["tickets"][number]["tip"] == tip
     prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
     assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")

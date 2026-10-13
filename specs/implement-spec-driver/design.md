@@ -22,7 +22,8 @@
   against a ticket that merges nothing and a mutation proof that was never run.
 - **Answers are bound to a decisions revision**: `decisions.json` carries a `revision`
   (SHA-256 of its own content without that field), question ids are unique per run
-  (`<NN>-<kind>-<round>`), and an answers file whose `revision` differs is ignored with a
+  (`<NN>-<kind>-<n>`, and `<kind>-<n>` for a question of the end of run, such as
+  `final-finding-1`; `n` counts the questions of that ticket and kind), and an answers file whose `revision` differs is ignored with a
   ledger line — the PR 172 rule, against an old answer applied to a new question.
 - **Model entries in the agent-ops grammar** `provider/model@effort`, one ordered list per
   role in `--models <file>` — no vocabulary of the driver's own; escalation is "next entry".
@@ -57,11 +58,19 @@ No database. Every record is a file under `.agent/implement/` or a git object; t
 | Table | Field | Constraint | Why |
 |---|---|---|---|
 | `state.json` | `run.revision` | NOT NULL, random per run | ties decisions, answers and slots to one run |
+| `state.json` | `run.pr_branch` | the branch the first run started on; a later run must be on it | slot 1 is off the branch while tickets run, so the record names it |
+| `state.json` | `run.start` | the PR tip when the run began; must be an ancestor of the PR tip at the tidy | the parent of the first ticket commit |
+| `state.json` | `run.landed[]` | `[ticket, the PR tip its merge made]`, in merge order, one entry per ticket | the tidy gives each ticket commit that tree |
+| `state.json` | `run.questions[]` | every question of the run; `answer` is null while it is open, and is set once | `decisions.json` is derived from it |
+| `state.json` | `run.gates`, `run.stops`, `run.agents[]` | counters and one `{ticket, role, entry, seconds, cost}` per agent run | the measurement table of the summary |
+| `state.json` | `run.final` | `{skipped, recovery, tidied, onto, base, commits, reviewed, round, open, batch, green_gates, pushed, pr}`; `round` 0..2 | the resume contract of the end of run |
 | `state.json` | `tickets[NN].phase` | one of `pending, test-writer, implement, gate, review, fix, merge, merged, blocked` | the state machine; any other value fails resume |
 | `state.json` | `tickets[NN].round` | 0..4 | the fix-loop budget |
-| `state.json` | `tickets[NN].test_writer_sha`, `locked` | set together, immutable once set | the locked-file check needs both |
-| `state.json` | `tickets[NN].tip` | must be on `ticket/NN` at resume | an unverifiable tip returns the ticket to its last verified phase |
-| `state.json` | `tickets[NN].green_gates[]` | commit must exist at resume | a settled gate is never rerun |
+| `state.json` | `tickets[NN].test_writer_sha`, `locked` | set together by the test-writer; a correction moves `test_writer_sha` to its commit and only adds to `locked` | the locked-file check needs both |
+| `state.json` | `tickets[NN].held` | locked file -> the older test-writer commit that stays its reference after a correction that did not list it | a change the implementer made before the correction stays a finding |
+| `state.json` | `tickets[NN].note` | "" or the name of a prompt template | tells the next role what a ruling or an interrupt left |
+| `state.json` | `tickets[NN].tip` | must be on `ticket/NN` at resume; for a merged ticket, in the PR branch | an unverifiable tip returns the ticket to `implement` from the test-writer commit |
+| `state.json` | `tickets[NN].green_gates[]` | each names one commit and settles only that commit | a settled gate is never rerun |
 | `state.json` | `tickets[NN].slot` | unique among running tickets | one ticket per slot |
 | `state.json` | whole file | written under one lock, rename-atomic | no lost update between parallel tickets |
 | report | `status` | enum DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, BLOCKED | schema violation otherwise |

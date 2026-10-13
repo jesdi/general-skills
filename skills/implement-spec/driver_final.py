@@ -94,7 +94,7 @@ def _locked(run) -> list[str]:
 
 def _published(pr: str, old: str, onto: str) -> bool:
     """origin has the PR branch, or it has, under any ref, a commit that `old` holds and the base tip `onto` does
-    not. history.md: once pushed, a history is preserved."""
+    not. README.md, "End of run": once pushed, a history is preserved."""
     own = [git(".", "rev-list", "--count", old, "--not", *others).stdout.strip() for others in ([onto], ["--remotes=origin"])]
     return own[0] != own[1] or bool(git(".", "ls-remote", "origin", f"refs/heads/{pr}").stdout.strip())
 
