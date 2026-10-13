@@ -12,6 +12,7 @@ import driver_review
 import driver_review_page
 from test_cli import git
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
+from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
 from test_review import ONE, finding, fix, review
 from test_stops import CONTRA, NEW_TEST, Q1, UNATTENDED, blocked, correction, decisions, stage, steps, write_answers
 from test_walk import impl, plan, tw
@@ -134,7 +135,7 @@ def test_after_a_ruling_the_ticket_goes_on_from_the_commits_of_the_blocked_imple
 
 def test_a_stop_with_uncommitted_work_keeps_its_slot_and_takes_the_answer(tmp_path, capsys):
     dirty = {**blocked(), "files": {"demo/export.py": "half = 1\n"}}
-    rig = Inside(tmp_path, ONE).run(steps(dirty, impl("01")), *UNATTENDED)
+    rig = Pushing(tmp_path, ONE).run(steps(dirty, impl("01")), *UNATTENDED)
     assert rig.code == 2 and git(rig.repo, "status", "--porcelain") == " M demo/export.py\n"
     rig.run(steps(dirty, impl("01")), *UNATTENDED)
     assert rig.code == 2 and len(rig.calls()) == 2, "the stop repeats: the work in the slot is no error"
@@ -144,7 +145,7 @@ def test_a_stop_with_uncommitted_work_keeps_its_slot_and_takes_the_answer(tmp_pa
     assert rig.code == 0, rig.ledger()
     second = rig.calls("01", "implementer")[1]
     assert second["status"] == "M demo/export.py" and second["branch"] == "ticket/01", "the work is in the tree of the rerun"
-    prompt = rig.prompt("implementer-0")
+    prompt = (rig.folder() / "implementer-0.prompt.md").read_text()
     assert "the locked tests stand as they are" in prompt and "uncommitted work" in prompt
     assert "feat: 01 rows" in rig.pr_subjects() and not git(rig.repo, "status", "--porcelain")
 
@@ -304,17 +305,17 @@ def test_one_answer_that_keeps_the_ticket_blocked_wins_over_an_accept():
 # ---------------------------------------------------------------- unattended
 
 def test_unattended_writes_the_stage_file_and_prints_no_question(tmp_path, capsys):
-    rig = stopped(tmp_path, *UNATTENDED)
-    assert rig.code == 2 and "Question" not in capsys.readouterr().out
+    rig = Pushing(tmp_path, ONE).run(steps(blocked(), impl("01")), *UNATTENDED)
+    assert rig.code == 2 and "Question" not in rig.out
     assert stage(rig) == {"stage": "implement", "status": "awaiting-review", "artifact": PAGE, "open_questions": 1}
     write_answers(rig, {Q1: "overrule-test"})
     rig.run(steps(blocked(), impl("01")), *UNATTENDED)
-    assert rig.code == 0 and not (rig.repo / ".agent/stage.json").exists(), "no stage file of the earlier run stays"
+    assert rig.code == 0 and stage(rig) == {"stage": "implement", "status": "done"}, "no stage file of the earlier run stays"
     assert (rig.repo / "tests/test_01.py").read_text() == NEW_TEST
 
 
 def test_unattended_names_the_blocked_tickets_and_needs_a_stage_path_to_write(tmp_path):
-    rig = Inside(tmp_path, ONE, gate={"red": ["ticket/01"]})
+    rig = Pushing(tmp_path, ONE, gate={"red": ["ticket/01"]})
     rig.run(plan(), "--unattended")
     assert rig.code == 1 and not (rig.repo / ".agent/stage.json").exists()
     rig.run(plan(), "--unattended", "--stage-json", ".agent/out/stage.json")

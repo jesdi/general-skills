@@ -7,8 +7,8 @@
 
 Run it in the PR worktree. Each ready ticket runs in a slot: test-writer, implementer, the gate, the review with
 its fix rounds, the merge into the PR branch. `.agent/implement/` gets state.json (the resume contract), ledger.md, the gate records and summary.md.
-When every ticket is merged and the repository has an `origin`, the end of run follows (driver_final): tidy, rebase,
-gate, final review, one fix batch. Then nothing is pushed without `--push` or `--unattended`.
+When every ticket is merged, the end of run follows (driver_final): tidy, rebase, gate, final review, one fix batch.
+Then nothing is pushed without `--push` or `--unattended`. A repository with no `origin` gets no rebase and no push.
 A choice that only the operator can make becomes a question: `.agent/implement/decisions.json` and the page
 `.agent/implement-review.html` hold the open questions, `.agent/implement-answers.json` or `--answer` gives the answers.
 Messages go to stdout. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of run
@@ -679,7 +679,7 @@ def _validated(args: argparse.Namespace) -> tuple[list[driver_tickets.Ticket], d
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)
     tickets, ticket_errors = driver_tickets.parse(args.tickets)
-    errors += model_errors + ticket_errors + driver_review.missing(tickets) + driver_final.missing()
+    errors += model_errors + ticket_errors + driver_review.missing(tickets) + driver_final.missing(args.push or args.unattended)
     for error in errors:
         print(error)
     return None if errors else (tickets, models, kept)

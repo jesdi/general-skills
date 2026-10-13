@@ -9,7 +9,7 @@ reports and gate records are in `.agent/implement/final/`. `run.final` of state.
     {skipped, recovery, tidied, onto, base, commits: {NN: commit}, reviewed, round, open, batch, green_gates,
      pushed, pr}
 `skipped` is why the end-of-run work did not start, `recovery` is the PR tip before the rewrite (the ref RECOVERY holds it), `tidied` the tip the rewrite made, `onto`
-the base tip under it, `reviewed` the last tip a review covered, `round` the reviews done, `open` the findings the
+the base tip under it (with no `origin`: `base` is "" and `onto` is the start of the run), `reviewed` the last tip a review covered, `round` the reviews done, `open` the findings the
 fix batch is due for, `batch` the tip of the fix batch that the driver validated and named. The branch is rewritten
 once, before the first review, and never after it. A history that origin already has is never rewritten: then
 there is no `recovery`, and `tidied` is the tip as the tickets left it.
@@ -45,12 +45,16 @@ def _remote() -> bool:
     return git(".", "remote", "get-url", "origin").returncode == 0
 
 
-def missing() -> list[str]:
-    """[] or the error that stops the run before any agent: a repository with an `origin` gets the final review."""
-    if REVIEW_DIFF.exists() or not _remote():
-        return []
-    return [f"{REVIEW_DIFF} is missing: the final review runs through it; install the review-diff skill next to "
-            "implement-spec"]
+def missing(push: bool) -> list[str]:
+    """[] or the errors that stop the run before any agent: every run gets the final review, and a run that is to
+    `push` needs the `origin` it pushes to (requirement 19)."""
+    errors = [] if REVIEW_DIFF.exists() else [
+        f"{REVIEW_DIFF} is missing: the final review runs through it; install the review-diff skill next to "
+        "implement-spec"]
+    if push and not _remote():
+        errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
+                      "add the remote, or run without them to stop before the push")
+    return errors
 
 
 def finish(state: State, pr: str) -> None:
@@ -86,6 +90,19 @@ def _base() -> tuple[str, str, str]:
     if fetched.returncode or not onto:
         return "", "", f"git fetch origin did not give refs/remotes/origin/{name[1]}: {fetched.stderr.strip()}"
     return name[1], onto, ""
+
+
+def _under(run) -> tuple[str, str, str]:
+    """What the tidied history sits on: (the default branch of origin, its fetched tip, "") or ("", "", the error).
+    With no `origin` there is no base and nothing to rebase onto: ("", the commit the run started from, "")."""
+    if not _remote():
+        run.ledger("End of run: the repository has no origin remote, so the rebase and the push are skipped; the "
+                   "tidy, the gate and the final review run.")
+        return "", run.state.read()["run"]["start"], ""
+    base, onto, error = _base()
+    if base == run.pr:
+        error = f"{run.pr} is the default branch of origin: the end of run needs a PR branch"
+    return base, onto, error
 
 
 def _locked(run) -> list[str]:
@@ -205,8 +222,8 @@ def _landed(run, commits: dict[str, str], old: str, base: str, onto: str) -> str
     if error := driver_merge.land(run.pr, new, old):
         run.state.update(lambda state: record(state, tips, tidied=None))
         return f"cannot move {run.pr} to the tidied tip {new[:7]}: {error}"
-    run.ledger(f"Tidy: {run.pr} moved from {old[:7]} to {new[:7]} on {base} at {onto[:7]}, with one commit per "
-               f"ticket in merge order: {', '.join(f'{number} is {commit[:7]}' for number, commit in commits.items())}.")
+    run.ledger(f"Tidy: {run.pr} moved from {old[:7]} to {new[:7]} on {base or 'the start of the run'} at {onto[:7]}, "
+               f"with one commit per ticket in merge order: {', '.join(f'{number} is {commit[:7]}' for number, commit in commits.items())}.")
     return ""
 
 
@@ -217,11 +234,11 @@ def _prepared(run, tickets: list[Ticket]) -> str:
     if final["tidied"]:
         return "" if driver_merge.ancestor(final["tidied"], run.tip()) else (
             f"{run.pr} does not hold the tidied tip {final['tidied'][:7]}; {RECOVERY} holds the history before the tidy")
-    base, onto, error = _base()
-    if error or base == run.pr:
-        return error or f"{run.pr} is the default branch of origin: the end of run needs a PR branch"
+    base, onto, error = _under(run)
+    if error:
+        return error
     old = run.tip()
-    if _published(run.pr, old, onto):
+    if base and _published(run.pr, old, onto):
         return _kept(run, old, base, onto)
     tree = git(".", "rev-parse", f"{old}^{{tree}}").stdout.strip()
     git(".", "update-ref", "-m", "implement-spec: recovery point", RECOVERY, old)
@@ -412,6 +429,9 @@ def _pushed(run, final: dict, tickets: list[Ticket]) -> tuple[str, list[str]]:
     # Requirement 18, checked where the push is: the tip is the reviewed tip and its gate record is green.
     if tip != run.tip() or tip not in final["green_gates"]:
         return f"the reviewed tip {tip[:7]} is not the tip of {run.pr} with a green gate record: nothing is pushed", []
+    if not final["base"]:
+        return (f"the end of run tidied {run.pr} when the repository had no origin remote, so it is on no base "
+                "branch of origin: nothing is pushed"), []
     if not shutil.which("gh"):
         return "gh is not on PATH: nothing is pushed", []
     if final["pushed"] != tip:
@@ -448,15 +468,14 @@ def _closed(run, tickets: list[Ticket]) -> tuple[str, list[str]]:
     final = record["final"]
     if run.args.push or run.args.unattended:
         return _pushed(run, final, tickets)
-    return "", [f"Branch tip: {run.tip()}", f"Reviewed tip: {final['reviewed']}",
-                f"Nothing is pushed. To push {run.pr} and open the PR, run: {again(run.args.argv)}"]
+    how = f"To push {run.pr} and open the PR, run: {again(run.args.argv)}" if final["base"] else (
+        "The repository has no origin remote.")
+    return "", [f"Branch tip: {run.tip()}", f"Reviewed tip: {final['reviewed']}", f"Nothing is pushed. {how}"]
 
 
 def _skip(state: dict) -> str:
     """"" or why the end-of-run work does not start. A ticket that is not merged can still merge after an answer
     of the operator, and its branch starts from the history as it is: a tidy would rewrite its branch point."""
-    if not _remote():
-        return "the repository has no origin remote"
     waiting = [number for number, entry in state["tickets"].items() if entry["phase"] != "merged"]
     return f"these tickets are not merged: {', '.join(waiting)}" if waiting else ""
 

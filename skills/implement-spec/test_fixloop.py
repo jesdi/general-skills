@@ -83,25 +83,11 @@ def test_a_risky_ticket_gets_both_agents_and_one_merged_findings_file(tmp_path):
     assert json.loads((rig.folder("02") / "findings-1.json").read_text()) == []
 
 
-@pytest.mark.parametrize("entries, why", [([SOL, OPUS], "codex not installed"), ([OPUS], "no entry of another provider")])
-def test_a_correctness_pass_with_no_other_cli_folds_into_every_review_of_the_ticket(tmp_path, entries, why):
-    rig = Inside(tmp_path, RISKY, {"correctness": entries})
-    (tmp_path / "bin/codex").unlink()
-    rig.run(plan(**{"02/reviewer": [review("02", [STUCK]), review("02")], "02/fixer": [fix("02", 1)]}))
-    assert rig.code == 0 and not rig.calls("02", "correctness")
-    assert len(rig.led(f"Ticket 02: correctness pass folded into reviewer: {why}.")) == 2
-    for name in ("reviewer-0", "reviewer-1"):
-        assert f"Read {driver_review.CORRECTNESS} and apply" in rig.prompt(name, "02")
-    assert "This is the re-review after fix round 1." in rig.prompt("reviewer-1", "02")
-
-
-def test_correctness_entry_is_the_first_of_another_provider_with_its_cli(monkeypatch):
+def test_correctness_entry_is_the_first_of_another_provider_than_the_implementers():
     models = {"implementer": ["opus@medium"], "correctness": ["opus@high", "openai/a@low", "openai/b@low"]}
-    monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: cli)
-    assert driver_review.correctness_entry(models) == ("openai/a@low", "")
-    assert driver_review.correctness_entry({**models, "implementer": ["openai/x@low"]}) == ("opus@high", "")
-    monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None)
-    assert driver_review.correctness_entry(models) == ("", "codex not installed")
+    assert driver_agents.correctness_entry(models) == "openai/a@low"
+    assert driver_agents.correctness_entry({**models, "implementer": ["openai/x@low", "opus@low"]}) == "opus@high"
+    assert driver_agents.correctness_entry({**models, "correctness": ["opus@high", "claude-fable-5@low"]}) == ""
 
 
 def test_a_set_with_a_risk_ticket_needs_review_diff_and_a_set_without_one_does_not(tmp_path, monkeypatch, capsys):
@@ -170,7 +156,7 @@ def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_start
     assert rig.calls("01", "fixer")[0]["head"] == rig.calls("01", "test-writer")[1]["sha"]  # on the corrected tip
     # No review saw the correction yet, so the review after the round is a full one.
     assert "re-review" not in rig.prompt("reviewer-1")
-    assert [gate["commit"] for gate in rig.gates()] == [rig.sha("01", "implementer"), rig.sha("01", "fixer")]
+    assert [gate["commit"] for gate in rig.walk_gates()] == [rig.sha("01", "implementer"), rig.sha("01", "fixer")]
 
 
 def test_a_fixture_correction_that_is_rejected_blocks_the_ticket(tmp_path):
@@ -257,10 +243,8 @@ def test_four_rounds_then_blocked_with_the_escalation_at_round_3(tmp_path):
     assert rig.state()["tickets"]["03"]["phase"] == "merged"
 
 
-@pytest.mark.parametrize("entries", [[OPUS], [OPUS, SOL, "openai/other@low"]])
-def test_round_3_stays_on_its_entry_when_no_next_entry_has_its_cli(tmp_path, entries):
-    rig = Inside(tmp_path, ONE, {"implementer": entries})
-    (tmp_path / "bin/codex").unlink()  # not the first entry of a role: the run starts without it
+def test_round_3_stays_on_its_entry_when_the_implementer_has_no_next_entry(tmp_path):
+    rig = Inside(tmp_path, ONE, {"implementer": [OPUS]})
     rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3 + [review("01")], "01/fixer": [fix("01", n) for n in (1, 2, 3)]}))
     assert rig.code == 0, rig.ledger()
     assert rig.led(f"Ticket 01 round 3: no next implementer entry has its CLI on PATH, so the round stays on {OPUS}.")
@@ -273,6 +257,9 @@ def test_the_escalation_takes_the_next_entry_whose_cli_is_on_path(monkeypatch):
     assert [driver_fixloop.entry(models, n) for n in (1, 2, 3, 4)] == ["a@low", "a@low", "openai/b@low", "openai/b@low"]
     monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None if cli == "codex" else cli)
     assert driver_fixloop.entry(models, 3) == "c@low"
+    # No later entry has its CLI: the round stays on the first. A run cannot show this: it needs both CLIs to start,
+    # the implementer's for its first entry and the other for the correctness pass.
+    assert driver_fixloop.entry({"implementer": ["a@low", "openai/b@low"]}, 3) == "a@low"
 
 
 @pytest.mark.parametrize("step, error", [
@@ -392,7 +379,7 @@ def test_a_proof_follows_its_line_through_inserts_and_deletes(tmp_path):
 def test_a_conflict_is_resolved_once_in_the_ticket_slot_and_a_second_one_blocks(tmp_path):
     rig = test_review.conflicted(under(tmp_path, "once"))
     assert rig.code == 0, rig.ledger()
-    assert rig.tip() in [gate["commit"] for gate in rig.gates()] and rig.state()["tickets"]["01"]["tip"] == rig.tip()
+    assert rig.tip() in [gate["commit"] for gate in rig.gates()] and dict(rig.state()["run"]["landed"])["01"] == rig.tip()
     assert rig.led("Ticket 01: the conflict agent resolved the merge conflict in demo/cli.py at ")
     prompt = rig.prompt("conflict-0")
     assert "Files in conflict: demo/cli.py\n" in prompt and f"at commit {rig.sha('03', 'implementer')}\n" in prompt

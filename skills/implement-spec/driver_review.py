@@ -1,4 +1,4 @@
-"""The driver's own part of a review: the locked-file check, who does the correctness pass, the routing of the
+"""The driver's own part of a review: the locked-file check, the routing of the
 findings, and the mutation proofs a fix makes due again. It reads git; only `restore`, `restore_locked` and
 `undisturbed` write.
 Stdlib only.
@@ -32,18 +32,6 @@ def missing(tickets: list[Ticket]) -> list[str]:
         return []
     return [f"{CORRECTNESS} is missing: ticket {', '.join(risky)} has a Risk line and its correctness pass reads "
             "that file; install the review-diff skill next to implement-spec"]
-
-
-def correctness_entry(models: dict[str, list[str]]) -> tuple[str, str]:
-    """(the entry the correctness pass runs on, "") or ("", why the pass folds into the reviewer). Requirement 13:
-    the first entry of another provider than the implementer's whose CLI is on PATH."""
-    own = driver_agents.split(models["implementer"][0])[0]
-    clis = {entry: driver_agents.PROVIDERS[provider][0] for entry in models["correctness"]
-            if (provider := driver_agents.split(entry)[0]) != own}
-    for entry, cli in clis.items():
-        if driver_agents.shutil.which(cli):
-            return entry, ""
-    return "", f"{', '.join(dict.fromkeys(clis.values()))} not installed" if clis else "no entry of another provider"
 
 
 def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:

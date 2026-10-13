@@ -6,6 +6,8 @@ Seam is `none — refactor`) then the implementer; from ticket 03 on an accepted
 merge into the PR branch, which deletes `ticket/NN`. Exit 0 when the ticket merges, 1 on BLOCKED.
 `--only <role>` runs that one role on the first ticket and stops. `--spec <path>` names the spec for the prompts.
 `--timeout <role>=<minutes>` (repeatable, fractions allowed) overrides a role timeout.
+Ticket 08: the fixture has no `origin`, and a run that merges its ticket ends with the tidy and the final review, so
+`ticket_commits()` reads the ticket's commits from `refs/implement/recovery`, the PR tip from before the tidy.
 """
 import json
 import os
@@ -122,7 +124,9 @@ class World:
         return path.read_text() if path.exists() else ""
 
     def ticket_commits(self):
-        return git(self.repo, "rev-list", "--reverse", "--no-merges", f"{self.base}..feat/csv").split()
+        made = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement/recovery"], cwd=self.repo,
+                              capture_output=True, text=True).stdout.strip() or "feat/csv"
+        return git(self.repo, "rev-list", "--reverse", "--no-merges", f"{self.base}..{made}").split()
 
 
 def ok(proc):
@@ -176,7 +180,8 @@ def test_help_lists_the_timeout_flag_and_default_minutes():
 
 @pytest.mark.parametrize("entry", ["openai/gpt-sol@medium"])
 def test_openai_implementer_launches_codex_exec_in_workspace_write(env, entry):
-    w = World(env, refactor=True, implementer=[entry])
+    # ticket 08: the correctness list needs an entry on another provider than the implementer's
+    w = World(env, refactor=True, implementer=[entry], correctness=["claude-opus-5@medium"])
     w.run(runner=False)
     argv = launches(w.tmp, "codex")[0]
     assert argv[0] == "exec" and "--ephemeral" not in argv

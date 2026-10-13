@@ -59,20 +59,6 @@ def entry(models: dict[str, list[str]], round: int) -> str:
     return next(filter(driver_agents.installed, later * (round > 2)), first)
 
 
-def _cast(job: Job) -> tuple[list[tuple[str, str]], list[str]]:
-    """((role, entry) per agent of this review, the notes the reviewer's prompt gets). A ticket with a Risk line
-    gets the correctness pass: a second agent on another provider, or the reviewer itself when there is none."""
-    cast, notes = [("reviewer", "")], ["rereview"] * bool(job.previous)
-    if job.ticket.risk:
-        other, why = driver_review.correctness_entry(job.run.models)
-        if other:
-            cast.append(("correctness", other))
-        else:
-            notes.insert(0, "folded")
-            job.run.ledger(f"Ticket {job.ticket.number}: correctness pass folded into reviewer: {why}.")
-    return cast, notes
-
-
 def _told(job: Job, findings: list[dict]) -> list[dict]:
     """Each finding goes to the ledger with its severity: a minor one waits there for the final review."""
     for finding in findings:
@@ -81,19 +67,18 @@ def _told(job: Job, findings: list[dict]) -> list[dict]:
     return findings
 
 
-def _attempt(job: Job, cast: list[tuple[str, str]], notes: list[str], locked: list[str]) -> tuple[str, list[dict]]:
+def _attempt(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> tuple[str, list[dict]]:
     """Run the agents of one review at once in the one slot: (why the ticket is blocked, the reports). The driver
     writes nothing to the tree of the slot while two agents run: `driver_review.undisturbed` checks the slot when
     all are done."""
     run, number, values, running = job.run, job.ticket.number, job.pointers(job.round - 1), [role for role, _ in cast]
 
     def call(role: str, entry: str) -> tuple[str, dict]:
-        mine = notes if role == "reviewer" else notes[-1:] * bool(job.previous)
         # The first review of a tip is the "round 1" of the report contract: a proof for each locked test.
         check = {} if job.previous or role != "reviewer" else {"round": 1, "locked": locked}
         try:
-            return run.agent(role, number, job.slot, values, notes=mine, entry=entry, fix_round=job.round, check=check,
-                             alone=lambda: len(running) == 1)
+            return run.agent(role, number, job.slot, values, notes=["rereview"] * bool(job.previous), entry=entry,
+                             fix_round=job.round, check=check, alone=lambda: len(running) == 1)
         finally:
             running.remove(role)
 
@@ -108,9 +93,10 @@ def _review(job: Job) -> tuple[str, list[dict]]:
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
     found = _told(job, driver_review.locked_findings(job.slot, state, *job.guard()))
-    cast, notes = _cast(job)
+    # A ticket with a Risk line gets the correctness pass: a second agent, on another provider (requirement 13).
+    cast = [("reviewer", ""), *[("correctness", driver_agents.correctness_entry(run.models))] * bool(job.ticket.risk)]
     error, reports = driver_review.undisturbed(
-        lambda: _attempt(job, cast, notes, state["locked"]), job.slot, job.values["branch"], job.tip, run.ledger,
+        lambda: _attempt(job, cast, state["locked"]), job.slot, job.values["branch"], job.tip, run.ledger,
         f"Ticket {number}", "the slot", "the review")
     if error:
         return error, []

@@ -49,6 +49,14 @@
   nothing leaves the machine before the final review in either mode.
 - **Tidy by script, no rewrite after the final review** — fixes stay as `fix(NN)` commits;
   one top-model review instead of two.
+- **No `origin` skips only the rebase and the push**: the tidy, the gate and the final review
+  run, and the tidied commits stay on `run.start`. `--push` or `--unattended` with no `origin`
+  is exit 3 before any agent — against a run that ends with no final review, and against a
+  run that finds at its end that it cannot push.
+- **The correctness CLI is a precondition**: the pass runs on the first entry of its list on
+  another provider than the implementer's first entry. No such entry, or its CLI not on PATH,
+  is exit 3 before any agent, in every run. The pass is never folded into the reviewer —
+  against a review by one provider that reads as two.
 - **Ledger is write-only prose; `state.json` is the resume contract** — against resuming from
   prose that compaction had corrupted.
 - **`SKILL.md` becomes a launcher**; method text moves to the prompt templates and a README.
@@ -66,7 +74,7 @@ No database. Every record is a file under `.agent/implement/` or a git object; t
 | `state.json` | `run.landed[]` | `[ticket, the PR tip its merge made]`, in merge order, one entry per ticket | the tidy gives each ticket commit that tree |
 | `state.json` | `run.questions[]` | every question of the run; `answer` is null while it is open, and is set once | `decisions.json` is derived from it |
 | `state.json` | `run.gates`, `run.stops`, `run.agents[]` | counters and one `{ticket, role, entry, seconds, cost}` per agent run | the measurement table of the summary |
-| `state.json` | `run.final` | `{skipped, recovery, tidied, onto, base, commits, reviewed, round, open, batch, green_gates, pushed, pr}`; `round` 0..2; every key is there from the start of the run | the resume contract of the end of run; a wrong key name fails |
+| `state.json` | `run.final` | `{skipped, recovery, tidied, onto, base, commits, reviewed, round, open, batch, green_gates, pushed, pr}`; `round` 0..2; `base` is empty and `onto` is `run.start` when the repository has no `origin`; every key is there from the start of the run | the resume contract of the end of run; a wrong key name fails |
 | `state.json` | `tickets[NN].phase` | one of `pending, test-writer, implement, gate, review, fix, merge, merged, blocked` | the state machine; any other value fails resume |
 | `state.json` | `tickets[NN].round` | 0..4 | the fix-loop budget |
 | `state.json` | `tickets[NN].test_writer_sha`, `locked` | set together by the test-writer; a correction moves `test_writer_sha` to its commit and only adds to `locked` | the locked-file check needs both |

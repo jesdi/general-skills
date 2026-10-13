@@ -78,11 +78,16 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude,
                                   "correctness": ["openai/gpt-sol@medium"], "fixer": ["other/x@low"]}))
     assert run(capsys, "--models", str(models)) == (
-        3, "implementer: codex is not on PATH (first model entry openai/gpt-sol@medium)\n"
-           "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n")
-    # Requirement 2 names the first entry only: the fix loop skips a later implementer entry whose CLI is missing.
-    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"], **claude}))
-    assert run(capsys, "--models", str(models)) == (0, "max frontier width: 1\n")
+        3, "implementer: codex is not on PATH (model entry openai/gpt-sol@medium)\n"
+           "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n"
+           "correctness: no entry of its list (openai/gpt-sol@medium) is on another provider than the implementer's "
+           "first entry openai/gpt-sol@medium; the correctness pass never runs on the implementer's provider\n")
+    # Requirement 2 names the first entry only: a later implementer entry whose CLI is missing is no error. For the
+    # correctness role it names the entry requirement 13 selects, which here is the second of its list.
+    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"], **claude,
+                                  "correctness": ["opus@high", "openai/gpt-sol@low", "openai/gpt-astra@low"]}))
+    assert run(capsys, "--models", str(models)) == (
+        3, "correctness: codex is not on PATH (model entry openai/gpt-sol@low)\n")
 
 
 @pytest.mark.parametrize("entry", ["claude-opus-5@turbo", "openai/gpt-sol", "openai/@low"])
@@ -135,7 +140,23 @@ def agents(tmp_path, capsys, body, *args, seam="none — refactor"):
     code = driver.main(["--gate", "true", "--spec", "spec.md", "--runner", str(runner), *args])
     capsys.readouterr()
     ledger = tmp_path / ".agent/implement/ledger.md"
-    return code, [l for l in ledger.read_text().splitlines() if not l.startswith("End-of-run work skipped")] if ledger.exists() else []
+    return code, ledger_of(tmp_path)
+
+
+# The end of run follows the last merge and has its own tests (test_tidy.py): its sentences start with one of these.
+END = ("End-of-run work skipped", "End of run:", "Recovery point:", "Tidy:", "Final review ")
+
+
+def ledger_of(tmp_path):
+    """The ledger sentences of the tickets."""
+    ledger = tmp_path / ".agent/implement/ledger.md"
+    return [line for line in ledger.read_text().splitlines() if not line.startswith(END)] if ledger.exists() else []
+
+
+def walked(*short):
+    """The PR tip as the tickets left it: the recovery point of the tidy when there is one, else the tip of feat/x."""
+    made = subprocess.run(["git", "rev-parse", *short, "-q", "--verify", "refs/implement/recovery"], capture_output=True, text=True)
+    return made.stdout.strip() or subprocess.run(["git", "rev-parse", *short, "feat/x"], capture_output=True, text=True).stdout.strip()
 
 
 def branches():
@@ -150,7 +171,7 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
             f'*) {IMPLEMENTER}grep -q "Locked files: work.txt" $prompt || exit 9;; esac\n{REPORT}')
     code, ledger = agents(tmp_path, capsys, body, seam="`f()`")
     assert code == 0
-    tip = subprocess.run(["git", "rev-parse", "--short=7", "feat/x"], capture_output=True, text=True).stdout.strip()
+    tip = walked("--short=7")
     assert [line.partition(" for ")[0] for line in ledger] == [
         "Ticket 01: test-writer ran on claude-sonnet-5@medium", "Ticket 01: implementer ran on claude-sonnet-5@medium",
         f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
@@ -342,8 +363,7 @@ def walk(tmp_path, capsys, body, *args, gate="true"):
     runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{CLEAN}{body}")
     runner.chmod(0o755)
     code = driver.main(["--gate", gate, "--spec", "spec.md", "--runner", str(runner), *args])
-    ledger = tmp_path / ".agent/implement/ledger.md"
-    return code, [l for l in ledger.read_text().splitlines() if not l.startswith("End-of-run work skipped")] if ledger.exists() else [], capsys.readouterr().out
+    return code, ledger_of(tmp_path), capsys.readouterr().out
 
 
 def out_of(*command):
@@ -365,13 +385,14 @@ def test_two_tickets_run_in_two_slots_and_the_second_merge_is_a_gated_merge_comm
     assert code == 0, out
     calls = dict(line.split() for line in Path(f"{tmp_path}-runner.calls").read_text().splitlines())
     assert calls == {"01": str(tmp_path.resolve()), "02": str((tmp_path / ".agent/worktrees/slot-2").resolve())}
-    assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 3  # a merge commit
-    assert len([line for line in ledger if "the gate is green" in line]) == 3 and "| gates run | 3 |" in out
+    assert len(out_of("git", "rev-list", "--parents", "-n1", walked()).split()) == 3  # a merge commit
+    # Each ticket tip and the merge commit; the fourth gate is that of the end of run, on the tidied tip.
+    assert len([line for line in ledger if "the gate is green" in line]) == 3 and "| gates run | 4 |" in out
     assert [line for line in ledger if "merged into feat/x as a merge commit" in line]
     assert {entry["phase"] for entry in state_of(tmp_path)["tickets"].values()} == {"merged"}
     assert branches() == ["feat/x"] and out_of("git", "status", "--porcelain") == ""
     assert (tmp_path / "work-01.txt").exists() and (tmp_path / "work-02.txt").exists()
-    assert out == "max frontier width: 2\n" + (tmp_path / ".agent/implement/summary.md").read_text()
+    assert out.startswith("max frontier width: 2\n" + (tmp_path / ".agent/implement/summary.md").read_text())
     # A rerun finds every ticket merged: no agent, no gate, no second prepare.
     code, again, _ = walk(tmp_path, capsys, "exit 9\n", "--prepare", f"pwd >> {log}")
     assert (code, again) == (0, ledger) and len(log.read_text().splitlines()) == 1
@@ -389,11 +410,11 @@ def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gate
     code, ledger, out = walk(tmp_path, capsys, RESOLVE + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
     assert code == 0, out
     (line,) = [line for line in ledger if "the conflict agent resolved the merge conflict in work.txt at " in line]
-    number, tip = line[7:9], out_of("git", "rev-parse", "feat/x")
+    number, tip = line[7:9], walked()
     assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
     assert f"Ticket {number}: the gate is green on {tip[:7]}, record .agent/implement/{number}/gate-{tip[:7]}.log." in ledger
-    assert "| gates run | 3 |" in out and "| agents, conflict on claude-opus-5@medium | 1 |" in out
-    assert state_of(tmp_path)["tickets"][number]["tip"] == tip
+    assert "| gates run | 4 |" in out and "| agents, conflict on claude-opus-5@medium | 1 |" in out
+    assert dict(state_of(tmp_path)["run"]["landed"])[number] == tip
     prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
     assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")
     assert branches() == ["feat/x"] and out_of("git", "status", "--porcelain") == ""
@@ -494,8 +515,10 @@ def test_a_resumed_ticket_with_a_settled_gate_merges_without_a_gate_or_an_agent(
     state = state_of(tmp_path)
     state["tickets"]["01"]["green_gates"] = [tip]
     (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
-    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate="false")
-    assert code == 0 and out_of("git", "rev-parse", "feat/x") == tip and "| gates run | 1 |" in out
+    # A gate on the ticket branch is still red, so a second gate for the settled commit would block the ticket. The
+    # one new gate is that of the end of run, on the PR branch.
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/01 ]')
+    assert code == 0 and walked() == tip and "| gates run | 2 |" in out
 
 
 def test_an_unknown_phase_fails_the_resume(repo, tmp_path, capsys):
@@ -615,9 +638,11 @@ def test_a_merged_ticket_whose_commits_left_the_pr_branch_is_not_merged_on_a_rer
     tip = out_of("git", "rev-parse", "--short=7", "HEAD")
     subprocess.run(["git", "reset", "-q", "--hard", base], check=True)  # the operator dropped the ticket's commits
     code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
-    assert code == 0, out
     assert f"Ticket 01: returned to implement from the PR tip: the recorded tip {tip} is not in feat/x." in ledger
+    assert ledger[-1].startswith("Ticket 01: merged into feat/x as a fast-forward at ")
     assert (tmp_path / "work-01.txt").exists() and out_of("git", "rev-parse", "feat/x~1") == base
+    # The end of run tidied the branch in the first run, and that tip left the branch too: it stops (test_tidy.py).
+    assert code == 1 and f"End of run: BLOCKED at feat/x does not hold the tidied tip {tip}" in out, out
 
 
 def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_role(repo, tmp_path, capsys, monkeypatch):

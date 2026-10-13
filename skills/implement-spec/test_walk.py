@@ -10,6 +10,10 @@ Interface choices (ticket 03):
 - `summary.md` sits in `.agent/implement/` and its table is repeated on stdout.
 - `state.json` is `{"tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot}}}`;
   `green_gates` holds full SHAs (a dict with a `commit` key is accepted too).
+
+Ticket 08: this fixture has no `origin`, and a run that merges every ticket now ends with the tidy, one gate on the
+tidied tip and the final review. The history as the walk made it is at `refs/implement/recovery`: `Rig.walked()` is
+that tip, `Rig.pr_subjects()` reads it, and `Rig.walk_gates()` leaves out the one gate of the end of run.
 """
 import json
 import os
@@ -218,8 +222,19 @@ class Rig:
     def state(self):
         return json.loads((self.repo / ".agent/implement/state.json").read_text())
 
+    def walked(self):
+        """The PR tip as the walk left it: the recovery point of the end-of-run tidy, or the branch with no tidy."""
+        out = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement/recovery"], cwd=self.repo,
+                             capture_output=True, text=True).stdout.strip()
+        return out or git(self.repo, "rev-parse", "feat/csv").strip()
+
+    def walk_gates(self):
+        """The gates of the walk: all but the gate of the end of run, which is on a tidied tip the walk never made."""
+        made = git(self.repo, "rev-list", self.walked()).split()
+        return [g for g in self.gates() if g["commit"] in made]
+
     def pr_subjects(self):
-        return git(self.repo, "log", "--format=%s", "feat/csv").splitlines()
+        return git(self.repo, "log", "--format=%s", self.walked()).splitlines()
 
     def branches(self):
         return git(self.repo, "branch", "--list", "ticket/*").split()
@@ -295,20 +310,20 @@ def test_fast_forward_merge_has_exactly_one_gate_record_and_no_merge_gate(tmp_pa
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}).run(plan())
     assert rig.code == 0, rig.output()
     a1 = rig.sha("01", "implementer")
-    assert git(rig.repo, "rev-parse", "feat/csv").strip() == a1
+    assert rig.walked() == a1
     records = sorted((rig.repo / ".agent/implement/01").glob("gate-*.log"))
     assert [p.name for p in records] == [f"gate-{a1[:7]}.log"]
     text = records[0].read_text()
     assert a1[:7] in text and "GATE-OUTPUT-MARK" in text and len(re.findall(r"\d\d:\d\d:\d\d", text)) >= 2
     assert re.search(r"exit\D*0", text) and not re.search(r"^(\?\?| M|M |A )", text, re.M)
-    (gate,) = rig.gates()
+    (gate,) = rig.walk_gates()
     assert (gate["commit"], gate["status"], gate["cwd"]) == (a1, "", str(rig.repo.resolve()))
 
 
 def test_gate_environment_names_the_pr_branch_and_a_pycache_prefix_under_agent_implement(tmp_path):
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}).run(plan())
     assert rig.code == 0, rig.output()
-    (gate,) = rig.gates()
+    (gate,) = rig.walk_gates()
     assert gate["base"] == "feat/csv" and gate["pycache"]
     assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
 
@@ -338,9 +353,9 @@ def test_non_fast_forward_merge_is_a_plumbing_merge_commit_gated_once(tmp_path):
     rig.run(steps)
     assert rig.code == 0, rig.output()
     a01, a03 = rig.sha("01", "implementer"), rig.sha("03", "implementer")
-    tip = git(rig.repo, "rev-parse", "feat/csv").strip()
+    tip = rig.walked()
     assert len(git(rig.repo, "rev-list", "--parents", "-n1", tip).split()) == 3, "tip is a merge commit"
-    commits = [g["commit"] for g in rig.gates()]
+    commits = [g["commit"] for g in rig.walk_gates()]
     assert sorted(commits) == sorted([a01, a03, tip]), commits
     waited = rig.calls("01", "implementer")[0]
     assert waited["after_wait"]["branch"] == "ticket/01" and waited["after_wait"]["head"] == waited["head"]
@@ -355,7 +370,7 @@ def test_merged_ticket_branches_are_deleted_and_their_commits_are_ancestors(std)
     assert std.branches() == []
     for nn in ("01", "02", "03"):
         for role in ("test-writer", "implementer"):
-            git(std.repo, "merge-base", "--is-ancestor", std.sha(nn, role), "feat/csv")
+            git(std.repo, "merge-base", "--is-ancestor", std.sha(nn, role), std.walked())
     assert git(std.repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/csv"
     assert git(std.repo, "status", "--short") == ""
 
@@ -384,7 +399,8 @@ def test_ledger_is_plain_sentences_written_by_the_driver_and_named_in_no_prompt(
     assert ledger and all(l.strip() == l and l and not l.startswith(("#", "|", "-", "*", "{")) for l in ledger), ledger
     for nn in ("01", "02", "03"):
         assert [l for l in ledger if nn in l and "merged" in l.lower()], (nn, ledger)
-    assert not [c for c in std.calls() if "ledger" in c["prompt"].lower()]
+    # the final reviewer is the one agent that reads it (requirement 19): it runs here since ticket 08
+    assert not [c for c in std.calls() if c["nn"] != "final" and "ledger" in c["prompt"].lower()]
 
 
 def single_blocked(tmp_path):
@@ -420,9 +436,11 @@ def test_resume_keeps_a_settled_gate_and_runs_no_gate_again(tmp_path):
     state["tickets"]["01"].update(phase="merge", tip=a1, green_gates=[a1])
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     gates_before = len(rig.gates())
-    rig.run(plan())  # the gate still exits 1 on everything: any gate run would block the ticket
+    rig.gate_conf(red=["ticket/01"])  # any gate run on the ticket would block it; the end of run gates feat/csv
+    rig.run(plan())
     assert rig.code == 0, rig.output()
-    assert len(rig.gates()) == gates_before and git(rig.repo, "rev-parse", "feat/csv").strip() == a1
+    assert len(rig.walk_gates()) == gates_before and rig.walked() == a1
+    assert [g["commit"] for g in rig.gates()].count(a1) == 1, "the settled commit is gated once in all"
 
 
 def test_summary_md_and_stdout_carry_the_measurement_table(std):

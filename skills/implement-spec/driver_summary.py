@@ -19,7 +19,8 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
 
 
 def _end(run: dict) -> list[str]:
-    """What the end of run did, from its record: without this sentence a run with no final review reads as done."""
+    """What the end of run did, from its record: without this sentence a run whose tickets are not all merged, and
+    so has no final review, reads as done."""
     final = run["final"]
     if final["skipped"]:
         return [f"The end-of-run work (rebase, tidy, final review, push) did not run: {final['skipped']}."]

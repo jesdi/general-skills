@@ -16,8 +16,9 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 
 - `.agent/` is gitignored and the worktree has no uncommitted change.
 - Each ticket file `NN-name.md` has a title, a **Blocked by** line and a **Seam** line, and the graph has no cycle (`driver_tickets.py`). A ticket needs one criterion or more, unless its Seam is `none — refactor`. A ticket needs a **Touches** line when the set has more than one ticket. The [to-tickets skill](../to-tickets/SKILL.md) has the line format.
-- Each model entry is valid, and the CLI of the first entry of each role is on PATH. The correctness role is exempt.
-- The `review-diff` skill is installed next to this one when a ticket has a **Risk** line or the repository has an `origin` remote.
+- Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
+- The `review-diff` skill is installed next to this one: the final review of every run reads it, and so does the correctness pass.
+- With `--push` or `--unattended`, the repository has an `origin` remote.
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
@@ -121,7 +122,7 @@ A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip,
 
 ### End of run
 
-The end of run starts only when every ticket is merged, every slot is idle and the repository has an `origin` remote. Its agents work in slot 1.
+The end of run starts only when every ticket is merged and every slot is idle. Its agents work in slot 1.
 
 1. **Tidy.** The driver saves the PR tip in `refs/implement/recovery`. It then makes one commit for each ticket, in merge order, named `feat(NN): <title>`. Each commit holds the tests, the implementation and the fixes of its ticket. The tree of the new tip must equal the tree of the old tip, or the branch stays as it was.
 2. **Rebase** onto the fetched tip of the default branch of `origin`. A conflict goes to the conflict agent (`prompts/rebase-conflict.md`) once, and the rebased tip is gated.
@@ -135,6 +136,8 @@ History rules:
 - The branch is rewritten once, before the first review, and never after it. Fixes of the final review stay as `fix(NN)` commits.
 - A history that `origin` already has is never rewritten. When `origin` has the PR branch or one of its commits, the driver does no tidy and no rebase. The gate, the final review and a fast-forward push still run.
 - The push happens only when the branch tip is the reviewed tip and that tip has a green gate record.
+
+A repository with no `origin` remote skips only step 2 and step 6. The tidied commits stay on the commit that the PR branch had when the run started, and the review range starts there. One ledger sentence says that the rebase and the push were skipped. The driver prints the two tips and ends with exit 0. When you add `origin` after such an end of run, `--push` does not push: the branch is on no base of that remote, so the end of run is BLOCKED.
 
 ### Resume
 
@@ -151,7 +154,7 @@ History rules:
 | `anthropic` | `claude -p` | low, medium, high, xhigh, max |
 | `openai` | `codex exec` | minimal, low, medium, high, xhigh |
 
-The driver uses the first entry of a role. The fixer of a ticket runs on the `implementer` list; the `fixer` list is only for the fix batch of the final review. The driver uses a later entry in two cases only: fix rounds 3 and 4 (the implementer list), and the correctness pass, which takes the first correctness entry of another provider than the first implementer entry. When no such entry has its CLI on PATH, the reviewer does the correctness checks and the ledger says so. The `explorer` list is read and checked, but the driver starts no explorer.
+The driver uses the first entry of a role. The fixer of a ticket runs on the `implementer` list; the `fixer` list is only for the fix batch of the final review. The driver uses a later entry in two cases only: fix rounds 3 and 4 (the implementer list), and the correctness pass, which takes the first correctness entry of another provider than the first implementer entry. The reviewer never does the correctness pass: when the list has no such entry, or the CLI of that entry is not on PATH, the run ends with exit 3 before any agent. The `explorer` list is read and checked, but the driver starts no explorer.
 
 The defaults need both `claude` and `codex` on PATH. Read "Known limits" before you use them as they are.
 
@@ -194,7 +197,7 @@ Answer with `--answer <question id>=<option id>` on the next run, or through the
 |---|---|
 | Locked tests with a demonstrated red | `driver_report.py` `_proof_errors`: each red line of the test-writer report must be in its log. `driver_review.py` `locked_findings`: a locked file that differs from the test-writer commit is a critical finding, before each review. `others` adds the locked files of each merged ticket to that check, so a later ticket cannot change the locked test of an earlier one; `driver.py` `_resolved` makes the same check on a resolved merge conflict before it lands. |
 | One mutation proof for each locked test | `prompts/reviewer.md` asks for one proof for each locked test. `driver_report.py` `_locked_errors` and `_proof_errors` reject a first review with no proof for a locked test file, or with a red line that is not in the log. `driver_review.py` `follow` finds the proofs that a fix makes due again. |
-| One independent correctness pass for each risky ticket | `driver_fixloop.py` `_cast` adds the pass for a ticket with a **Risk** line. `driver_review.py` `correctness_entry` picks an entry of another provider. |
+| One independent correctness pass for each risky ticket | `driver_fixloop.py` `_review` adds the pass for a ticket with a **Risk** line. `driver_agents.py` `correctness_entry` picks the entry of another provider, and `load_models` stops the run when there is none or its CLI is not on PATH. |
 | One full gate for each candidate | `driver_gate.py` `run`, called from `driver.py` `_gated`: one record for each commit the driver is about to trust. Green is exit 0 on a tree that is clean before and after, with HEAD not moved. |
 | Post-merge check on the PR branch | `driver.py` `_merged`: a merge commit is gated before the PR branch moves to it. A fast-forward of a gated tip uses the record of that tip. `driver_final.py` `_reviewed` gates the tip again after the tidy and after the fix batch. |
 
@@ -202,9 +205,8 @@ The driver enforces the mutation proof for each locked test file, not for each l
 
 ## Known limits
 
-- **A `codex` agent cannot commit.** A role that commits (test-writer, implementer, fixer, conflict) on an `openai` entry runs with `--sandbox workspace-write`, and that sandbox cannot run `git commit`. In the default `models.json` this is the second implementer entry, so fix rounds 3 and 4 fail when `codex` is on PATH. What to do: give a `--models` file with no `openai` entry in the `implementer`, `test-writer`, `fixer` and `conflict` lists.
+- **A `codex` agent cannot commit.** A role that commits (test-writer, implementer, fixer, conflict) on an `openai` entry runs with `--sandbox workspace-write`, and that sandbox cannot run `git commit`. In the default `models.json` this is the second implementer entry, so fix rounds 3 and 4 fail. What to do: give a `--models` file with no `openai` entry in the `implementer`, `test-writer`, `fixer` and `conflict` lists.
 - **A `codex` reviewer cannot make a mutation proof.** A reviewer on an `openai` entry runs with `--sandbox read-only` and cannot make the temporary edit. The default `models.json` has such an entry first for the reviewer, and the first review needs the proofs. What to do: give a `--models` file whose reviewer list starts with an `anthropic` entry.
 - **The correctness pass reads a tree that the reviewer changes.** The two agents share one slot, and the reviewer makes temporary edits. `prompts/correctness.md` tells the pass to read from git at the reviewed commit and to run no tests. That sentence is the only guard: the driver cannot enforce it, so a pass that ignores it can report a false finding and start a fix round. What to do: when a correctness finding looks wrong, compare it with `git show <reviewed commit>:<file>` before you rule on it.
-- **No `origin` remote, no end of run.** The tidy, the rebase, the final review and the push are skipped. The run ends with exit 0, and the ledger and `summary.md` say that the final review did not run. What to do: add the `origin` remote before the run when you want the final review. Without it, the run ends with no final review.
 - **A ticket that is not merged stops the end of run.** While one ticket is BLOCKED, there is no tidy and no final review of the merged tickets.
 - **A published PR branch keeps its history.** See "End of run".

@@ -6,8 +6,8 @@ is the remote's default branch, found with `git ls-remote --symref origin HEAD`)
 PATH. No test reaches a real remote or a real `gh`.
 
 Interface choices (ticket 06):
-- end-of-run starts only when every ticket is merged and every slot is idle; it is skipped, with the ledger sentence
-  "End-of-run work skipped: the repository has no origin remote.", when the repository has no `origin`.
+- end-of-run starts only when every ticket is merged and every slot is idle. A repository with no `origin` skips only
+  the rebase and the push (ticket 08): test_amendments.py holds those tests.
 - its agents report into `.agent/implement/final/`, so the fake runner keys them `final/final-reviewer`,
   `final/fixer` and `final/conflict`; gate records there are `gate-<first 7 hex>.log`.
 - recovery point: before the rebase the driver sets `refs/implement/recovery` to the PR tip and writes the ledger
@@ -440,14 +440,3 @@ def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
     assert rig.code == 1, rig.output()
     assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
-
-
-# ---------------------------------------------------------------- no remote
-
-def test_without_an_origin_remote_the_end_of_run_work_is_skipped_with_a_ledger_sentence(tmp_path):
-    rig = Final(tmp_path, ONE, remote=False)
-    rig.run(plan())
-    assert rig.code == 0, rig.output()
-    (line,) = rig.led("End-of-run work skipped")
-    assert "no origin remote" in line and not rig.final_calls("final-reviewer")
-    assert "feat: 01 rows" in rig.pr_subjects() and not rig.recovery()

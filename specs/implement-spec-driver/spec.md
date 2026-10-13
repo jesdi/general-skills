@@ -33,8 +33,9 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
    number that names no ticket. `Risk` and `Suspicions` are optional. The driver never edits
    a ticket file.
 2. **Preconditions.** The driver exits 3 before any agent when `--gate` is missing, when
-   `.agent` is not gitignored, when the CLI of any role's first model entry is not on PATH,
-   or when the PR worktree is not clean.
+   `.agent` is not gitignored, when the CLI of any role's first model entry is not on PATH
+   (for the correctness role: the entry requirement 13 selects), or when the PR worktree is
+   not clean.
 3. **Frontier and holds.** A ticket is ready when every `Blocked by` ticket is merged and no
    running ticket's `Touches` names a function it names. The driver runs at most
    `--parallel` tickets at once, default 2, and prints the graph's maximum frontier width at
@@ -85,8 +86,9 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
 13. **Models.** `--models <file>` names a JSON file with one ordered list of model entries
     per role; the skill ships a default file. A role runs on the first entry of its list. The
     correctness pass runs on the first entry of its list whose provider differs from the
-    implementer's; when no such CLI is on PATH it folds `correctness.md` into the reviewer's
-    brief. The driver records every agent's model entry and cost when the CLI reports it.
+    implementer's. The driver exits 3 before any agent when the list has no such entry or
+    when that entry's CLI is not on PATH: the correctness role is not exempt from
+    requirement 2, and the pass is never folded into the reviewer. The driver records every agent's model entry and cost when the CLI reports it.
 14. **Fixed prompts.** Each role's prompt is a template file in the skill directory filled
     with pointers and SHAs only; the driver composes no prose. Every prompt ends with the
     report path, the report schema, and the rule never to stash, reset or check out.
@@ -118,7 +120,9 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
     gate on the tidied tip; final review through review-diff on the final-reviewer's model with ledger
     minors and rulings as pointers; one fixer batch with each commit named `fix(NN): …`;
     scoped review of `<reviewed tip>..HEAD` and one gate; at most two review rounds; no
-    history rewrite after the final review.
+    history rewrite after the final review. A repository with no `origin` remote skips only
+    the rebase and the push: the tidy, the gate and the final review still run. With
+    `--unattended` or `--push`, a missing `origin` exits 3 before any agent.
 20. **Outputs.** Exit 0 when everything merged (and pushed when unattended), 1 with BLOCKED
     tickets, 2 parked, 3 usage or validation error. `summary.md` and stdout carry plain
     sentences plus a table: gates run, agents per role and model entry, wall time per role,
@@ -238,12 +242,26 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
   `codex exec` on `gpt-sol` at the same time, and both reports' findings are merged with
   their severities
 
-### Scenario: no second CLI folds correctness into the reviewer
+### Scenario: a missing correctness CLI stops the run
 
-- **Given** `02` has `Risk: persistence` and `codex` is not on PATH
-- **When** `02` reaches review
-- **Then** one reviewer runs, its prompt names `correctness.md`, and the ledger records
-  `correctness pass folded into reviewer: codex not installed`
+- **Given** the correctness list is `[openai/gpt-sol@medium, claude-opus-5@medium]`, the
+  implementer runs on `claude-opus-5@medium`, and `codex` is not on PATH
+- **When** the driver starts
+- **Then** it exits 3 naming the correctness role and `codex`, and launches no agent
+
+### Scenario: a repository with no origin still gets its final review
+
+- **Given** the repository has no `origin` remote, every ticket merged, and no `--unattended`
+  and no `--push`
+- **When** the run ends
+- **Then** no rebase ran, the branch is tidied into one commit per ticket, one gate ran on
+  the tidied tip, the final review ran, nothing is pushed, and the driver exits 0
+
+### Scenario: a push without an origin is refused at the start
+
+- **Given** the repository has no `origin` remote and `--unattended`
+- **When** the driver starts
+- **Then** it exits 3 naming the missing remote and launches no agent
 
 ### Scenario: a fix loop escalates at round 3
 

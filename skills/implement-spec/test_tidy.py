@@ -484,23 +484,39 @@ def test_the_rerun_command_drops_the_answers_and_the_pr_title_falls_back_to_the_
 
 # ---------------------------------------------------------------- preconditions and the skip
 
-def test_without_the_review_diff_skill_a_repository_with_an_origin_stops_before_any_agent(tmp_path, monkeypatch):
+@pytest.mark.parametrize("remote", [True, False], ids=["origin", "no-origin"])
+def test_without_the_review_diff_skill_every_repository_stops_before_any_agent(tmp_path, monkeypatch, remote):
     monkeypatch.setattr(driver_final, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")
-    rig = Inside(tmp_path, ONE).run(plan())
+    rig = Inside(tmp_path, ONE, remote=remote).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == (f"{tmp_path}/review-diff/SKILL.md is missing: the final review runs through it; install the "
                        "review-diff skill next to implement-spec\n")
 
 
-def test_without_an_origin_the_summary_says_that_the_final_review_did_not_run(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver_final, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")  # not needed with no origin
-    rig = Inside(tmp_path, ONE, remote=False)
-    rig.run(plan())
-    rig.run(plan(), *UNATTENDED)
-    assert rig.code == 0 and not (rig.repo / ".agent/stage.json").exists(), rig.out
-    assert rig.led("End-of-run work skipped") == ["End-of-run work skipped: the repository has no origin remote."]
-    assert ("1 of 1 tickets are merged into feat/csv.\nThe end-of-run work (rebase, tidy, final review, push) did not run: "
-            "the repository has no origin remote.\n\n| Measure") in rig.out
+def test_without_an_origin_the_run_ends_reviewed_and_a_push_is_refused_at_the_start_and_after_the_tidy(tmp_path):
+    rig = Inside(tmp_path, ONE, remote=False).run(plan())
+    assert rig.code == 0, rig.out
+    tip, final = rig.branch(), rig.final()
+    assert (final["base"], final["onto"], final["reviewed"]) == ("", rig.state()["run"]["start"], tip)
+    assert rig.led("no origin") == ["End of run: the repository has no origin remote, so the rebase and the push are "
+                                    "skipped; the tidy, the gate and the final review run."]
+    assert (f"1 of 1 tickets are merged into feat/csv.\nThe final review covers feat/csv up to {tip[:7]}. Nothing is "
+            "pushed.\n\n| Measure") in rig.out
+    assert rig.out.endswith(f"Reviewed tip: {tip}\nNothing is pushed. The repository has no origin remote.\n")
+    # A run that is to push needs the remote: it stops before the lock of a new run and before any agent.
+    calls = len(rig.calls())
+    for flags in (UNATTENDED, ("--push",)):
+        rig.run(plan(), *flags)
+        assert rig.code == 3 and len(rig.calls()) == calls and not (rig.repo / ".agent/stage.json").exists()
+        assert rig.out == ("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
+                           "add the remote, or run without them to stop before the push\n")
+    # An origin that comes after the tidy does not make the branch a PR branch: it is on no base of that origin.
+    git(rig.repo, "remote", "add", "origin", str(tmp_path / "late.git"))
+    rig.run(plan(), "--push")
+    assert rig.code == 1 and not rig.pushes() and not rig.prs() and rig.branch() == tip
+    assert rig.led("BLOCKED") == [
+        "End of run: BLOCKED at the end of run tidied feat/csv when the repository had no origin remote, so it is on "
+        "no base branch of origin: nothing is pushed."]
     fresh = {"pr_branch": "feat/x", "gates": 0, "stops": 0, "agents": [], "final": driver_state._final()}
     assert driver_summary.render({"run": fresh, "tickets": {}}).startswith("0 of 0 tickets are merged into feat/x.\n\n| Measure")
 

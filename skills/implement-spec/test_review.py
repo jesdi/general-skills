@@ -50,7 +50,7 @@ class Review(Rig):
         return [l for l in self.ledger() if all(w in l for w in words)]
 
     def tip(self):
-        return git(self.repo, "rev-parse", "feat/csv").strip()
+        return self.walked()  # the tip the walk made: the end of run tidies it away (ticket 08)
 
     def folder(self, nn="01"):
         return self.repo / ".agent/implement" / nn
@@ -132,15 +132,8 @@ def test_findings_of_both_reports_are_merged_with_their_severities(pair):
     assert pair.state()["tickets"]["02"]["phase"] == "merged"
 
 
-def test_without_codex_one_reviewer_names_correctness_md_and_the_ledger_says_why(tmp_path):
-    rig = Review(tmp_path, RISKY, {"correctness": [SOL, OPUS]})
-    (tmp_path / "bin/codex").unlink()
-    rig.run(plan())
-    assert rig.code == 0, rig.output()
-    assert len(rig.calls("02", "reviewer")) == 1 and not rig.calls("02", "correctness")
-    assert "review-diff/correctness.md" in rig.calls("02", "reviewer")[0]["prompt"]
-    assert rig.led("correctness pass folded into reviewer: codex not installed")
-
+# Ticket 08: the pass is never folded into the reviewer. A correctness entry with no CLI on PATH stops the run at the
+# start: test_amendments.py test_a_correctness_entry_whose_cli_is_not_on_path_stops_the_run_before_any_agent.
 
 def test_an_installed_skill_without_review_diff_fails_clearly_before_any_agent(tmp_path):
     rig = Review(tmp_path, RISKY)

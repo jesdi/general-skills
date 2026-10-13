@@ -44,10 +44,16 @@ def _entry_error(role: str, entry: str, first: bool) -> str | None:
     cli, efforts = PROVIDERS[provider]
     if not model or effort not in efforts:
         return f"{role}: model entry {entry} needs a model and an effort from {', '.join(efforts)}"
-    # The correctness pass folds into the reviewer when its CLI is absent (requirement 13).
-    if first and role != "correctness" and not shutil.which(cli):
-        return f"{role}: {cli} is not on PATH (first model entry {entry})"
+    if first and not shutil.which(cli):
+        return f"{role}: {cli} is not on PATH (model entry {entry})"
     return None
+
+
+def correctness_entry(models: dict[str, list[str]]) -> str:
+    """The entry the correctness pass runs on (requirement 13): the first of its list on another provider than the
+    implementer's first entry, or "" when the list has none."""
+    own = split(models["implementer"][0])[0]
+    return next((entry for entry in models["correctness"] if split(entry)[0] != own), "")
 
 
 def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
@@ -55,8 +61,13 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
     models = json.loads((SKILL / "models.json").read_text())
     try:
         models = {**models, **(json.loads(Path(path).read_text()) if path else {})}  # a list is a TypeError
-        found = [_entry_error(role, entry, i == 0) for role, entries in models.items()
-                 for i, entry in enumerate([entries[0], *entries[1:]])]  # entries[0]: an empty list is an error
+        # The entry of each role whose CLI must be on PATH (requirement 2); entries[0]: an empty list is an error.
+        first = {**{role: entries[0] for role, entries in models.items()}, "correctness": correctness_entry(models)}
+        found = [_entry_error(role, entry, entry == first[role]) for role, entries in models.items() for entry in entries]
+        if not first["correctness"]:
+            found.append(f"correctness: no entry of its list ({', '.join(models['correctness'])}) is on another "
+                         f"provider than the implementer's first entry {models['implementer'][0]}; the correctness "
+                         "pass never runs on the implementer's provider")
     except (OSError, ValueError, AttributeError, LookupError, TypeError) as exc:
         return {}, [f"--models {path}: {exc!r}"]
     return models, [error for error in found if error]

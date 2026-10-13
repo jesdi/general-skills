@@ -26,6 +26,9 @@ Interface choices (ticket 05):
   implementer's second call) and a second `implementer` call whose HEAD is the correction commit.
 - stage.json: `{"stage": "implement", "status": "awaiting-review", "artifact": ".agent/implement-review.html",
   "open_questions": N}` at a stop; at a BLOCKED end `{"stage": "implement", "status": "blocked", "blocked": ["01"]}`.
+- ticket 08: `--unattended` pushes at the end, so it is refused in a repository with no `origin`. The unattended tests
+  run on the rig of test_final, which has a bare `origin` and a fake `gh` (imported in the test: test_final imports
+  this module).
 """
 import hashlib
 import json
@@ -81,9 +84,9 @@ def write_answers(rig, answers, **fields):
     answers_file(rig).write_text(json.dumps(body))
 
 
-def stopped(tmp, *extra, then=(impl("01"),), files=ONE):
+def stopped(tmp, *extra, then=(impl("01"),), files=ONE, rig=Review):
     """A rig after run 1: 01's implementer reported the contradicted locked test."""
-    rig = Review(tmp, files)
+    rig = rig(tmp, files)
     return rig.run(steps(blocked(), *then), *extra)
 
 
@@ -242,7 +245,8 @@ def test_split_and_redesign_keep_the_ticket_blocked_with_the_ruling(tmp_path):
 # ---------------------------------------------------------------- unattended
 
 def test_unattended_stop_writes_stage_json_and_exits_2(tmp_path):
-    rig = stopped(tmp_path, *UNATTENDED)
+    from test_final import Final
+    rig = stopped(tmp_path, *UNATTENDED, rig=Final)
     assert rig.code == 2, rig.output()
     assert stage(rig) == {"stage": "implement", "status": "awaiting-review",
                           "artifact": ".agent/implement-review.html", "open_questions": 1}
@@ -250,16 +254,19 @@ def test_unattended_stop_writes_stage_json_and_exits_2(tmp_path):
 
 
 def test_unattended_rerun_with_a_submitted_answers_file_at_the_current_revision_continues_silently(tmp_path):
-    rig = stopped(tmp_path, *UNATTENDED)
+    from test_final import Final
+    rig = stopped(tmp_path, *UNATTENDED, rig=Final)
     write_answers(rig, {Q1: "overrule-test"})
     rig.run(steps(blocked(), impl("01")), *UNATTENDED)
     assert rig.code == 0, rig.output()
     assert Q1 not in rig.out + rig.err and rig.led("Ruling: 01 locked test overruled")
     assert len(rig.calls("01", "implementer")) == 2 and "feat: 01 rows" in rig.pr_subjects()
+    assert stage(rig) == {"stage": "implement", "status": "done"}
 
 
 def test_unattended_blocked_ticket_ends_with_stage_json_blocked_naming_it_and_exit_1(tmp_path):
-    rig = Review(tmp_path, gate={"red": ["ticket/01"]})
+    from test_final import Final
+    rig = Final(tmp_path, gate={"red": ["ticket/01"]})
     rig.run(plan(), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
