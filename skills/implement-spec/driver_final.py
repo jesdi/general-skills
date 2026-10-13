@@ -4,10 +4,11 @@ batch land as `fix(NN)` commits with a scoped review, then stop before the push 
 Stdlib only.
 
 `run` is the driver's Run. The agents and the gates of this module go through it under the number `final`, so their
-reports and gate records are in `.agent/implement/final/`. `run.final` of state.json is the resume contract:
+reports and gate records are in `.agent/implement/final/`. `run.final` of state.json is the resume contract;
+`driver_state._final` makes it with every key:
     {skipped, recovery, tidied, onto, base, commits: {NN: commit}, reviewed, round, open, batch, green_gates,
      pushed, pr}
-`recovery` is the PR tip before the rewrite (the ref RECOVERY holds it), `tidied` the tip the rewrite made, `onto`
+`skipped` is why the end-of-run work did not start, `recovery` is the PR tip before the rewrite (the ref RECOVERY holds it), `tidied` the tip the rewrite made, `onto`
 the base tip under it, `reviewed` the last tip a review covered, `round` the reviews done, `open` the findings the
 fix batch is due for, `batch` the tip of the fix batch that the driver validated and named. The branch is rewritten
 once, before the first review, and never after it. A history that origin already has is never rewritten: then
@@ -56,7 +57,7 @@ def finish(state: State, pr: str) -> None:
     """Before the resume checks: a run that was stopped between the record of the tidied tip and the move of the
     PR branch left the branch at its recovery point. Move it now, so that git confirms the recorded ticket tips."""
     final = state.read()["run"]["final"]
-    if final.get("tidied") and git(".", "rev-parse", f"refs/heads/{pr}").stdout.strip() == final.get("recovery"):
+    if final["tidied"] and git(".", "rev-parse", f"refs/heads/{pr}").stdout.strip() == final["recovery"]:
         git(".", "checkout", "-q", "--detach")
         driver_merge.land(pr, final["tidied"], final["recovery"])
         git(".", "checkout", "-q", pr)
@@ -126,7 +127,7 @@ def _resolved(run, env: dict, base: str, onto: str) -> str:
     rebased tip. Returns "" or the error; then no rebase is open. A second conflict is an error."""
     files = git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
     values = {**_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
-    error, _ = run.agent("conflict", FINAL, ".", values, template="rebase-conflict", check={"detached": True})
+    error, _ = run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
     if not error and _open():  # the agent resolved and did not go on
         subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
     if _open():
@@ -213,7 +214,7 @@ def _prepared(run, tickets: list[Ticket]) -> str:
     """The one rewrite of the PR branch: recovery point, tidy, rebase, then the move. Returns "" or the error;
     after an error the branch is at its recovery point. Slot 1 is off the branch while the history is made."""
     final = run.state.read()["run"]["final"]
-    if final.get("tidied"):
+    if final["tidied"]:
         return "" if driver_merge.ancestor(final["tidied"], run.tip()) else (
             f"{run.pr} does not hold the tidied tip {final['tidied'][:7]}; {RECOVERY} holds the history before the tidy")
     base, onto, error = _base()
@@ -253,7 +254,7 @@ def _due(run, final: dict, tip: str) -> str:
     if final["round"] >= ROUNDS:
         return (f"the two review rounds are done and the tip {tip[:7]} of {run.pr} is not the reviewed tip "
                 f"{final['reviewed'][:7]}")
-    made = final.get("batch") or final["tidied"]
+    made = final["batch"] or final["tidied"]
     return "" if tip == made else (f"the tip {tip[:7]} of {run.pr} is not a tip the driver made: only {made[:7]} gets "
                                    f"a review, so the run goes on when {run.pr} is at {made[:7]} again")
 
@@ -263,11 +264,8 @@ def _recorded(state: dict, tip: str, todo: list[dict], evidence: list[str]) -> N
     the first round that is the fix batch; after the second, one question each (requirement 17), and no third."""
     record, final = state["run"], state["run"]["final"]
     final.update(reviewed=tip, round=final["round"] + 1, open=todo if final["round"] == 0 else [])
-    if todo and not final["open"]:
-        record["stops"] += 1
-        for finding in todo:
-            record["questions"].append(driver_decisions.question(KIND, "", _title(finding), evidence,
-                                                                 record["questions"], record["stops"]))
+    if not final["open"]:
+        driver_decisions.stop(record, KIND, "", [_title(finding) for finding in todo], evidence)
 
 
 def _review(run, final: dict, tip: str) -> str:
@@ -282,26 +280,14 @@ def _review(run, final: dict, tip: str) -> str:
     # The tidied tip is the reference: the driver made it, and no agent ran between the tickets' own checks and it
     # but the conflict agent of the rebase, which has the same check.
     found = driver_review.locked_changes(".", final["tidied"], _locked(run))
-    error, report = _asked(run, values, done, tip)
+    # The role is read-only: a review that changed slot 1 is restored and runs one more time, as a ticket review.
+    error, report = driver_review.undisturbed(
+        lambda: run.agent("final-reviewer", FINAL, ".", values, notes=["final-scoped"] * bool(done), fix_round=done),
+        ".", run.pr, tip, run.ledger, "End of run", "slot 1", "the final review")
     if error:
         return f"the final review: {error}"
     _settled(run, done, tip, values["range"], found + report["findings"])
     return ""
-
-
-def _asked(run, values: dict[str, str], done: int, tip: str) -> tuple[str, dict]:
-    """The final reviewer, until it leaves slot 1 as it was: ("", its report) or (the error, {}). The role is
-    read-only: a review that changed the slot is restored and runs one more time, as a ticket review does."""
-    for last in (False, True):
-        error, report = run.agent("final-reviewer", FINAL, ".", values, notes=["final-scoped"] * bool(done), fix_round=done)
-        left = driver_review.disturbed(".", run.pr, tip)
-        if left:
-            driver_review.restore(".", run.pr, tip)
-            run.ledger(f"End of run: a read-only role broke its rule: {left}; the driver restored slot 1 to {tip[:7]}"
-                       f"{'' if error or last else ' and runs the final review again'}.")
-        if error or not left:
-            break
-    return error or left, report
 
 
 def _settled(run, done: int, tip: str, covered: str, found: list[dict]) -> None:
@@ -318,8 +304,8 @@ def _settled(run, done: int, tip: str, covered: str, found: list[dict]) -> None:
     run.ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
                f"{len(todo)} critical or important finding{'s are' if len(todo) != 1 else ' is'} open.")
     if todo and done:
-        run.ledger(f"End of run: the operator decides on {len(todo)} question{'s' * (len(todo) > 1)} of kind {KIND} "
-                   f"in {run.out / 'decisions.json'}: a third review round is never started.")
+        run.ledger(f"End of run: {driver_decisions.decides(KIND, len(todo))} in {run.out / 'decisions.json'}: a third "
+                   "review round is never started.")
 
 
 def _named(commit: str, report: dict) -> str:
@@ -428,14 +414,14 @@ def _pushed(run, final: dict, tickets: list[Ticket]) -> tuple[str, list[str]]:
         return f"the reviewed tip {tip[:7]} is not the tip of {run.pr} with a green gate record: nothing is pushed", []
     if not shutil.which("gh"):
         return "gh is not on PATH: nothing is pushed", []
-    if final.get("pushed") != tip:
+    if final["pushed"] != tip:
         # The commit, not the branch name: what leaves the machine is the tip the review covered.
         sent = git(".", "push", "-q", "origin", f"{tip}:refs/heads/{run.pr}")
         if sent.returncode:
             return f"git push origin {run.pr} failed: {sent.stderr.strip()}", []
         run.state.update(lambda state: state["run"]["final"].update(pushed=tip))
         run.ledger(f"Pushed {run.pr} at {tip[:7]} to origin.")
-    url, error = (final["pr"], "") if final.get("pr") else _opened(run, final, tickets)
+    url, error = (final["pr"], "") if final["pr"] else _opened(run, final, tickets)
     return error, [] if error else [f"Pushed {run.pr} at {tip} to origin.", f"PR: {url}"]
 
 
@@ -479,7 +465,7 @@ def run(run, tickets: list[Ticket]) -> tuple[bool, list[str]]:
     """The end of the run, from where state.json says it is. Call it only when no slot runs a ticket.
     Returns (the end of run is BLOCKED, the lines the operator reads last)."""
     state = run.state.read()
-    reason, before = _skip(state), state["run"]["final"].get("skipped", "")
+    reason, before = _skip(state), state["run"]["final"]["skipped"]
     run.state.update(lambda new: new["run"]["final"].update(skipped=reason))
     if reason:
         if reason != before:

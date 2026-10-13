@@ -9,7 +9,10 @@
   hand-written validator that would grow with every role field.
 - **One process, one state writer.** Parallel tickets run as threads inside the driver; every
   `state.json` write is a read-modify-write under one lock, atomic through rename — no
-  cross-process locking, against the lost-update race the red-team found.
+  cross-process locking of writers, against the lost-update race the red-team found. A second
+  driver process is kept out as a whole: the driver holds one exclusive `flock` on
+  `.agent/implement/lock` for its run, and a second one exits 3 — the kernel frees the lock
+  with the process, against two drivers that write one state and move the same refs.
 - **End-of-run work starts only when every slot is idle** and the PR branch is never checked
   out in slot 1 while a ticket occupies it; merges into the PR branch use plumbing — serial
   tail, against a tidy rewriting history under a running ticket.
@@ -63,16 +66,18 @@ No database. Every record is a file under `.agent/implement/` or a git object; t
 | `state.json` | `run.landed[]` | `[ticket, the PR tip its merge made]`, in merge order, one entry per ticket | the tidy gives each ticket commit that tree |
 | `state.json` | `run.questions[]` | every question of the run; `answer` is null while it is open, and is set once | `decisions.json` is derived from it |
 | `state.json` | `run.gates`, `run.stops`, `run.agents[]` | counters and one `{ticket, role, entry, seconds, cost}` per agent run | the measurement table of the summary |
-| `state.json` | `run.final` | `{skipped, recovery, tidied, onto, base, commits, reviewed, round, open, batch, green_gates, pushed, pr}`; `round` 0..2 | the resume contract of the end of run |
+| `state.json` | `run.final` | `{skipped, recovery, tidied, onto, base, commits, reviewed, round, open, batch, green_gates, pushed, pr}`; `round` 0..2; every key is there from the start of the run | the resume contract of the end of run; a wrong key name fails |
 | `state.json` | `tickets[NN].phase` | one of `pending, test-writer, implement, gate, review, fix, merge, merged, blocked` | the state machine; any other value fails resume |
 | `state.json` | `tickets[NN].round` | 0..4 | the fix-loop budget |
 | `state.json` | `tickets[NN].test_writer_sha`, `locked` | set together by the test-writer; a correction moves `test_writer_sha` to its commit and only adds to `locked` | the locked-file check needs both |
 | `state.json` | `tickets[NN].held` | locked file -> the older test-writer commit that stays its reference after a correction that did not list it | a change the implementer made before the correction stays a finding |
+| `state.json` | `tickets[*].locked` of each merged ticket | unchanged in a later ticket since that ticket's `test_writer_sha` (a refactor ticket: since the commit its branch started from), at each review; equal to the PR tip after a resolved merge conflict | only a test-writer changes a locked file, so a later ticket cannot weaken the locked test of an earlier one |
 | `state.json` | `tickets[NN].note` | "" or the name of a prompt template | tells the next role what a ruling or an interrupt left |
 | `state.json` | `tickets[NN].tip` | must be on `ticket/NN` at resume; for a merged ticket, in the PR branch | an unverifiable tip returns the ticket to `implement` from the test-writer commit |
 | `state.json` | `tickets[NN].green_gates[]` | each names one commit and settles only that commit | a settled gate is never rerun |
 | `state.json` | `tickets[NN].slot` | unique among running tickets | one ticket per slot |
 | `state.json` | whole file | written under one lock, rename-atomic | no lost update between parallel tickets |
+| `.agent/implement/lock` | whole file | exclusive `flock`, non-blocking, held by the one driver that runs; not taken by `--dry-run` | no second driver on the same state, slots and refs |
 | report | `status` | enum DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, BLOCKED | schema violation otherwise |
 | report | `commits[]` | on `ticket/NN`, newer than the role's start | reports cannot claim old work |
 | report (implementer) | `commits[]` | at least one | an empty implementation is a violation |

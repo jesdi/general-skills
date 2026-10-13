@@ -13,6 +13,7 @@ import driver
 import driver_final
 import driver_merge
 import driver_report
+import driver_state
 import driver_summary
 import driver_tidy
 import test_final
@@ -500,8 +501,8 @@ def test_without_an_origin_the_summary_says_that_the_final_review_did_not_run(tm
     assert rig.led("End-of-run work skipped") == ["End-of-run work skipped: the repository has no origin remote."]
     assert ("1 of 1 tickets are merged into feat/csv.\nThe end-of-run work (rebase, tidy, final review, push) did not run: "
             "the repository has no origin remote.\n\n| Measure") in rig.out
-    assert driver_summary.render({"run": {"pr_branch": "feat/x", "gates": 0, "stops": 0, "agents": []}, "tickets": {}}
-                                 ).startswith("0 of 0 tickets are merged into feat/x.\n\n| Measure")
+    fresh = {"pr_branch": "feat/x", "gates": 0, "stops": 0, "agents": [], "final": driver_state._final()}
+    assert driver_summary.render({"run": fresh, "tickets": {}}).startswith("0 of 0 tickets are merged into feat/x.\n\n| Measure")
 
 
 @pytest.mark.parametrize("name", ["final-reviewer", "final-fixer", "rebase-conflict"])

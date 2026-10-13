@@ -21,6 +21,8 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
+One driver runs in a repository at a time. The driver holds a kernel file lock on `.agent/implement/lock` for the whole run, and a second driver ends with exit 3 and names the lock. The lock ends with its process, so a driver that was killed leaves no lock behind. `--dry-run` takes no lock.
+
 ## Flags
 
 | Flag | Meaning |
@@ -52,7 +54,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
 | 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
-| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
+| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
 
 With `--unattended`, the `--stage-json` file holds `{"stage": "implement", "status": …}`:
@@ -70,6 +72,7 @@ Everything is under `.agent/`, which is never committed.
 | Path | Content |
 |---|---|
 | `.agent/implement/state.json` | The resume contract: the run record and one record for each ticket (`driver_state.py`). |
+| `.agent/implement/lock` | An empty file. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
 | `.agent/implement/ledger.md` | One plain sentence for each event. Only the driver writes it, and it reads no fact from it. |
 | `.agent/implement/summary.md` | The result in sentences, and the measurement table: gates, agents, wall time, fix rounds, human stops, cost. |
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |
@@ -91,8 +94,8 @@ A ticket is ready when each ticket in its **Blocked by** line is merged and no r
 1. **test-writer** (`prompts/test-writer.md`). It writes one black-box test for each criterion through the Seam and commits them red. Those files are locked. A ticket with Seam `none — refactor` has no test-writer.
 2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green.
 3. **Gate.** The driver runs `--gate` on the ticket tip.
-4. **Review.** The driver compares each locked file with the test-writer commit. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
-5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. A second conflict blocks the ticket.
+4. **Review.** The driver compares each locked file with the test-writer commit: the locked files of the ticket, and the locked files of each ticket that is merged. A file that differs is a critical finding `locked file changed: <path>`. A refactor ticket has no test-writer commit, so the driver compares with the commit that the ticket branch started from. Only a test-writer changes a locked file: the test-writer of a later ticket can add a test to a file that an earlier ticket locked, and lists that file in `locked`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
+5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file: the locked files of the ticket must be as the reviewed tip has them, and the locked files of each merged ticket as the PR branch has them. A second conflict blocks the ticket.
 
 Rules for each agent:
 
@@ -189,7 +192,7 @@ Answer with `--answer <question id>=<option id>` on the next run, or through the
 
 | Check | Where it lives |
 |---|---|
-| Locked tests with a demonstrated red | `driver_report.py` `_proof_errors`: each red line of the test-writer report must be in its log. `driver_review.py` `locked_findings`: a locked file that differs from the test-writer commit is a critical finding, before each review. |
+| Locked tests with a demonstrated red | `driver_report.py` `_proof_errors`: each red line of the test-writer report must be in its log. `driver_review.py` `locked_findings`: a locked file that differs from the test-writer commit is a critical finding, before each review. `others` adds the locked files of each merged ticket to that check, so a later ticket cannot change the locked test of an earlier one; `driver.py` `_resolved` makes the same check on a resolved merge conflict before it lands. |
 | One mutation proof for each locked test | `prompts/reviewer.md` asks for one proof for each locked test. `driver_report.py` `_locked_errors` and `_proof_errors` reject a first review with no proof for a locked test file, or with a red line that is not in the log. `driver_review.py` `follow` finds the proofs that a fix makes due again. |
 | One independent correctness pass for each risky ticket | `driver_fixloop.py` `_cast` adds the pass for a ticket with a **Risk** line. `driver_review.py` `correctness_entry` picks an entry of another provider. |
 | One full gate for each candidate | `driver_gate.py` `run`, called from `driver.py` `_gated`: one record for each commit the driver is about to trust. Green is exit 0 on a tree that is clean before and after, with HEAD not moved. |

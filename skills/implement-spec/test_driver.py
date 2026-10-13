@@ -1,4 +1,6 @@
 """In-process driver tests: the same seam as test_cli.py without the launcher, so coverage sees it."""
+import contextlib
+import fcntl
 import json
 import os
 import subprocess
@@ -226,6 +228,32 @@ def test_a_process_the_agent_leaves_behind_is_stopped(repo, tmp_path, capsys):
     time.sleep(1)
     assert not (tmp_path / "late.txt").exists()
     assert "LATE" not in (tmp_path / ".agent/implement/01/implementer-0.log").read_text()
+
+
+def test_the_process_group_of_an_agent_is_signalled_only_while_its_leader_is_not_reaped(tmp_path, monkeypatch):
+    """Final review, correctness 4: when the leader is reaped, its id can be the group of another process."""
+    seen, real = [], os.killpg
+
+    def killpg(group, sig):
+        # WNOWAIT: look and do not reap. A leader that is reaped already is a ChildProcessError here.
+        ended = os.waitid(os.P_PID, group, os.WEXITED | os.WNOWAIT | os.WNOHANG) is not None
+        seen.append((ended, group in driver_agents.LIVE))
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            real(group, sig)
+
+    monkeypatch.setattr(driver_agents, "STOPPED", False)
+    monkeypatch.setattr(driver_agents.os, "killpg", killpg)
+    prompt, log = tmp_path / "prompt.md", tmp_path / "agent.log"
+    prompt.write_text("")
+    assert driver_agents.launch(["sh", "-c", "echo out; exit 7"], prompt, log, 30, str(tmp_path)) == 7
+    assert seen == [(True, True)] and log.read_text() == "out\n"  # ended, not reaped, and stop() still knows it
+    begin = time.monotonic()
+    assert driver_agents.launch(["sh", "-c", "sleep 30"], prompt, log, 0.2, str(tmp_path)) is None
+    assert seen[1:] == [(False, True)] and 0.2 <= time.monotonic() - begin < 10
+    # After the launch the leader is reaped, so stop() has no group to signal.
+    assert not driver_agents.LIVE
+    driver_agents.stop()
+    assert len(seen) == 2 and driver_agents.STOPPED
 
 
 def test_concurrent_first_runs_of_the_launcher_all_succeed(tmp_path):
@@ -526,6 +554,31 @@ def test_an_interrupt_kills_the_running_agents_and_stops_the_driver_at_once(repo
     assert driver_agents.STOPPED and not driver_agents.LIVE and not (tmp_path / "late.txt").exists()
     assert state_of(tmp_path)["tickets"]["01"]["phase"] == "implement"  # not BLOCKED: a rerun starts it again
     assert "interrupted; run it again to resume" in capsys.readouterr().out
+
+
+def test_a_second_driver_on_the_same_repository_exits_3_and_changes_nothing(repo, tmp_path, capsys):
+    """Final review, correctness 1: two drivers on one state.json lose updates and move the same refs."""
+    repo(t01=ticket("01", **REFACTOR))
+    lock = tmp_path / ".agent/implement/lock"
+    lock.parent.mkdir(parents=True)
+    with lock.open("w") as other:  # the first driver: it holds the kernel lock while it runs
+        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
+        assert (code, out) == (3, "implement-spec: another driver runs in this repository: it holds the lock "
+                                  ".agent/implement/lock. Wait until it ends, then run the driver again.\n")
+        assert ledger == [] and not (tmp_path / ".agent/implement/state.json").exists() and branches() == ["feat/x"]
+        assert not Path(f"{tmp_path}-runner.calls").exists()
+        assert run(capsys) == (0, "max frontier width: 1\n")  # --dry-run changes nothing, so it needs no lock
+    # The lock ends with its holder, also one that was killed: no file is left to remove by hand.
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT)
+    assert code == 0 and "1 of 1 tickets are merged into feat/x." in out
+    assert walk(tmp_path, capsys, "exit 9\n")[0] == 0  # the run let its lock go when it ended
+
+
+def test_a_wrong_call_takes_no_lock_and_makes_no_file(repo, tmp_path, capsys):
+    repo(t01="nothing here\n")
+    code, _, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 3 and out.startswith("01-t.md: missing title\n") and not (tmp_path / ".agent/implement").exists()
 
 
 # Fix round 1 of ticket 03.

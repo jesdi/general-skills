@@ -3,21 +3,24 @@
     {"run": {"revision", "pr_branch", "gates", "stops", "agents": [{ticket, role, entry, seconds, cost}],
              "questions": [the questions of every stop, see driver_decisions],
              "start": the PR tip when the run began, "landed": [[ticket, the PR tip its merge made]] in merge order,
-             "final": the record of the end of run, see driver_final},
+             "final": the record of the end of run, see `_final` and driver_final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}
 
 `note` names the prompt template of the ruling that sent the ticket back to a role; "" when there is none.
 `held` maps a locked file to the test-writer commit that is its reference when that is not `test_writer_sha`.
 
 Ticket threads are the only writers and they share one State, so no update is lost between two tickets.
+`lock` keeps a second driver process out for the whole run: the lock of State is for the threads of one process.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import threading
 import uuid
 from pathlib import Path
+from typing import IO
 
 from driver_slots import git, path
 
@@ -27,6 +30,13 @@ PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": [],
             "slot": None, "note": "", "held": {}}
+
+
+def _final() -> dict:
+    """The record of the end of run before it starts. Every key is here, so a reader takes each one with [] and a
+    wrong name fails. driver_final says what each key means."""
+    return {"skipped": "", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
+            "reviewed": None, "round": 0, "open": [], "batch": None, "green_gates": [], "pushed": None, "pr": None}
 
 
 class State:
@@ -43,7 +53,7 @@ class State:
             state.setdefault("run", {
                 "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0, "agents": [],
                 "questions": [], "start": git(".", "rev-parse", f"refs/heads/{pr_branch}").stdout.strip(),
-                "landed": [], "final": {"reviewed": None, "round": 0, "open": [], "green_gates": []}})
+                "landed": [], "final": _final()})
             tickets = state.setdefault("tickets", {})
             for number in numbers:
                 tickets.setdefault(number, _ticket())
@@ -62,6 +72,20 @@ class State:
 
     def ticket(self, number: str, **fields) -> dict:
         return self.update(lambda state: state["tickets"][number].update(fields))["tickets"][number]
+
+
+def lock(path: Path) -> IO | None:
+    """One driver per repository: the exclusive kernel lock on `path`, held while the returned file is open, or
+    None when another process holds it. The kernel frees the lock when its holder ends, also when it is killed,
+    so no lock is stale and no file is removed by hand. A child process does not get the file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    held = path.open("a")
+    try:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        held.close()
+        return None
+    return held
 
 
 def _ancestor(commit: str, of: str) -> bool:

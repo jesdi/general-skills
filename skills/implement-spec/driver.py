@@ -25,6 +25,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import driver_agents
 import driver_answers
@@ -45,6 +46,7 @@ from driver_slots import git
 
 OUT = Path(".agent/implement")
 STATE = OUT / "state.json"
+LOCK = OUT / "lock"  # one driver process per repository holds it for its whole run (driver_state.lock)
 DECISIONS = OUT / "decisions.json"
 PAGE = Path(".agent/implement-review.html")
 # `--only` is test only: one role on the first ticket, with no gate, review or merge.
@@ -155,40 +157,62 @@ def _hygiene(slot: str, branch: str, tip: str) -> str:
     return f"{problem}; the driver reset the slot to {tip[:7]}"
 
 
-def _outcome(role: str, code: int | None, minutes: float, report: Path, context: dict) -> tuple[str, str]:
+def _outcome(role: str, code: int | None, minutes: float, report: Path, context: dict, alone: Callable[[], bool],
+             detached: bool) -> tuple[str, str]:
     """(why this attempt is rejected, the template lines the rerun prompt gets); ("", "") when accepted."""
     branch, tip = context["branch"], context["start"]
     # Two read-only agents share a slot: the driver resets nothing under the other one. The review checks the slot
     # when both are done.
     # `detached`: the agent works on a rebase that is open on a detached HEAD, so there is no branch to hold.
-    shared = role in driver_agents.READ_ONLY or context.get("detached")
+    shared = role in driver_agents.READ_ONLY or detached
     if not shared and (moved := _hygiene(context["repo"], branch, tip)):
         return moved, driver_agents.render("moved", {"branch": branch, "tip": tip})
     if code is None:
-        return f"timed out after {minutes:g} minutes", _timed_out(role, minutes, context)
+        return f"timed out after {minutes:g} minutes", _timed_out(role, minutes, context, alone)
     error = "; ".join(driver_report.validate(context["template"], str(report), context))
     return error, driver_agents.render("rerun", {"error": error})
 
 
-def _timed_out(role: str, minutes: float, context: dict) -> str:
+def _timed_out(role: str, minutes: float, context: dict, alone: Callable[[], bool]) -> str:
     """The template lines for the rerun after a timeout. A timeout is not an agent fault: the tree stays as it is.
     A read-only role has no work to keep, so its rerun starts from the clean tip, unless another agent still
     works in the slot (`alone`): the review restores the slot when both are done."""
     values = {"minutes": f"{minutes:g}", "tip": context["start"]}
     if role not in driver_agents.READ_ONLY:
         return driver_agents.render("timeout", values)
-    if context.get("alone", lambda: True)():
+    if alone():
         driver_review.restore(context["repo"], context["branch"], context["start"])
         return driver_agents.render("timeout-restored", values)
     return driver_agents.render("timeout-shared", values)
 
 
+def _prompt(template: str, values: dict[str, str], notes: tuple | list, seen: str) -> str:
+    """The first prompt of a role: its template, then the lines of each template `notes` names and the same ending
+    again, as a rerun prompt gets its rejection."""
+    text = driver_agents.render(template, {**values, "report": seen})
+    if notes:
+        text += "".join(driver_agents.render(note, values) for note in notes) + driver_agents.tail(text, seen)
+    return text
+
+
+def _used(role: str, number: str, entry: str, seconds: float, log: Path, error: str, run: Run) -> None:
+    """One attempt of an agent is over: its time and cost go to state.json, and the ledger says how it ended."""
+    cost = driver_agents.cost(log)
+    used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": float(cost or 0)}
+    run.state.update(lambda state: state["run"]["agents"].append(used))
+    _ledger(f"{_who(number)}: {role} ran on {entry} for {seconds:.1f}s{f', cost {cost} USD' if cost else ''}: "
+            f"{error or 'report accepted'}.")
+
+
 def _agent(role: str, number: str, slot: str, values: dict[str, str], run: Run, notes: tuple | list = (),
-           entry: str = "", fix_round: int = 0, check: dict | None = None, template: str = "") -> tuple[str, dict]:
+           entry: str = "", fix_round: int = 0, check: dict | None = None, template: str = "",
+           alone: Callable[[], bool] = lambda: True, detached: bool = False) -> tuple[str, dict]:
     """Run one role in its slot, with at most one rerun. Returns ("", report) when accepted, else (the last error, {}).
     `notes` names templates whose lines the first prompt gets, as a rerun prompt gets its rejection. `entry` is the
     model entry when it is not the first of the role's list, `fix_round` numbers the files, and `check` adds to what
-    the report validation knows. `template` names the prompt, with its schema, when the role has more than one."""
+    the report validation knows. `template` names the prompt, with its schema, when the role has more than one.
+    `alone` says whether no other agent works in the slot now, and `detached` that the agent works on a detached
+    HEAD: the two are for the launcher, not for the validation."""
     folder, entry = OUT / number, entry or run.models[role][0]
     folder.mkdir(parents=True, exist_ok=True)
     report, log, prompt = (folder / f"{role}-{fix_round}{suffix}" for suffix in (".json", ".log", ".prompt.md"))
@@ -198,9 +222,7 @@ def _agent(role: str, number: str, slot: str, values: dict[str, str], run: Run, 
                "template": template or role, **(check or {})}
     argv = ([run.args.runner, role, os.path.relpath(prompt, slot), seen] if run.args.runner
             else driver_agents.command(role, entry, seen))
-    text = driver_agents.render(context["template"], {**values, "report": seen})
-    if notes:
-        text += "".join(driver_agents.render(note, values) for note in notes) + driver_agents.tail(text, seen)
+    text = _prompt(context["template"], values, notes, seen)
     minutes, error = run.args.timeout[role], ""
     for _ in range(2):
         prompt.write_text(text)
@@ -208,12 +230,8 @@ def _agent(role: str, number: str, slot: str, values: dict[str, str], run: Run, 
         start = time.monotonic()
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
-        error, lines = _outcome(role, code, minutes, report, context)
-        cost = driver_agents.cost(log)
-        used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": float(cost or 0)}
-        run.state.update(lambda state: state["run"]["agents"].append(used))
-        _ledger(f"{_who(number)}: {role} ran on {entry} for {seconds:.1f}s{f', cost {cost} USD' if cost else ''}: "
-                f"{error or 'report accepted'}.")
+        error, lines = _outcome(role, code, minutes, report, context, alone, detached)
+        _used(role, number, entry, seconds, log, error, run)
         if not error:
             return "", json.loads(report.read_text())
         # The rerun prompt is the first prompt, the rejection, then the same ending again (requirement 14).
@@ -260,11 +278,12 @@ def _values(ticket: driver_tickets.Ticket, slot: str, run: Run) -> dict[str, str
             "writer_report": os.path.relpath(OUT / ticket.number / "test-writer-0.json", slot)}
 
 
-def _restored(number: str, slot: str, entry: dict) -> list[str]:
+def _restored(number: str, slot: str, entry: dict, others: list[str]) -> list[str]:
     """Before a correction: each locked file that the implementer changed, in a commit or in the tree, goes back to
     its reference version in the tree (requirement 7). The correction then starts from the locked version, and its
-    commit carries that version plus its own change: no change of the implementer becomes the reference."""
-    paths = driver_review.restore_locked(slot, entry)
+    commit carries that version plus its own change: no change of the implementer becomes the reference.
+    `others` are the locked files of the merged tickets."""
+    paths = driver_review.restore_locked(slot, entry, others)
     for path in paths:
         _ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
                 "the tree, so the correction starts from the locked version.")
@@ -285,20 +304,22 @@ def _roles(ticket: driver_tickets.Ticket, number: int, run: Run) -> str:
     if notes == ["interrupted"]:
         _ledger(f"Ticket {ticket.number}: resumed in slot {number} with the work the interrupted {roles[0]} left.")
     values = {**_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
+    # The locked files of the merged tickets: a correction may not make an implementer's change of one the reference.
+    others = driver_review.others(run.state.read()["tickets"], ticket.number)
     for role in roles:
         run.state.ticket(ticket.number, phase=DURING.get(role, "review"))
         values["start_sha"] = start
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
         if check["correction"]:
-            check["restored"] = _restored(ticket.number, slot, entry)
+            check["restored"] = _restored(ticket.number, slot, entry, others)
         error, report = run.agent(role, ticket.number, slot, values, notes=notes, check=check)
         if error:
             return f"the {role}: {error}"
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":  # only its schema types `locked`
             # A correction lists only the files it corrected: the earlier ones stay locked.
-            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"]))
+            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"], others))
             values["locked"] = " ".join(facts["locked"])
         run.state.ticket(ticket.number, phase=AFTER.get(role, "review"), note="", **facts)
         start, notes = facts["tip"], []
@@ -330,10 +351,14 @@ def _resolved(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str, file
     with conflicts in `files`, and the agent commits it. Returns (the new ticket tip, "") or ("", why the ticket
     is blocked)."""
     number = ticket.number
-    values = {**_values(ticket, slot, run), "start_sha": tip, "pr_sha": run.tip(), "files": " ".join(files)}
+    pr, tickets = run.tip(), run.state.read()["tickets"]
+    values = {**_values(ticket, slot, run), "start_sha": tip, "pr_sha": pr, "files": " ".join(files)}
     error, _ = run.agent("conflict", number, slot, values)
-    # The resolution may not touch a locked test: each locked file is as the reviewed tip has it.
-    locked = driver_review.locked_changes(slot, tip, run.state.read()["tickets"][number]["locked"])
+    # The resolution may not touch a locked test: each locked file of the ticket is as the reviewed tip has it, and
+    # each locked file of a merged ticket is as the PR tip has it. The review found that the ticket did not change
+    # one of those, so the merge has the version of the PR branch.
+    locked = (driver_review.locked_changes(slot, tip, tickets[number]["locked"])
+              + driver_review.locked_changes(slot, pr, driver_review.others(tickets, number)))
     if error := error or "; ".join(finding["title"] for finding in locked):
         driver_merge.abort(slot)  # the driver's own open merge; nothing to close when the agent committed it
         return "", f"the conflict agent: {error}"
@@ -350,22 +375,30 @@ def _landed(state: dict, number: str, new: str) -> None:
     state["run"]["landed"] = [one for one in state["run"]["landed"] if one[0] != number] + [[number, new]]
 
 
+def _committed(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str) -> tuple[str, str, str, str]:
+    """The merge of the ticket tip `tip` with the PR tip, as a commit that no ref holds yet; a conflict goes to the
+    conflict agent, once. Returns (the ticket tip, the PR tip the merge is made on, the commit to land, "") or, in
+    the last place, why the ticket is blocked."""
+    message = f"Merge ticket/{ticket.number} into {run.pr}"
+    old = run.tip()
+    new, error = driver_merge.commit(old, tip, message)
+    if error and (files := driver_merge.begin(slot, old)):
+        tip, error = _resolved(ticket, slot, run, tip, files)
+        if not error:
+            # Only another hand moves the PR branch now. A merge that conflicts again blocks the ticket.
+            old = run.tip()
+            new, error = driver_merge.commit(old, tip, message)
+            error = error and f"after the conflict agent, {error}"
+    return tip, old, new, error
+
+
 def _merged(ticket: driver_tickets.Ticket, slot: str, run: Run) -> str:
     """Merge the reviewed tip into the PR branch, then delete the ticket branch. Returns "" or why the ticket
     is blocked. The slot is on the ticket branch at that tip."""
     number, branch = ticket.number, f"ticket/{ticket.number}"
     # Merges are serial, the merge gate and the conflict agent included: the commit the gate saw is the commit that lands.
     with run.merging:
-        tip = run.state.ticket(number, phase="merge")["tip"]
-        old = run.tip()
-        new, error = driver_merge.commit(old, tip, f"Merge {branch} into {run.pr}")
-        if error and (files := driver_merge.begin(slot, old)):
-            tip, error = _resolved(ticket, slot, run, tip, files)
-            if not error:
-                # Only another hand moves the PR branch now. A merge that conflicts again blocks the ticket.
-                old = run.tip()
-                new, error = driver_merge.commit(old, tip, f"Merge {branch} into {run.pr}")
-                error = error and f"after the conflict agent, {error}"
+        tip, old, new, error = _committed(ticket, slot, run, run.state.ticket(number, phase="merge")["tip"])
         if not error and new != old:
             # A merge commit, or the commit of the conflict agent, is a tree no gate has seen. It is gated in the
             # ticket's own slot before the PR branch moves; a fast-forward of a gated tip has its green record.
@@ -389,16 +422,11 @@ def _blocked(number: str, run: Run, line: int) -> None:
 
     def change(state: dict) -> None:
         state["tickets"][number].update(fields, phase="blocked")
-        asked = state["run"]["questions"]
-        state["run"]["stops"] += bool(subjects)
-        for subject in subjects:
-            asked.append(driver_decisions.question(kind, number, subject, [report, f"{OUT / 'ledger.md'}:{line}"],
-                                                   asked, state["run"]["stops"]))
+        driver_decisions.stop(state["run"], kind, number, subjects, [report, f"{OUT / 'ledger.md'}:{line}"])
 
     run.state.update(change)
     if subjects:
-        _ledger(f"Ticket {number}: the operator decides on {len(subjects)} question{'s' * (len(subjects) > 1)} of "
-                f"kind {kind} in {DECISIONS}.")
+        _ledger(f"Ticket {number}: {driver_decisions.decides(kind, len(subjects))} in {DECISIONS}.")
 
 
 def _ticket(ticket: driver_tickets.Ticket, number: int, run: Run) -> bool:
@@ -563,10 +591,26 @@ def _ended(final: dict, args, failed: bool) -> int:
     still = driver_decisions.document(final["run"])["questions"]
     code = 2 if driver_decisions.parked(final["run"]["questions"]) else int(bool(blocked))
     if args.unattended:
-        _stage(args.stage_json, code, len(still), blocked, bool(final["run"]["final"].get("pushed")))
+        _stage(args.stage_json, code, len(still), blocked, bool(final["run"]["final"]["pushed"]))
     else:
         print(driver_decisions.text(still, str(driver_answers.FILE), str(PAGE)), end="")
     return code
+
+
+def _worked(tickets: list[driver_tickets.Ticket], slots: int, run: Run) -> tuple[bool, list[str]]:
+    """The tickets, then the end of run: (the end of run is BLOCKED, the lines it adds to the summary)."""
+    only = run.args.only
+    # The PR branch is checked out in no slot while tickets run: a merge moves its ref and no tree changes under it.
+    # A kept slot 1 is on its ticket branch already.
+    if 1 not in run.kept.values():
+        git(".", "checkout", "-q", "--detach")
+    try:
+        _ticket(tickets[0], 1, run) if only else _tickets(tickets, slots, run)
+    finally:
+        if driver_slots.release("."):  # slot 1 keeps the uncommitted work of a blocked ticket; else it goes back
+            git(".", "checkout", "-q", run.pr)
+    # Every ticket thread has ended, so every slot is idle: only now may the end of run rewrite the PR branch.
+    return (False, []) if only else driver_final.run(run, tickets)
 
 
 def _run(tickets: list[driver_tickets.Ticket], models: dict[str, list[str]], args, kept: dict[str, int]) -> int:
@@ -581,17 +625,7 @@ def _run(tickets: list[driver_tickets.Ticket], models: dict[str, list[str]], arg
     run = Run(args, models, state, pr, kept)
     if args.unattended and args.stage_json:
         Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
-    # The PR branch is checked out in no slot while tickets run: a merge moves its ref and no tree changes under it.
-    # A kept slot 1 is on its ticket branch already.
-    if 1 not in kept.values():
-        git(".", "checkout", "-q", "--detach")
-    try:
-        _ticket(tickets[0], 1, run) if args.only else _tickets(tickets, slots, run)
-    finally:
-        if driver_slots.release("."):  # slot 1 keeps the uncommitted work of a blocked ticket; else it goes back
-            git(".", "checkout", "-q", pr)
-    # Every ticket thread has ended, so every slot is idle: only now may the end of run rewrite the PR branch.
-    failed, lines = (False, []) if args.only else driver_final.run(run, tickets)
+    failed, lines = _worked(tickets, slots, run)
     final = state.read()
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)
@@ -632,8 +666,8 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _arguments(argv)
+def _validated(args: argparse.Namespace) -> tuple[list[driver_tickets.Ticket], dict[str, list[str]], dict[str, int]] | None:
+    """(the tickets, the models, the kept slots) of a valid call, or None with each error printed."""
     errors = [] if args.gate else ["--gate is required: the command the driver runs as the gate"]
     if not (args.spec or args.dry_run):
         errors.append("--spec is required: the spec file the prompts point at")
@@ -648,10 +682,35 @@ def main(argv: list[str] | None = None) -> int:
     errors += model_errors + ticket_errors + driver_review.missing(tickets) + driver_final.missing()
     for error in errors:
         print(error)
-    if errors:
-        return 3
+    return None if errors else (tickets, models, kept)
+
+
+def _width(tickets: list[driver_tickets.Ticket]) -> None:
     print(f"max frontier width: {driver_tickets.max_frontier_width(tickets)}")
-    return 0 if args.dry_run else _run(tickets, models, args, kept)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _arguments(argv)
+    if args.dry_run:  # it changes nothing, so it needs no lock
+        if valid := _validated(args):
+            _width(valid[0])
+        return 0 if valid else 3
+    # A wrong first call makes no file: it ends before the lock. Where an earlier run left its folder, the lock
+    # comes first, because the driver that holds it changes what the checks read.
+    if not (OUT.exists() or _validated(args)):
+        return 3
+    held = driver_state.lock(LOCK)
+    if not held:
+        print(f"implement-spec: another driver runs in this repository: it holds the lock {LOCK}. Wait until it "
+              "ends, then run the driver again.")
+        return 3
+    with held:
+        # Only what is read under the lock is trusted: no other driver changes state.json, the slots or the refs.
+        if not (valid := _validated(args)):
+            return 3
+        tickets, models, kept = valid
+        _width(tickets)
+        return _run(tickets, models, args, kept)
 
 
 if __name__ == "__main__":

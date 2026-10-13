@@ -20,12 +20,12 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
 
 def _end(run: dict) -> list[str]:
     """What the end of run did, from its record: without this sentence a run with no final review reads as done."""
-    final = run.get("final", {})
-    if final.get("skipped"):
+    final = run["final"]
+    if final["skipped"]:
         return [f"The end-of-run work (rebase, tidy, final review, push) did not run: {final['skipped']}."]
-    if final.get("pushed"):
-        return [f"{run['pr_branch']} is pushed at {final['pushed'][:7]}; its PR is {final.get('pr') or 'not open'}."]
-    if final.get("reviewed"):
+    if final["pushed"]:
+        return [f"{run['pr_branch']} is pushed at {final['pushed'][:7]}; its PR is {final['pr'] or 'not open'}."]
+    if final["reviewed"]:
         return [f"The final review covers {run['pr_branch']} up to {final['reviewed'][:7]}. Nothing is pushed."]
     return []
 

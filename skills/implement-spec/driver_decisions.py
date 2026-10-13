@@ -100,6 +100,19 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "answer": None}
 
 
+def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str]) -> None:
+    """One stop: `run` of state.json counts it and gets one open question of `kind` per subject. No subject is no
+    stop. Only this function counts `run.stops` and adds to `run.questions`."""
+    run["stops"] += bool(subjects)
+    for subject in subjects:
+        run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"]))
+
+
+def decides(kind: str, subjects: int) -> str:
+    """What the ledger says about a stop, without its owner and the path of decisions.json."""
+    return f"the operator decides on {subjects} question{'s' * (subjects > 1)} of kind {kind}"
+
+
 def document(run: dict) -> dict:
     """decisions.json for `run` of state.json: the run, its open questions, and the revision that answers bind to."""
     body = {"run": run["revision"],

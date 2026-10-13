@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
@@ -22,9 +23,11 @@ TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 READ_ONLY = ("reviewer", "correctness", "final-reviewer")
-LIVE: set[int] = set()  # the process groups of the agents that run now
+# The process groups of the agents that run now. A group is here only while its leader is not reaped: then no other
+# process can have its id.
+LIVE: set[int] = set()
 STOPPED = False  # set by stop(): no agent starts after it
-_LIVE = threading.Lock()  # an agent starts or the run stops, never both at once
+_LIVE = threading.Lock()  # an agent starts, an agent is reaped or the run stops, never two at once
 
 
 def split(entry: str) -> tuple[str, str, str]:
@@ -98,25 +101,41 @@ def launch(argv: list[str], prompt: Path, log: Path, seconds: float, slot: str =
                                     start_new_session=True)
             LIVE.add(proc.pid)
         try:
-            return proc.wait(seconds)
-        except subprocess.TimeoutExpired:
-            return None
+            ended = _ended(proc.pid, seconds)
         finally:
             # Every exit path, Ctrl-C too: nothing of the agent may write to the tree or the log after this.
-            # No such group = all gone; macOS answers EPERM for a group of zombies.
-            _kill(proc.pid)
-            proc.wait()
-            LIVE.discard(proc.pid)
+            # The leader is not reaped yet, so the id is still the id of its group. Only then it is reaped, and
+            # stop() signals under the same lock: no group gets a signal after its leader is reaped.
+            with _LIVE:
+                _kill(proc.pid)
+                LIVE.discard(proc.pid)
+            code = proc.wait()
+        return code if ended else None
+
+
+def _ended(pid: int, seconds: float) -> bool:
+    """Wait at most `seconds` until the child `pid` has ended, and do not reap it. True when it has ended.
+    ponytail: waitid has no timeout, so this polls as `Popen.wait(timeout)` does, at most each 50 ms."""
+    end, pause = time.monotonic() + seconds, 0.0005
+    while not os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG):
+        left = end - time.monotonic()
+        if left <= 0:
+            return False
+        pause = min(pause * 2, left, 0.05)
+        time.sleep(pause)
+    return True
 
 
 def _kill(group: int) -> None:
+    """SIGKILL to a process group whose leader is not reaped. No such group = all gone; macOS answers EPERM for a
+    group of zombies."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(group, signal.SIGKILL)
 
 
 def stop() -> None:
     """Kill every running agent and let no other start. For an interrupted run: its ticket threads would let the
-    agents finish, and would start the next ones."""
+    agents finish, and would start the next ones. Each group in LIVE has a leader that is not reaped."""
     global STOPPED
     with _LIVE:
         STOPPED = True

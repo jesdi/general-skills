@@ -45,6 +45,12 @@ class Job:
                 "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
                 "findings": self.findings(review), "proofs": " ".join(self.again)}
 
+    def guard(self) -> tuple[list[str], str]:
+        """What the locked-file check knows beside the ticket record: (the locked files of the merged tickets, the
+        commit the ticket branch started from)."""
+        tickets = self.run.state.read()["tickets"]
+        return driver_review.others(tickets, self.ticket.number), driver_review.started(self.slot, self.run.pr)
+
 
 def entry(models: dict[str, list[str]], round: int) -> str:
     """The implementer entry a fix round runs on: the first in rounds 1 and 2; in rounds 3 and 4 the next one
@@ -75,51 +81,37 @@ def _told(job: Job, findings: list[dict]) -> list[dict]:
     return findings
 
 
-def _attempt(job: Job, cast: list[tuple[str, str]], notes: list[str], locked: list[str]) -> tuple[str, str, list[dict]]:
-    """Run the agents of one review at once in the one slot: (why the ticket is blocked, what they left in the
-    slot, the reports). The driver writes nothing to the tree of the slot while two agents run. When all are
-    done, a slot they changed goes back to the tip: a read-only role has no work to keep."""
+def _attempt(job: Job, cast: list[tuple[str, str]], notes: list[str], locked: list[str]) -> tuple[str, list[dict]]:
+    """Run the agents of one review at once in the one slot: (why the ticket is blocked, the reports). The driver
+    writes nothing to the tree of the slot while two agents run: `driver_review.undisturbed` checks the slot when
+    all are done."""
     run, number, values, running = job.run, job.ticket.number, job.pointers(job.round - 1), [role for role, _ in cast]
 
     def call(role: str, entry: str) -> tuple[str, dict]:
         mine = notes if role == "reviewer" else notes[-1:] * bool(job.previous)
         # The first review of a tip is the "round 1" of the report contract: a proof for each locked test.
         check = {} if job.previous or role != "reviewer" else {"round": 1, "locked": locked}
-        check["alone"] = lambda: len(running) == 1
         try:
-            return run.agent(role, number, job.slot, values, notes=mine, entry=entry, fix_round=job.round, check=check)
+            return run.agent(role, number, job.slot, values, notes=mine, entry=entry, fix_round=job.round, check=check,
+                             alone=lambda: len(running) == 1)
         finally:
             running.remove(role)
 
     with ThreadPoolExecutor(len(cast)) as pool:
         done = list(pool.map(lambda agent: call(*agent), cast))
-    left = driver_review.disturbed(job.slot, job.values["branch"], job.tip)
-    if left:
-        driver_review.restore(job.slot, job.values["branch"], job.tip)
     errors = [f"the {role}: {error}" for (role, _), (error, _) in zip(cast, done) if error]
-    return "; ".join(errors), left, [report for _, report in done]
-
-
-def _clean(job: Job, cast: list[tuple[str, str]], notes: list[str], locked: list[str]) -> tuple[str, list[dict]]:
-    """The agents of one review, until they leave the slot as it was: ("", the reports) or (why the ticket is
-    blocked, []). A review that changed the slot runs one more time on the restored tip (requirements 5 and 6)."""
-    for last in (False, True):
-        error, left, reports = _attempt(job, cast, notes, locked)
-        if left:
-            job.run.ledger(f"Ticket {job.ticket.number}: a read-only role broke its rule: {left}; the driver restored "
-                           f"the slot to {job.tip[:7]}{'' if error or last else ' and runs the review again'}.")
-        if error or not left:
-            break
-    return error or left, reports
+    return "; ".join(errors), [report for _, report in done]
 
 
 def _review(job: Job) -> tuple[str, list[dict]]:
     """Review `job.tip`: ("", the merged findings) or (why the ticket is blocked, [])."""
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
-    found = _told(job, driver_review.locked_findings(job.slot, state))
+    found = _told(job, driver_review.locked_findings(job.slot, state, *job.guard()))
     cast, notes = _cast(job)
-    error, reports = _clean(job, cast, notes, state["locked"])
+    error, reports = driver_review.undisturbed(
+        lambda: _attempt(job, cast, notes, state["locked"]), job.slot, job.values["branch"], job.tip, run.ledger,
+        f"Ticket {number}", "the slot", "the review")
     if error:
         return error, []
     for (role, _), report in zip(cast, reports):
@@ -141,7 +133,7 @@ def _correct(job: Job, fixture: list[dict]) -> str:
         return f"the fixture correction: {error}"
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
+    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip, *job.guard()))
     for finding in fixture:
         run.ledger(f"Ticket {number}: fixture correction in {finding['file']}, outside the fix rounds: "
                    f"{finding['title']}: {finding['evidence']}. The test-writer corrected it at {job.tip[:7]}.")
