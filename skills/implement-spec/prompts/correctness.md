@@ -5,8 +5,11 @@ Ticket: {ticket}
 Seam: {seam}
 Range: {pr_branch}...{branch}, with the ticket tip at {start_sha}
 Locked files: {locked}
+Checks: {correctness}
 
-Read the diff for the ways it can lose money or corrupt data: races, idempotency, time, authorization, persistence keys and identities, migrations, error paths.
+Read the checks file and apply each of its checks to the diff of the range, with the Risk line of the ticket first: races, idempotency, time, authorization, persistence keys and identities, migrations, error paths.
+The output section of the checks file does not apply here: your findings go into the report.
+Read file content from git at {start_sha} (`git diff`, `git show {start_sha}:<path>`), never from the working tree, and run no tests: another agent makes temporary edits in this worktree while you work.
 Report only a defect that you can show with a concrete sequence of events. `mutations` is optional for this pass.
 Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `code`, `test`, or `fixture` when a locked test encodes a stale path, format or setup detail.
 Do not commit and do not dispatch subagents. Leave the tree as you found it.

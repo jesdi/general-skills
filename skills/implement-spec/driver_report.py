@@ -2,7 +2,7 @@
 
 validate(role, path, context) -> list of str, empty when the report is accepted.
   context: repo (slot path), branch, start (HEAD sha when the role started), log (the agent's log file),
-           round (fix-loop round, default 0).
+           round (1 for the first review of a ticket, default 0), locked (the locked files, for that review).
 The schema of a role is the json block of its prompt template, so the agent reads the text the driver enforces.
 """
 from __future__ import annotations
@@ -54,6 +54,15 @@ def _proof_errors(report: dict, context: dict) -> list[str]:
     return errors
 
 
+def _locked_errors(report: dict, context: dict) -> list[str]:
+    """In the first review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`)."""
+    if context.get("round") != 1 or "findings" not in report:
+        return []
+    tests = [proof["test"] for proof in report.get("mutations", [])]
+    return [f"mutations: no mutation proof for the locked test file {path}" for path in context.get("locked", [])
+            if not any(test.startswith(path) for test in tests)]
+
+
 def validate(role: str, path: str, context: dict) -> list[str]:
     try:
         report = json.loads(Path(path).read_text())
@@ -66,4 +75,4 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     # Only the role's own fields are typed by its schema: any other field of the report is ignored.
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     # Reports are a trust boundary: git and the log must show what the report claims.
-    return _commit_errors(report, context) + _proof_errors(report, context)
+    return _commit_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context)

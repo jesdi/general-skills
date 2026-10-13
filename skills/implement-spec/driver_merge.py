@@ -1,4 +1,5 @@
 """Merges into the PR branch through git plumbing: no checkout, so no slot's tree changes. Stdlib only.
+The one merge with a tree is the conflicting one: it is opened in the ticket's own slot for the conflict agent.
 
 The PR branch is checked out in no slot while tickets run, so moving its ref is safe. The caller serializes merges.
 """
@@ -38,6 +39,21 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
     made = subprocess.run(["git", "commit-tree", tree.stdout.strip(), "-p", pr_tip, "-p", tip, "-m", message],
                           capture_output=True, text=True, env={**os.environ, **_identity(tip)})
     return (made.stdout.strip(), "") if made.returncode == 0 else ("", f"git commit-tree failed: {made.stderr.strip()}")
+
+
+def begin(slot: str, pr_tip: str) -> list[str]:
+    """Open the merge of `pr_tip` into the branch that `slot` has checked out, for the conflict agent to commit.
+    Returns the files in conflict; with none there is nothing to resolve and the slot is as it was."""
+    git(slot, "merge", "--no-commit", "--no-ff", pr_tip)
+    files = git(slot, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+    if not files:
+        abort(slot)
+    return files
+
+
+def abort(slot: str) -> None:
+    """Close the merge that `begin` opened: the slot is on its branch as before, with a clean tree."""
+    git(slot, "merge", "--abort")
 
 
 def land(pr_branch: str, new: str, old: str) -> str:

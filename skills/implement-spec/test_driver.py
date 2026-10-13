@@ -76,6 +76,9 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     assert run(capsys, "--models", str(models)) == (
         3, "implementer: codex is not on PATH (first model entry openai/gpt-sol@medium)\n"
            "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n")
+    # Requirement 2 names the first entry only: the fix loop skips a later implementer entry whose CLI is missing.
+    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"]}))
+    assert run(capsys, "--models", str(models)) == (0, "max frontier width: 1\n")
 
 
 @pytest.mark.parametrize("entry", ["claude-opus-5@turbo", "openai/gpt-sol", "openai/@low"])
@@ -111,6 +114,10 @@ REPORT = """printf '{"status": "%s", "commits": ["%s"], "files": [], "concerns":
 COMMIT = "echo $role >> work.txt; git add -A; git commit -q -m $role\n"
 WRITER = """fields='"locked": ["work.txt"], "red": [{"test": "t", "line": "FAILED t"}]'; echo FAILED t\n"""
 IMPLEMENTER = """fields='"green": ["1 passed"]'; echo '{"total_cost_usd": 0.25}'\n"""
+# The reviewer of a plain run: it finds nothing and proves the locked file of WRITER.
+CLEAN = """case $role in reviewer|correctness) echo FAILED t
+    printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": [], "mutations": [{"test": "work.txt::t", "file": "work.txt", "line": 1, "red": "FAILED t"}]}' > "$report"; exit 0;; esac
+"""
 ONCE = '[ -e "$0.again" ] || { touch "$0.again"; %s; }\n'  # the first attempt only
 
 
@@ -119,7 +126,7 @@ def agents(tmp_path, capsys, body, *args, seam="none — refactor"):
     (tmp_path / ".agent/tickets").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".agent/tickets/01-t.md").write_text(ticket("01", seam=seam))
     runner = tmp_path.parent / f"{tmp_path.name}-runner"
-    runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{body}")
+    runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{'' if '--only' in args else CLEAN}{body}")
     runner.chmod(0o755)
     code = driver.main(["--gate", "true", "--spec", "spec.md", "--runner", str(runner), *args])
     capsys.readouterr()
@@ -133,13 +140,17 @@ def branches():
 
 def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
     repo()
-    body = f'{COMMIT}case $role in test-writer) {WRITER};; *) {IMPLEMENTER}grep -q "Locked files: work.txt" $prompt || exit 9;; esac\n{REPORT}'
+    # The implementer leaves the locked work.txt as the test-writer committed it.
+    commit = COMMIT.replace("work.txt", "$file")
+    body = (f'file=code.txt; [ $role != test-writer ] || file=work.txt\n{commit}case $role in test-writer) {WRITER};; '
+            f'*) {IMPLEMENTER}grep -q "Locked files: work.txt" $prompt || exit 9;; esac\n{REPORT}')
     code, ledger = agents(tmp_path, capsys, body, seam="`f()`")
     assert code == 0
     tip = subprocess.run(["git", "rev-parse", "--short=7", "feat/x"], capture_output=True, text=True).stdout.strip()
     assert [line.partition(" for ")[0] for line in ledger] == [
         "Ticket 01: test-writer ran on sonnet@medium", "Ticket 01: implementer ran on opus@medium",
         f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
+        "Ticket 01: reviewer ran on sonnet@high",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
     assert ledger[1].endswith(", cost 0.25 USD: report accepted.")
     assert branches() == ["feat/x"] and "nothing to commit" in subprocess.run(
@@ -172,7 +183,7 @@ def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path
 def test_a_field_of_another_role_is_ignored(repo, tmp_path, capsys, extra):
     repo()
     code, ledger = agents(tmp_path, capsys, f"{COMMIT}fields='\"green\": [], {extra}'\n{REPORT}")
-    assert code == 0 and len(ledger) == 3 and ledger[0].endswith("report accepted.")
+    assert code == 0 and len(ledger) == 4 and ledger[0].endswith("report accepted.")
 
 
 @pytest.mark.parametrize("status", ["BLOCKED", "NEEDS_CONTEXT"])
@@ -298,7 +309,7 @@ REFACTOR = {"seam": "none — refactor"}
 def walk(tmp_path, capsys, body, *args, gate="true"):
     """Run the driver on the ticket set of the repository; returns the exit code, the ledger lines and stdout."""
     runner = tmp_path.parent / f"{tmp_path.name}-runner"
-    runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{body}")
+    runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{CLEAN}{body}")
     runner.chmod(0o755)
     code = driver.main(["--gate", gate, "--spec", "spec.md", "--runner", str(runner), *args])
     ledger = tmp_path / ".agent/implement/ledger.md"
@@ -336,15 +347,42 @@ def test_two_tickets_run_in_two_slots_and_the_second_merge_is_a_gated_merge_comm
     assert (code, again) == (0, ledger) and len(log.read_text().splitlines()) == 1
 
 
-def test_a_merge_conflict_blocks_the_second_ticket_and_keeps_its_branch(repo, tmp_path, capsys):
+# The conflict agent of a merge that conflicts: it commits the open merge as it is, or it does nothing.
+RESOLVE = """if [ $role = conflict ]; then git add -A; git commit -q -m resolved
+    printf '{"status": "DONE", "commits": ["%s"], "files": ["work.txt"], "concerns": []}' "$(git rev-parse HEAD)" > "$report"
+    exit 0; fi
+"""
+
+
+def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gated(repo, tmp_path, capsys):
     two(repo)
-    code, ledger, out = walk(tmp_path, capsys, "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
+    code, ledger, out = walk(tmp_path, capsys, RESOLVE + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
+    assert code == 0, out
+    (line,) = [line for line in ledger if "the conflict agent resolved the merge conflict in work.txt at " in line]
+    number, tip = line[7:9], out_of("git", "rev-parse", "feat/x")
+    assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
+    assert f"Ticket {number}: the gate is green on {tip[:7]}, record .agent/implement/{number}/gate-{tip[:7]}.log." in ledger
+    assert "| gates run | 3 |" in out and "| agents, conflict on opus@medium | 1 |" in out
+    assert state_of(tmp_path)["tickets"][number]["tip"] == tip
+    prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
+    assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")
+    assert branches() == ["feat/x"] and out_of("git", "status", "--porcelain") == ""
+
+
+def test_a_conflict_agent_that_does_not_resolve_blocks_the_ticket_and_keeps_its_branch(repo, tmp_path, capsys):
+    two(repo)
+    stuck = '[ $role != conflict ] || exit 7\n'
+    code, ledger, out = walk(tmp_path, capsys, stuck + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
     assert code == 1, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
-    assert "BLOCKED at the merge: the merge into the PR branch conflicts in work.txt." in line
     number = line[7:9]
+    assert f"BLOCKED at the merge: the conflict agent: report .agent/implement/{number}/conflict-0.json is not" in line
+    assert len([line for line in ledger if "conflict ran on" in line]) == 2  # the one rerun of a violation
     assert state_of(tmp_path)["tickets"][number]["phase"] == "blocked"
-    assert branches() == ["feat/x", f"ticket/{number}"] and f"Ticket {number} is not merged: its phase is blocked." in out
+    assert f"ticket/{number}" in branches() and f"Ticket {number} is not merged: its phase is blocked." in out
+    for slot in (".", ".agent/worktrees/slot-2"):  # the driver's open merge is gone
+        assert out_of("git", "-C", slot, "status", "--porcelain") == ""
+        assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
 
 
 def test_a_red_gate_blocks_the_ticket_and_the_ticket_it_blocks_never_starts(repo, tmp_path, capsys):
