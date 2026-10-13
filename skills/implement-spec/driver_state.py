@@ -1,17 +1,8 @@
-"""state.json: the resume contract. One lock, every write a read-modify-write, published by rename. Stdlib only.
+"""state.json, the resume contract: one lock, every write a read-modify-write, published by rename.
 
-    {"run": {"revision", "pr_branch", "gates", "stops", "agents": [{ticket, role, entry, seconds, cost}],
-             "questions": [the questions of every stop, see driver_decisions],
-             "start": the PR tip when the run began, "landed": [[ticket, the PR tip its merge made]] in merge order,
-             "final": the record of the end of run, see `_final` and driver_final},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}
-
-`note` names the prompt template of the ruling that sent the ticket back to a role; "" when there is none.
-`held` maps a locked file to the test-writer commit that is its reference when that is not `test_writer_sha`.
-
-Ticket threads are the only writers and they share one State, so no update is lost between two tickets.
-`lock` keeps a second driver process out for the whole run: the lock of State is for the threads of one process.
-"""
+    {"run": {revision, pr_branch, gates, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
+             landed: [[ticket, the PR tip its merge made]], final},
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}"""
 from __future__ import annotations
 
 import fcntl
@@ -33,8 +24,7 @@ def _ticket() -> dict:
 
 
 def _final() -> dict:
-    """The record of the end of run before it starts. Every key is here, so a reader takes each one with [] and a
-    wrong name fails. driver_final says what each key means."""
+    """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
     return {"skipped": "", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
             "reviewed": None, "round": 0, "open": [], "batch": None, "green_gates": [], "pushed": None, "pr": None}
 
@@ -75,9 +65,7 @@ class State:
 
 
 def lock(path: Path) -> IO | None:
-    """One driver per repository: the exclusive kernel lock on `path`, held while the returned file is open, or
-    None when another process holds it. The kernel frees the lock when its holder ends, also when it is killed,
-    so no lock is stale and no file is removed by hand. A child process does not get the file."""
+    """The exclusive kernel lock on `path`, held while the returned file is open; None when another process has it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     held = path.open("a")
     try:
@@ -93,13 +81,7 @@ def _ancestor(commit: str, of: str) -> bool:
 
 
 def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
-    """(the fields to resume from, why) when git contradicts the entry; ({}, "") when it does not.
-
-    Requirement 15: a tip that is not on its branch, or the tip of a merged ticket that is not in the PR branch,
-    returns the ticket to `implement` from the test-writer's commit. A ticket that has no accepted implementation
-    yet starts its phase again, so it has no tip to check. A green gate needs no check: it settles only the commit
-    it names, and a commit that is gone is never gated again.
-    """
+    """(the fields to resume from, why) when git contradicts the entry; ({}, "") when it does not."""
     phase, tip = entry["phase"], str(entry["tip"])
     if phase not in ("gate", "review", "fix", "merge", "merged"):
         return {}, ""
@@ -111,9 +93,7 @@ def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
 
 
 def kept(state: dict) -> dict[str, int]:
-    """ticket number -> slot number, for each ticket that an interrupted run left in the middle of a role, or that
-    waits for the answer to an open question, with uncommitted work in its slot. That slot stays as it is, no other
-    ticket gets it, and the ticket's next role runs there (the driver drops no work)."""
+    """ticket number -> slot, per ticket stopped mid-role or at an open question, with uncommitted work in the slot."""
     found = {}
     asking = {question["ticket"] for question in state.get("run", {}).get("questions", []) if question["answer"] is None}
     for number, entry in state.get("tickets", {}).items():

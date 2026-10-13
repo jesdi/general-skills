@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-SKILL = Path(__file__).parent.resolve()
+SKILL = Path(__file__).resolve().parents[1]
 RUN = SKILL / "run.sh"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 TOOLS = ("sh", "uname", "dirname", "readlink", "git", "env", "mktemp", "curl", "tar", "gzip", "mv", "rm", "mkdir",

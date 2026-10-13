@@ -1,8 +1,7 @@
-"""Merges into the PR branch through git plumbing: no checkout, so no slot's tree changes. Stdlib only.
-The one merge with a tree is the conflicting one: it is opened in the ticket's own slot for the conflict agent.
+"""Merges into the PR branch through git plumbing: no checkout, so no slot's tree changes. Only a conflicting merge
+gets a tree: `begin` opens it in the ticket's own slot for the conflict agent.
 
-The PR branch is checked out in no slot while tickets run, so moving its ref is safe. The caller serializes merges.
-`refused` is the locked-file check of the landing (requirement 7): the locked files of the merged tickets.
+`refused` is the locked-file check of a landing. The caller holds the merge lock.
 """
 from __future__ import annotations
 
@@ -25,10 +24,8 @@ def identity(tip: str, slot: str = ".") -> dict[str, str]:
 
 
 def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
-    """(the commit the PR branch gets, "") or ("", the conflict).
-
-    `pr_tip` itself when the ticket is merged already, `tip` for a fast-forward, else a new merge commit.
-    """
+    """(the commit the PR branch gets, "") or ("", the error): `pr_tip` when the ticket is merged already, `tip`
+    for a fast-forward, else a new merge commit."""
     if ancestor(tip, pr_tip):
         return pr_tip, ""
     if ancestor(pr_tip, tip):
@@ -43,9 +40,9 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
 
 
 def begin(slot: str, pr_tip: str) -> list[str]:
-    """Open the merge of `pr_tip` into the branch that `slot` has checked out, for the conflict agent to commit.
-    Returns the files in conflict; with none there is nothing to resolve and the slot is as it was."""
-    # git merge needs a committer even with --no-commit; a machine with no git identity (CI) gets the ticket's own.
+    """Open the merge of `pr_tip` into the branch of `slot`. Returns the files in conflict; with none, the slot is
+    as it was."""
+    # git merge needs a committer even with --no-commit.
     env = {**os.environ, **identity("HEAD", slot)}
     subprocess.run(["git", "-C", slot, "merge", "--no-commit", "--no-ff", pr_tip], capture_output=True, env=env)
     files = git(slot, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
@@ -55,23 +52,19 @@ def begin(slot: str, pr_tip: str) -> list[str]:
 
 
 def abort(slot: str) -> None:
-    """Close the merge that `begin` opened: the slot is on its branch as before, with a clean tree."""
+    """Close the merge that `begin` opened."""
     git(slot, "merge", "--abort")
 
 
 def protected(tickets: dict, number: str) -> list[str]:
-    """The locked files of every merged ticket of `tickets` of state.json that ticket `number` does not lock itself.
-    Its test-writer may change one: a file that it lists in `locked` is a locked file of this ticket too.
-    A record with no `locked` locked nothing: this runs in the middle of a landing and does not raise."""
+    """The locked files of the merged tickets that ticket `number` does not lock itself. `tickets` is that of
+    state.json; a record with no `locked` locked nothing."""
     merged = {path for entry in tickets.values() if entry.get("phase") == "merged" for path in entry.get("locked") or []}
     return sorted(merged - set(tickets.get(number, {}).get("locked") or []))
 
 
 def _entries(commit: str, paths: list[str]) -> tuple[dict[str, str], str]:
-    """(path -> its tree entry: mode, type and object id, for each of `paths` that the commit `commit` has, "") or
-    ({}, why git cannot tell). A file that became a symlink or got another mode has another entry.
-    Only a path that a commit which exists does not have is absent: an id that is no commit, or any other git
-    failure, is an error, so the check never passes unseen."""
+    """({path: "mode type object-id"} for each of `paths` that `commit` has, "") or ({}, why git cannot tell)."""
     tree = git(".", "ls-tree", "-z", f"{commit}^{{commit}}", "--", *paths)
     if tree.returncode:
         return {}, f"cannot read the locked files at {commit}: {tree.stderr.strip() or f'git ls-tree exit {tree.returncode}'}"
@@ -79,10 +72,8 @@ def _entries(commit: str, paths: list[str]) -> tuple[dict[str, str], str]:
 
 
 def refused(tickets: dict, number: str, old: str, new: str) -> str:
-    """Requirement 7 at the landing of ticket `number`: "" or why the commit `new` may not land on the PR tip
-    `old`. Each locked file of a merged ticket must be the same blob, with the same mode, in both; a file that only
-    one has differs.
-    The caller lands `new` only from `old` (`land`), so the check and the ref move are one step."""
+    """"" or why ticket `number` may not land `new` on the PR tip `old`: each locked file of a merged ticket must
+    be the same blob with the same mode in both."""
     paths = protected(tickets, number)
     if not paths:
         return ""  # `git ls-tree` with no path lists the whole tree
@@ -92,11 +83,9 @@ def refused(tickets: dict, number: str, old: str, new: str) -> str:
 
 
 def restore(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
-    """Before a correction: each of `paths` (`protected`) that the ticket changed, in a commit or in the tree of
-    `slot`, goes back to the version of the PR tip in the tree; a file that the PR tip does not have is removed.
-    Returns those paths. A file that the correction lists becomes a locked file of its ticket, so it must start from
-    the locked version. "Changed" is against the commit that the branch has in common with the PR tip: a file that
-    only the PR branch changed since then is not the ticket's change. With no such commit, it is against the PR tip."""
+    """Put each of `paths` that the ticket changed back to the version of the PR tip, in the tree of `slot` only; a
+    file the PR tip does not have is removed. Returns those paths."""
+    # Against the merge base: a file that only the PR branch changed since then is not the ticket's change.
     base = git(slot, "merge-base", "HEAD", pr_tip).stdout.strip() or pr_tip
     changed = names(git(slot, "diff", "--name-only", "-z", base, "--", *paths).stdout) if paths else []
     for path in changed:
@@ -112,6 +101,5 @@ def land(pr_branch: str, new: str, old: str) -> str:
 
 
 def delete(branch: str, pr_branch: str) -> bool:
-    """Delete a merged ticket branch. It stays while its commits are not all in the PR branch, and `git branch -D`
-    itself refuses a branch that a worktree has checked out, so no slot is left detached."""
+    """Delete a ticket branch whose commits are all in the PR branch. git refuses one a worktree has checked out."""
     return ancestor(branch, pr_branch) and git(".", "branch", "-q", "-D", branch).returncode == 0

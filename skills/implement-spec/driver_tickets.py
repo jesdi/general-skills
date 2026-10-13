@@ -1,8 +1,6 @@
-"""Ticket files in, task graph or error list out. Stdlib only.
+"""Ticket files in, task graph or error list out.
 
-parse(path) -> (tickets, errors)
-  tickets: list of Ticket; empty when errors is not empty.
-  errors:  list of str, one per problem, each starting with the file name.
+parse(path) -> (tickets, errors): tickets is empty when errors is not; each error starts with the file name.
 """
 from __future__ import annotations
 
@@ -21,7 +19,7 @@ _NONE = re.compile(r"none\b", re.IGNORECASE)  # "None (can start immediately)", 
 @dataclass
 class Ticket:
     number: str  # as in the file name: "01"
-    file: str    # "01-export-rows.md"
+    file: str
     title: str | None
     blocked: str | None  # the Blocked by text; blocked_by holds the resolved numbers
     seam: str | None
@@ -39,7 +37,7 @@ class Ticket:
 
 
 def _read(path: Path) -> Ticket:
-    found: dict[str, tuple[str, int]] = {}  # the first entry of each field wins
+    found: dict[str, tuple[str, int]] = {}
     criteria: list[str] = []
     for number, line in enumerate(path.read_text().splitlines(), 1):
         if m := _TITLE.match(line):

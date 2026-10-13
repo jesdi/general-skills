@@ -1,14 +1,8 @@
-"""Human stops as bounded questions (requirement 17): the question kinds, decisions.json and what an answer does.
-Stdlib only.
+"""Human stops as bounded questions: the question kinds, decisions.json and what an answer does.
 
-A question lives in state.json (`run.questions`) from its stop to the end of the run:
+A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer}
-`answer` is None while the question is open. decisions.json holds `run` (the random `run.revision` of state.json),
-the open questions with the first six fields only, and a `revision`: the hex SHA-256 of
-`json.dumps(<the file without revision>, sort_keys=True, separators=(",", ":"))`. Answers bind to that revision, so
-an answers file of an earlier run never fits the same question of a new run.
-Every title, why, description and ruling is a fixed sentence of this file filled with pointers (requirements 14, 16).
-"""
+decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
 
 import hashlib
@@ -16,13 +10,12 @@ import json
 from typing import NamedTuple
 
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
-# The concern of an implementer that makes its BLOCKED report a stop.
 CONTRADICTS = "locked test contradicts spec:"
 
 
 class Option(NamedTuple):
     description: str
-    ruling: str  # the ledger sentence of this answer
+    ruling: str
     fields: dict  # what the ticket record gets when its stop is settled; {} keeps the ticket BLOCKED
 
 
@@ -64,7 +57,7 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    # The triage of the final review (requirement 19): its questions belong to no ticket, so `ticket` is "".
+    # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,
         "Final review: a finding is open after the second review round: {subject}",
@@ -80,8 +73,7 @@ KINDS = {
 
 
 def contradicted(role: str, report: dict) -> str:
-    """The locked tests that an implementer's BLOCKED report says contradict the spec; "" when the report is not
-    that stop. Any other BLOCKED report is an ordinary BLOCKED ticket."""
+    """The locked tests an implementer's BLOCKED report says contradict the spec; "" when it is not that stop."""
     if role != "implementer" or report.get("status") != "BLOCKED":
         return ""
     return "; ".join(filter(None, (concern[len(CONTRADICTS):].strip() for concern in report["concerns"]
@@ -89,9 +81,7 @@ def contradicted(role: str, report: dict) -> str:
 
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int) -> dict:
-    """A new open question of stop number `stop`. Its id is `<NN>-<kind>-<n>`; n counts the questions of that ticket
-    and kind in the whole run (`asked` is every question of the run), so a second stop never takes an id again.
-    A question of the end of run has no ticket: its id is `<kind>-<n>`."""
+    """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
@@ -101,20 +91,18 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
 
 
 def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str]) -> None:
-    """One stop: `run` of state.json counts it and gets one open question of `kind` per subject. No subject is no
-    stop. Only this function counts `run.stops` and adds to `run.questions`."""
+    """Count one stop in `run` and add one open question of `kind` per subject. No subject is no stop."""
     run["stops"] += bool(subjects)
     for subject in subjects:
         run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"]))
 
 
 def decides(kind: str, subjects: int) -> str:
-    """What the ledger says about a stop, without its owner and the path of decisions.json."""
     return f"the operator decides on {subjects} question{'s' * (subjects > 1)} of kind {kind}"
 
 
 def document(run: dict) -> dict:
-    """decisions.json for `run` of state.json: the run, its open questions, and the revision that answers bind to."""
+    """decisions.json for `run` of state.json."""
     body = {"run": run["revision"],
             "questions": [{name: q[name] for name in PUBLIC} for q in run["questions"] if q["answer"] is None]}
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
@@ -122,7 +110,7 @@ def document(run: dict) -> dict:
 
 
 def rulings(questions: list[dict]) -> list[str]:
-    """The ruling sentence of each answered question, as the ledger got it, without the note of the operator."""
+    """The ruling sentence of each answered question, without the note of the operator."""
     return [KINDS[q["kind"]].options[q["answer"]].ruling.format(**q) for q in questions if q["answer"] is not None]
 
 
@@ -131,17 +119,14 @@ def parked(questions: list[dict]) -> bool:
 
 
 def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
-    """The fields the ticket gets from the answers of one stop: {} while a question of the stop is open, and {}
-    when one answer keeps the ticket BLOCKED."""
+    """The ticket fields from the answers of one stop; {} while one is open or one keeps the ticket BLOCKED."""
     fields = [q["answer"] and KINDS[q["kind"]].options[q["answer"]].fields
               for q in questions if (q["ticket"], q["stop"]) == (ticket, stop)]
     return {name: value for one in fields for name, value in one.items()} if all(fields) else {}
 
 
 def apply(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, dict]]:
-    """Give each open question its answer from `answers` (question id -> option id, `<id>.note` -> the operator's
-    note). Returns (one ruling sentence per answer, ticket number -> the fields that let the ticket go on).
-    An answered question is never open again, so an answer is applied once."""
+    """Answer the open questions in `answers`. Returns (a ruling per answer, ticket -> fields that let it go on)."""
     rulings, stops = [], {}
     for q in questions:
         if q["answer"] is None and q["id"] in answers:
@@ -155,7 +140,7 @@ def apply(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, di
 
 
 def text(open_questions: list[dict], answers: str, page: str) -> str:
-    """What the operator reads at a stop in local mode: each open question with its options, and how to answer."""
+    """What the operator reads at a stop in local mode."""
     lines = []
     for q in open_questions:
         lines += [f"Question {q['id']}: {q['title']}", f"  Why: {q['why']}", f"  Evidence: {', '.join(q['evidence'])}"]

@@ -579,4 +579,4 @@ def test_a_rebase_with_no_commit_to_replay_puts_each_ticket_on_the_fetched_base(
     git(rig.repo, "fetch", "-q", "origin")
     onto = ref(rig.repo, "refs/remotes/origin/main")
     monkeypatch.chdir(rig.repo)
-    assert driver_final._rebased(None, {"01": rig.start, "02": rig.start}, "main", onto) == ({"01": onto, "02": onto}, "")
+    assert driver_final._rebased(None, {"01": rig.start, "02": rig.start}, "main", onto) == {"01": onto, "02": onto}

@@ -1,4 +1,4 @@
-"""Model entries, the command line per provider, prompt rendering and the blocking launch. Stdlib only.
+"""Model entries, the command line per provider, prompt rendering and the blocking launch.
 
 A model entry is `provider/model@effort`; a bare `model@effort` is anthropic.
 """
@@ -16,22 +16,19 @@ import time
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
-# Minutes per role (requirement 12).
+# Minutes per role.
 TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45, "correctness": 30, "fixer": 60,
             "final-reviewer": 60, "conflict": 30}
-# provider -> (CLI, efforts the CLI accepts).
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 READ_ONLY = ("reviewer", "correctness", "final-reviewer")
-# The process groups of the agents that run now. A group is here only while its leader is not reaped: then no other
-# process can have its id.
+# A process group is here only while its leader is not reaped: then no other process can have its id.
 LIVE: set[int] = set()
-STOPPED = False  # set by stop(): no agent starts after it
-_LIVE = threading.Lock()  # an agent starts, an agent is reaped or the run stops, never two at once
+STOPPED = False
+_LIVE = threading.Lock()
 
 
 def split(entry: str) -> tuple[str, str, str]:
-    """provider, model, effort."""
     head, _, effort = str(entry).partition("@")
     provider, _, model = head.partition("/") if "/" in head else ("anthropic", "", head)
     return provider, model, effort
@@ -50,8 +47,7 @@ def _entry_error(role: str, entry: str, first: bool) -> str | None:
 
 
 def correctness_entry(models: dict[str, list[str]]) -> str:
-    """The entry the correctness pass runs on (requirement 13): the first of its list on another provider than the
-    implementer's first entry, or "" when the list has none."""
+    """The first correctness entry on another provider than the implementer's first entry; "" when there is none."""
     own = split(models["implementer"][0])[0]
     return next((entry for entry in models["correctness"] if split(entry)[0] != own), "")
 
@@ -61,7 +57,7 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
     models = json.loads((SKILL / "models.json").read_text())
     try:
         models = {**models, **(json.loads(Path(path).read_text()) if path else {})}  # a list is a TypeError
-        # The entry of each role whose CLI must be on PATH (requirement 2); entries[0]: an empty list is an error.
+        # The entry of each role whose CLI must be on PATH; entries[0]: an empty list is an error.
         first = {**{role: entries[0] for role, entries in models.items()}, "correctness": correctness_entry(models)}
         found = [_entry_error(role, entry, entry == first[role]) for role, entries in models.items() for entry in entries]
         if not first["correctness"]:
@@ -77,27 +73,25 @@ def command(role: str, entry: str, report: str) -> list[str]:
     """The CLI call for one agent; the prompt goes to its stdin."""
     provider, model, effort = split(entry)
     if provider == "openai":
-        # No --ephemeral: the rollout stays on disk as the trace. A read-only agent cannot write its
-        # report, so its last message is saved there.
+        # No --ephemeral: the rollout on disk is the trace. A read-only agent cannot write its report, so -o saves it.
         tail = ["--sandbox", "read-only", "-o", report] if role in READ_ONLY else ["--sandbox", "workspace-write"]
         return ["codex", "exec", "--model", model, "-c", f'model_reasoning_effort="{effort}"', *tail]
-    # stream-json keeps tool output in the log (the red lines) and ends with a result that has total_cost_usd.
+    # stream-json keeps tool output in the log and ends with a result that has total_cost_usd.
     return ["claude", "-p", "--model", model, "--effort", effort, "--permission-mode", "auto",
             "--output-format", "stream-json", "--verbose"]
 
 
 def render(name: str, values: dict[str, str]) -> str:
-    """A prompt template with its {pointers} filled; the driver composes no prose."""
     return re.sub(r"\{([a-z_]+)\}", lambda m: values[m.group(1)], (SKILL / "prompts" / f"{name}.md").read_text())
 
 
 def tail(prompt: str, report: str) -> str:
-    """The end of a rendered prompt, from the line that names the report path: report path, schema, rule."""
+    """The end of a rendered prompt, from the line that names the report path."""
     return prompt[prompt.rfind("\n", 0, prompt.rfind(report)):]
 
 
 def launch(argv: list[str], prompt: Path, log: Path, seconds: float, slot: str = ".") -> int | None:
-    """Run one agent in `slot` to its end; stdout and stderr go to `log`. Returns the exit code, None after a timeout."""
+    """Run one agent in `slot` to its end, output to `log`. Returns the exit code, None after a timeout."""
     with prompt.open() as stdin, log.open("w") as out:
         with _LIVE:
             if STOPPED:
@@ -109,9 +103,7 @@ def launch(argv: list[str], prompt: Path, log: Path, seconds: float, slot: str =
         try:
             ended = _ended(proc.pid, seconds)
         finally:
-            # Every exit path, Ctrl-C too: nothing of the agent may write to the tree or the log after this.
-            # The leader is not reaped yet, so the id is still the id of its group. Only then it is reaped, and
-            # stop() signals under the same lock: no group gets a signal after its leader is reaped.
+            # Kill before the reap, under the lock of stop(): until then no other process can have the group id.
             with _LIVE:
                 _kill(proc.pid)
                 LIVE.discard(proc.pid)
@@ -120,8 +112,8 @@ def launch(argv: list[str], prompt: Path, log: Path, seconds: float, slot: str =
 
 
 def _ended(pid: int, seconds: float) -> bool:
-    """Wait at most `seconds` until the child `pid` has ended, and do not reap it. True when it has ended.
-    ponytail: waitid has no timeout, so this polls as `Popen.wait(timeout)` does, at most each 50 ms."""
+    """True when the child `pid` ends within `seconds`; it is not reaped."""
+    # ponytail: waitid has no timeout, so this polls as `Popen.wait(timeout)` does, at most each 50 ms.
     end, pause = time.monotonic() + seconds, 0.0005
     while not os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG):
         left = end - time.monotonic()
@@ -133,15 +125,13 @@ def _ended(pid: int, seconds: float) -> bool:
 
 
 def _kill(group: int) -> None:
-    """SIGKILL to a process group whose leader is not reaped. No such group = all gone; macOS answers EPERM for a
-    group of zombies."""
+    """SIGKILL a process group. No such group means all gone; macOS answers EPERM for a group of zombies."""
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(group, signal.SIGKILL)
 
 
 def stop() -> None:
-    """Kill every running agent and let no other start. For an interrupted run: its ticket threads would let the
-    agents finish, and would start the next ones. Each group in LIVE has a leader that is not reaped."""
+    """Kill every running agent and let no other start."""
     global STOPPED
     with _LIVE:
         STOPPED = True
@@ -150,6 +140,6 @@ def stop() -> None:
 
 
 def cost(log: Path) -> str | None:
-    """The dollar cost the CLI reported: claude's result has total_cost_usd; codex reports tokens only."""
+    """The dollar cost the CLI reported; None for codex, which reports tokens only."""
     found = re.findall(r'"total_cost_usd":\s*([0-9.]+)', log.read_text(errors="replace"))
     return found[-1] if found else None
