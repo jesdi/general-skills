@@ -2,7 +2,9 @@
 
 validate(role, path, context) -> list of str, empty when the report is accepted.
   context: repo (slot path), branch, start (HEAD sha when the role started), log (the agent's log file),
-           round (1 for the first review of a ticket, default 0), locked (the locked files, for that review).
+           round (1 for the first review of a ticket, default 0), locked (the locked files, for that review),
+           correction (true for a test-writer that corrects locked tests on a branch that holds other work),
+           restored (the locked files the driver put back to their reference before that correction).
 The schema of a role is the json block of its prompt template, so the agent reads the text the driver enforces.
 """
 from __future__ import annotations
@@ -43,6 +45,18 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
     return errors
 
 
+def _correction_errors(report: dict, context: dict) -> list[str]:
+    """A correction changes only the files it lists in `locked`: its commit becomes the reference of the locked-file
+    check, so no other file may come in with it, such as work that the implementer left in the tree. A locked file
+    the driver `restored` to its reference before the correction is in the commit by design."""
+    if not context.get("correction"):
+        return []
+    changed = _git(context["repo"], "diff", "--name-only", context["start"], context["branch"])
+    more = [path for path in changed if path not in report.get("locked", []) + context.get("restored", [])]
+    return [f"a correction may change only the files it lists in `locked`: its commits also change {', '.join(more)}"
+            ] if more else []
+
+
 def _proof_errors(report: dict, context: dict) -> list[str]:
     """Every claimed red line (a test-writer `red`, a reviewer `mutations`) is in the agent's log."""
     lines = [r["line"] for r in report.get("red", [])] + [m["red"] for m in report.get("mutations", [])]
@@ -75,4 +89,5 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     # Only the role's own fields are typed by its schema: any other field of the report is ignored.
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     # Reports are a trust boundary: git and the log must show what the report claims.
-    return _commit_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context)
+    return (_commit_errors(report, context) + _correction_errors(report, context) + _proof_errors(report, context)
+            + _locked_errors(report, context))

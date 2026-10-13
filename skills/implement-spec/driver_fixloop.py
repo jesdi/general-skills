@@ -117,7 +117,7 @@ def _review(job: Job) -> tuple[str, list[dict]]:
     """Review `job.tip`: ("", the merged findings) or (why the ticket is blocked, [])."""
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
-    found = _told(job, driver_review.locked_changes(job.slot, state["test_writer_sha"], state["locked"]))
+    found = _told(job, driver_review.locked_findings(job.slot, state))
     cast, notes = _cast(job)
     error, reports = _clean(job, cast, notes, state["locked"])
     if error:
@@ -140,8 +140,8 @@ def _correct(job: Job, fixture: list[dict]) -> str:
     if error:
         return f"the fixture correction: {error}"
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
-    locked = run.state.read()["tickets"][number]["locked"]
-    run.state.ticket(number, tip=job.tip, test_writer_sha=job.tip, locked=list(dict.fromkeys(locked + report["locked"])))
+    entry = run.state.read()["tickets"][number]
+    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
     for finding in fixture:
         run.ledger(f"Ticket {number}: fixture correction in {finding['file']}, outside the fix rounds: "
                    f"{finding['title']}: {finding['evidence']}. The test-writer corrected it at {job.tip[:7]}.")
@@ -182,8 +182,10 @@ def _after(job: Job, found: list[dict]) -> str | None:
     if not todo:
         return None
     if job.round == ROUNDS:
-        titles = "; ".join(f"{finding['title']} ({finding['file']}:{finding['line']})" for finding in todo)
-        return f"the review: after round {ROUNDS} these findings are open: {titles}"
+        titles = [f"{finding['title']} ({finding['file']}:{finding['line']})" for finding in todo]
+        # Requirement 17: the ticket is BLOCKED, and the operator rules on each open finding.
+        job.run.ask(job.ticket.number, "finding", titles, str(job.run.out / job.ticket.number / f"findings-{ROUNDS}.json"))
+        return f"the review: after round {ROUNDS} these findings are open: {'; '.join(titles)}"
     return _fix(job)
 
 

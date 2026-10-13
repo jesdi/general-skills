@@ -1,7 +1,11 @@
 """state.json: the resume contract. One lock, every write a read-modify-write, published by rename. Stdlib only.
 
-    {"run": {"revision", "pr_branch", "gates", "stops", "agents": [{ticket, role, entry, seconds, cost}]},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot}}}
+    {"run": {"revision", "pr_branch", "gates", "stops", "agents": [{ticket, role, entry, seconds, cost}],
+             "questions": [the questions of every stop, see driver_decisions]},
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}
+
+`note` names the prompt template of the ruling that sent the ticket back to a role; "" when there is none.
+`held` maps a locked file to the test-writer commit that is its reference when that is not `test_writer_sha`.
 
 Ticket threads are the only writers and they share one State, so no update is lost between two tickets.
 """
@@ -20,7 +24,7 @@ PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": [],
-            "slot": None}
+            "slot": None, "note": "", "held": {}}
 
 
 class State:
@@ -35,7 +39,7 @@ class State:
         """Create the file for a new run, or add the tickets a resumed run does not know yet."""
         def change(state: dict) -> None:
             state.setdefault("run", {"revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0,
-                                     "agents": []})
+                                     "agents": [], "questions": []})
             tickets = state.setdefault("tickets", {})
             for number in numbers:
                 tickets.setdefault(number, _ticket())
@@ -79,11 +83,13 @@ def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
 
 
 def kept(state: dict) -> dict[str, int]:
-    """ticket number -> slot number, for each ticket that an interrupted run left in the middle of a role with
-    uncommitted work in its slot. That slot stays as it is and the role runs there again (the driver drops no work)."""
+    """ticket number -> slot number, for each ticket that an interrupted run left in the middle of a role, or that
+    waits for the answer to an open question, with uncommitted work in its slot. That slot stays as it is, no other
+    ticket gets it, and the ticket's next role runs there (the driver drops no work)."""
     found = {}
+    asking = {question["ticket"] for question in state.get("run", {}).get("questions", []) if question["answer"] is None}
     for number, entry in state.get("tickets", {}).items():
-        if entry["phase"] in ("test-writer", "implement") and entry["slot"]:
+        if (entry["phase"] in ("test-writer", "implement") or number in asking) and entry["slot"]:
             slot = path(entry["slot"])
             on = git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
             if on == f"ticket/{number}" and git(slot, "status", "--porcelain").stdout.strip():

@@ -1,5 +1,6 @@
 """The driver's own part of a review: the locked-file check, who does the correctness pass, the routing of the
-findings, and the mutation proofs a fix makes due again. It reads git; only `restore` writes. Stdlib only.
+findings, and the mutation proofs a fix makes due again. It reads git; only `restore` and `restore_locked` write.
+Stdlib only.
 
 A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `driver`.
 A mutation proof is keyed by (production file, line); the line is the one the file has at the ticket tip.
@@ -50,6 +51,46 @@ def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:
               else {locked[0]: f"locked file check failed: {diff.stderr.strip()}"})
     return [{"severity": "critical", "file": path, "line": 1, "title": title, "kind": "code", "source": "driver",
              "evidence": f"git diff {sha}..HEAD -- {path}"} for path, title in titles.items()]
+
+
+def _references(entry: dict) -> list[tuple[str | None, list[str]]]:
+    """(the test-writer commit that is the reference, its locked files) for the ticket record `entry`: that is
+    `test_writer_sha`, or for a file in `held` the older commit named there."""
+    held = entry["held"]
+    groups = [(entry["test_writer_sha"], [path for path in entry["locked"] if path not in held])]
+    return groups + [(sha, [path for path, at in held.items() if at == sha]) for sha in dict.fromkeys(held.values())]
+
+
+def locked_findings(slot: str, entry: dict) -> list[dict]:
+    """The locked-file check for the ticket record `entry`: each locked file against its reference."""
+    return [finding for sha, paths in _references(entry) for finding in locked_changes(slot, sha, paths)]
+
+
+def restore_locked(slot: str, entry: dict) -> list[str]:
+    """Before a correction: each locked file that the tree has in another version than its reference, after a
+    commit or an edit of the implementer, goes back to the reference version in the tree. Returns those paths.
+    A diff that git cannot make restores nothing: the check of the next review then fails in the open."""
+    restored = []
+    for sha, paths in _references(entry):
+        if sha and paths:
+            restored += git(slot, "diff", "--name-only", sha, "--", *paths).stdout.splitlines()
+    for path in restored:
+        git(slot, "checkout", "-q", entry["held"].get(path, entry["test_writer_sha"]), "--", path)
+    return restored
+
+
+def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
+    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed` in
+    `locked`. `tip` is the new reference. When it is a correction on a branch that holds other work, a locked file
+    that the correction does not list and that differs from the old reference keeps the old one in `held`: a change
+    that the implementer made before the correction stays a finding of the next review."""
+    held = {path: sha for path, sha in entry["held"].items() if path not in listed}
+    others = [path for path in entry["locked"] if path not in listed and path not in held]
+    if entry["test_writer_sha"] and others:
+        diff = git(slot, "diff", "--name-only", entry["test_writer_sha"], tip, "--", *others)
+        # A diff that git cannot make holds each file: the check never passes unseen.
+        held.update(dict.fromkeys(diff.stdout.splitlines() if diff.returncode == 0 else others, entry["test_writer_sha"]))
+    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
 
 
 def route(findings: list[dict]) -> tuple[list[dict], list[dict]]:

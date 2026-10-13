@@ -2,11 +2,14 @@
 """implement-spec driver: validate the ticket set and the environment, then walk the ticket graph.
 
     sh run.sh --gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
-              [--timeout ROLE=MINUTES] [--dry-run]
+              [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--dry-run]
 
 Run it in the PR worktree. Each ready ticket runs in a slot: test-writer, implementer, the gate, the review with
 its fix rounds, the merge into the PR branch. `.agent/implement/` gets state.json (the resume contract), ledger.md, the gate records and summary.md.
-Messages go to stdout. Exit 0 = every ticket merged, 1 = a ticket is BLOCKED, 3 = usage or validation error.
+A choice that only the operator can make becomes a question: `.agent/implement/decisions.json` and the page
+`.agent/implement-review.html` hold the open questions, `.agent/implement-answers.json` or `--answer` gives the answers.
+Messages go to stdout. Exit 0 = every ticket merged, 1 = a ticket is BLOCKED, 2 = parked on a question,
+3 = usage or validation error.
 """
 from __future__ import annotations
 
@@ -21,12 +24,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import driver_agents
+import driver_answers
+import driver_decisions
 import driver_fixloop
 import driver_gate
 import driver_graph
 import driver_merge
 import driver_report
 import driver_review
+import driver_review_page
 import driver_slots
 import driver_state
 import driver_summary
@@ -35,6 +41,8 @@ from driver_slots import git
 
 OUT = Path(".agent/implement")
 STATE = OUT / "state.json"
+DECISIONS = OUT / "decisions.json"
+PAGE = Path(".agent/implement-review.html")
 # `--only` is test only: one role on the first ticket, with no gate, review or merge.
 ONLY = ("test-writer", "implementer", "reviewer", "correctness")
 # The phase a ticket is in while a role runs, and the one it reaches when the role's report is accepted.
@@ -53,15 +61,27 @@ class Run:
     kept: dict[str, int]  # ticket number -> the slot that holds its work from an interrupted run
     merging: threading.Lock = field(default_factory=threading.Lock)
     out: Path = OUT
+    # ticket number -> (question kind, one subject per question, the report they come from, the fields the ticket
+    # record gets): the stop that the ticket's thread asked for, until that thread blocks the ticket.
+    asks: dict[str, tuple[str, list[str], str, dict]] = field(default_factory=dict)
 
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
 
     def agent(self, role: str, number: str, slot: str, values: dict[str, str], **how) -> tuple[str, dict]:
         """One role with its one rerun: ("", report) or (why the ticket is blocked, {}). A report that says BLOCKED
-        or NEEDS_CONTEXT blocks too."""
+        or NEEDS_CONTEXT blocks too, and a contradicted locked test asks the operator (requirement 17)."""
         error, report = _agent(role, number, slot, values, self, **how)
+        if subject := driver_decisions.contradicted(role, report):
+            # The commits of the implementer stay: after the ruling the ticket goes on from them, not from a reset.
+            self.ask(number, "locked-test", [subject], str(OUT / number / f"{role}-{how.get('fix_round', 0)}.json"),
+                     tip=driver_slots.head(slot))
         return error or _stopped(role, report), report
+
+    def ask(self, number: str, kind: str, subjects: list[str], report: str, **fields) -> None:
+        """The ticket is about to block on a choice of the operator: one question of `kind` per subject. `fields`
+        go to the ticket record with the stop."""
+        self.asks[number] = (kind, subjects, report, fields)
 
     def gated(self, number: str, slot: str, commit: str) -> str:
         return _gated(number, slot, self, commit)
@@ -95,12 +115,15 @@ def _timeout(text: str) -> tuple[str, float]:
     return role, float(minutes)
 
 
-def _ledger(sentence: str) -> None:
-    """One plain sentence per event. Only the driver writes the ledger, and it never reads it (requirement 16)."""
+def _ledger(sentence: str) -> int:
+    """One plain sentence per event; returns its line number, for a pointer. Only the driver writes the ledger, and
+    it takes no fact from it (requirement 16): it only counts the lines."""
     with _LEDGER:
         OUT.mkdir(parents=True, exist_ok=True)
-        with (OUT / "ledger.md").open("a") as ledger:
+        with (OUT / "ledger.md").open("a+") as ledger:
             ledger.write(" ".join(sentence.split()) + "\n")
+            ledger.seek(0)
+            return sum(1 for _ in ledger)
 
 
 def _hygiene(slot: str, branch: str, tip: str) -> str:
@@ -217,7 +240,19 @@ def _values(ticket: driver_tickets.Ticket, slot: str, run: Run) -> dict[str, str
     return {"spec": os.path.relpath(run.args.spec, slot), "seam": ticket.seam, "pr_branch": run.pr,
             "branch": f"ticket/{ticket.number}", "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
             "correctness": str(driver_review.CORRECTNESS),
+            "blocked_report": os.path.relpath(OUT / ticket.number / "implementer-0.json", slot),
             "writer_report": os.path.relpath(OUT / ticket.number / "test-writer-0.json", slot)}
+
+
+def _restored(number: str, slot: str, entry: dict) -> list[str]:
+    """Before a correction: each locked file that the implementer changed, in a commit or in the tree, goes back to
+    its reference version in the tree (requirement 7). The correction then starts from the locked version, and its
+    commit carries that version plus its own change: no change of the implementer becomes the reference."""
+    paths = driver_review.restore_locked(slot, entry)
+    for path in paths:
+        _ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
+                "the tree, so the correction starts from the locked version.")
+    return paths
 
 
 def _roles(ticket: driver_tickets.Ticket, number: int, run: Run) -> str:
@@ -229,21 +264,27 @@ def _roles(ticket: driver_tickets.Ticket, number: int, run: Run) -> str:
     start, error = _placed(ticket, number, entry, run)
     if error:
         return f"the start: {error}"
-    notes = ["interrupted"] * (run.kept.get(ticket.number) == number)
-    if notes:
+    # A ruling sent the ticket back to this role: its template says what is on the branch and in the tree.
+    notes = [entry["note"]] if entry["note"] else ["interrupted"] * (run.kept.get(ticket.number) == number)
+    if notes == ["interrupted"]:
         _ledger(f"Ticket {ticket.number}: resumed in slot {number} with the work the interrupted {roles[0]} left.")
     values = {**_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
     for role in roles:
         run.state.ticket(ticket.number, phase=DURING.get(role, "review"))
         values["start_sha"] = start
-        error, report = run.agent(role, ticket.number, slot, values, notes=notes)
+        # A test-writer on a ticket that has locked tests is the correction after a ruling.
+        check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
+        if check["correction"]:
+            check["restored"] = _restored(ticket.number, slot, entry)
+        error, report = run.agent(role, ticket.number, slot, values, notes=notes, check=check)
         if error:
             return f"the {role}: {error}"
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":  # only its schema types `locked`
-            facts.update(test_writer_sha=facts["tip"], locked=report["locked"])
-            values["locked"] = " ".join(report["locked"])
-        run.state.ticket(ticket.number, phase=AFTER.get(role, "review"), **facts)
+            # A correction lists only the files it corrected: the earlier ones stay locked.
+            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"]))
+            values["locked"] = " ".join(facts["locked"])
+        run.state.ticket(ticket.number, phase=AFTER.get(role, "review"), note="", **facts)
         start, notes = facts["tip"], []
     return ""
 
@@ -318,6 +359,25 @@ def _merged(ticket: driver_tickets.Ticket, slot: str, run: Run) -> str:
     return ""
 
 
+def _blocked(number: str, run: Run, line: int) -> None:
+    """Block the ticket and, when it asked for a stop, add its questions (requirement 17), in one write of
+    state.json: a stop is never half there. `line` is the ledger line that says why the ticket is blocked."""
+    kind, subjects, report, fields = run.asks.pop(number, ("", [], "", {}))
+
+    def change(state: dict) -> None:
+        state["tickets"][number].update(fields, phase="blocked")
+        asked = state["run"]["questions"]
+        state["run"]["stops"] += bool(subjects)
+        for subject in subjects:
+            asked.append(driver_decisions.question(kind, number, subject, [report, f"{OUT / 'ledger.md'}:{line}"],
+                                                   asked, state["run"]["stops"]))
+
+    run.state.update(change)
+    if subjects:
+        _ledger(f"Ticket {number}: the operator decides on {len(subjects)} question{'s' * (len(subjects) > 1)} of "
+                f"kind {kind} in {DECISIONS}.")
+
+
 def _ticket(ticket: driver_tickets.Ticket, number: int, run: Run) -> bool:
     """One ticket in slot `number`, from the phase state.json records to merged or blocked. True: the slot is free.
     A blocked ticket keeps a slot that holds uncommitted work, for the operator to look at."""
@@ -329,8 +389,7 @@ def _ticket(ticket: driver_tickets.Ticket, number: int, run: Run) -> bool:
         error = "" if reviewed else driver_fixloop.run(ticket, slot, run, _values(ticket, slot, run))
         error = error or _merged(ticket, slot, run)
     if error:
-        run.state.ticket(ticket.number, phase="blocked")
-        _ledger(f"Ticket {ticket.number}: BLOCKED at {error}.")
+        _blocked(ticket.number, run, _ledger(f"Ticket {ticket.number}: BLOCKED at {error}."))
         print(f"{ticket.file}: BLOCKED at {error}")
     return driver_slots.release(slot)
 
@@ -416,15 +475,85 @@ def _checked(tickets: list[driver_tickets.Ticket], state: driver_state.State, sl
     return pr, errors or driver_slots.setup(slots, args.prepare, set(kept.values()))
 
 
+def _published(run: dict) -> str:
+    """Write decisions.json and the review page for the questions of `run` of state.json (requirement 17). Returns
+    "" or why the page is not there. A run that never stopped writes neither, and no open question needs no page."""
+    if not run["questions"]:
+        return ""
+    document = driver_decisions.document(run)
+    DECISIONS.write_text(json.dumps(document, indent=1) + "\n")
+    PAGE.unlink(missing_ok=True)
+    try:
+        if document["questions"]:
+            PAGE.write_text(driver_review_page.render(document))
+    except (OSError, ValueError) as exc:
+        return (f"implement-spec: cannot write {PAGE} for the open questions of {DECISIONS}: {exc}; install the "
+                "review-page skill next to implement-spec")
+    return ""
+
+
+def _answers(state: driver_state.State, args) -> list[str]:
+    """Before any agent: `--answer` writes the answers file, then each answer of the file that counts becomes a
+    ruling in the ledger and lets its ticket go on (requirement 17). Returns [] or the errors that stop the run.
+    The ledger comes first: a run that is stopped between the two writes gives a ruling twice, never an answer
+    that no ledger line names."""
+    run = state.read()["run"]
+    questions, document = run["questions"], driver_decisions.document(run)
+    if errors := driver_answers.given(args.answer, document):
+        return errors
+    answers, ignored = driver_answers.read(document)
+    rulings, moved = driver_decisions.apply(questions, answers)
+    for sentence in ignored + rulings:
+        _ledger(sentence)
+
+    def change(new: dict) -> None:
+        new["run"]["questions"] = questions
+        for number, fields in moved.items():
+            new["tickets"][number].update(fields)
+
+    state.update(change)
+    error = _published(run)
+    return [error] if error else []
+
+
+def _stage(path: str | None, code: int, questions: int, blocked: list[str]) -> None:
+    """stage.json, for the dispatcher of an unattended run that did not end with exit 0 (requirement 18)."""
+    if not (path and code):
+        return
+    body = ({"status": "awaiting-review", "artifact": str(PAGE), "open_questions": questions} if code == 2
+            else {"status": "blocked", "blocked": blocked})
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps({"stage": "implement", **body}, indent=1) + "\n")
+
+
+def _ended(final: dict, args) -> int:
+    """The exit code (requirement 20), after the questions are published and the operator, or the dispatcher of
+    an unattended run, is told (requirement 18). Only a question whose kind parks gives exit 2."""
+    if error := _published(final["run"]):
+        print(error)
+        return 3
+    blocked = [number for number, entry in final["tickets"].items() if entry["phase"] == "blocked"]
+    still = driver_decisions.document(final["run"])["questions"]
+    code = 2 if driver_decisions.parked(final["run"]["questions"]) else int(bool(blocked))
+    if args.unattended:
+        _stage(args.stage_json, code, len(still), blocked)
+    else:
+        print(driver_decisions.text(still, str(driver_answers.FILE), str(PAGE)), end="")
+    return code
+
+
 def _run(tickets: list[driver_tickets.Ticket], models: dict[str, list[str]], args, kept: dict[str, int]) -> int:
     state = driver_state.State(STATE)
     slots = 1 if args.only else min(args.parallel, len(tickets))
     pr, errors = _checked(tickets, state, slots, args, kept)
+    errors = errors or _answers(state, args)
     for error in errors:
         print(error)
     if errors:
         return 3
     run = Run(args, models, state, pr, kept)
+    if args.unattended and args.stage_json:
+        Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
     # The PR branch is checked out in no slot while tickets run: a merge moves its ref and no tree changes under it.
     # A kept slot 1 is on its ticket branch already.
     if 1 not in kept.values():
@@ -438,7 +567,7 @@ def _run(tickets: list[driver_tickets.Ticket], models: dict[str, list[str]], arg
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)
     print(summary, end="")
-    return int(any(entry["phase"] == "blocked" for entry in final["tickets"].values()))
+    return _ended(final, args)
 
 
 def _arguments(argv: list[str] | None) -> argparse.Namespace:
@@ -458,6 +587,13 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--parallel", type=int, default=2, help="tickets in flight at once (default 2)")
     parser.add_argument("--prepare", help="shell command run once in each new slot 2..N, in "
                         ".agent/worktrees/slot-K/ (for example: link the installed dependencies)")
+    parser.add_argument("--answer", action="append", type=driver_answers.pair, default=[],
+                        metavar="QUESTION=OPTION", help="the answer to one open question of "
+                        f"{DECISIONS}, repeatable; it goes to {driver_answers.FILE}")
+    parser.add_argument("--unattended", action="store_true", help="at a question, print no question: write "
+                        "--stage-json for the dispatcher, which gives the answers file to the next run")
+    parser.add_argument("--stage-json", metavar="FILE", help="with --unattended: where the driver writes how a "
+                        "run ended that is parked (exit 2) or has a BLOCKED ticket (exit 1)")
     parser.add_argument("--only", choices=ONLY, help="test only: run this one role on the first ticket")
     args = parser.parse_args(argv)
     args.timeout = {**driver_agents.TIMEOUTS, **dict(args.timeout)}
@@ -471,7 +607,8 @@ def main(argv: list[str] | None = None) -> int:
         errors.append("--spec is required: the spec file the prompts point at")
     if args.parallel < 1:
         errors.append("--parallel must be 1 or more")
-    # After an interrupt, a slot may hold the work of the role that was stopped: that is not an error (requirement 15).
+    # After an interrupt, a slot may hold the work of the role that was stopped, and after a stop the work of the
+    # role that asks the operator: that is not an error (requirements 15 and 18).
     kept = driver_state.kept(json.loads(STATE.read_text())) if STATE.exists() else {}
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)
