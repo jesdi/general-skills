@@ -21,7 +21,7 @@ TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45
 # provider -> (CLI, efforts the CLI accepts).
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
-READ_ONLY = ("reviewer", "correctness")
+READ_ONLY = ("reviewer", "correctness", "final-reviewer")
 LIVE: set[int] = set()  # the process groups of the agents that run now
 STOPPED = False  # set by stop(): no agent starts after it
 _LIVE = threading.Lock()  # an agent starts or the run stops, never both at once

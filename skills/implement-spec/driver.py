@@ -2,14 +2,17 @@
 """implement-spec driver: validate the ticket set and the environment, then walk the ticket graph.
 
     sh run.sh --gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
-              [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--dry-run]
+              [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--push]
+              [--dry-run]
 
 Run it in the PR worktree. Each ready ticket runs in a slot: test-writer, implementer, the gate, the review with
 its fix rounds, the merge into the PR branch. `.agent/implement/` gets state.json (the resume contract), ledger.md, the gate records and summary.md.
+When every ticket is merged and the repository has an `origin`, the end of run follows (driver_final): tidy, rebase,
+gate, final review, one fix batch. Then nothing is pushed without `--push` or `--unattended`.
 A choice that only the operator can make becomes a question: `.agent/implement/decisions.json` and the page
 `.agent/implement-review.html` hold the open questions, `.agent/implement-answers.json` or `--answer` gives the answers.
-Messages go to stdout. Exit 0 = every ticket merged, 1 = a ticket is BLOCKED, 2 = parked on a question,
-3 = usage or validation error.
+Messages go to stdout. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of run
+is BLOCKED, 2 = parked on a question, 3 = usage or validation error.
 """
 from __future__ import annotations
 
@@ -26,6 +29,7 @@ from pathlib import Path
 import driver_agents
 import driver_answers
 import driver_decisions
+import driver_final
 import driver_fixloop
 import driver_gate
 import driver_graph
@@ -86,8 +90,8 @@ class Run:
     def gated(self, number: str, slot: str, commit: str) -> str:
         return _gated(number, slot, self, commit)
 
-    def ledger(self, sentence: str) -> None:
-        _ledger(sentence)
+    def ledger(self, sentence: str) -> int:
+        return _ledger(sentence)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -126,6 +130,16 @@ def _ledger(sentence: str) -> int:
             return sum(1 for _ in ledger)
 
 
+def _who(number: str) -> str:
+    """How the ledger names the owner of an agent or a gate: a ticket, or the end of run (driver_final)."""
+    return "End of run" if number == driver_final.FINAL else f"Ticket {number}"
+
+
+def _record(state: dict, number: str) -> dict:
+    """The record of state.json that holds the green gates of `number`."""
+    return state["run"]["final"] if number == driver_final.FINAL else state["tickets"][number]
+
+
 def _hygiene(slot: str, branch: str, tip: str) -> str:
     """After an agent: the ticket branch exists, is checked out in the slot and still holds `tip`. If not, reset."""
     head = git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
@@ -146,11 +160,13 @@ def _outcome(role: str, code: int | None, minutes: float, report: Path, context:
     branch, tip = context["branch"], context["start"]
     # Two read-only agents share a slot: the driver resets nothing under the other one. The review checks the slot
     # when both are done.
-    if role not in driver_agents.READ_ONLY and (moved := _hygiene(context["repo"], branch, tip)):
+    # `detached`: the agent works on a rebase that is open on a detached HEAD, so there is no branch to hold.
+    shared = role in driver_agents.READ_ONLY or context.get("detached")
+    if not shared and (moved := _hygiene(context["repo"], branch, tip)):
         return moved, driver_agents.render("moved", {"branch": branch, "tip": tip})
     if code is None:
         return f"timed out after {minutes:g} minutes", _timed_out(role, minutes, context)
-    error = "; ".join(driver_report.validate(role, str(report), context))
+    error = "; ".join(driver_report.validate(context["template"], str(report), context))
     return error, driver_agents.render("rerun", {"error": error})
 
 
@@ -168,21 +184,21 @@ def _timed_out(role: str, minutes: float, context: dict) -> str:
 
 
 def _agent(role: str, number: str, slot: str, values: dict[str, str], run: Run, notes: tuple | list = (),
-           entry: str = "", fix_round: int = 0, check: dict | None = None) -> tuple[str, dict]:
+           entry: str = "", fix_round: int = 0, check: dict | None = None, template: str = "") -> tuple[str, dict]:
     """Run one role in its slot, with at most one rerun. Returns ("", report) when accepted, else (the last error, {}).
     `notes` names templates whose lines the first prompt gets, as a rerun prompt gets its rejection. `entry` is the
     model entry when it is not the first of the role's list, `fix_round` numbers the files, and `check` adds to what
-    the report validation knows."""
+    the report validation knows. `template` names the prompt, with its schema, when the role has more than one."""
     folder, entry = OUT / number, entry or run.models[role][0]
     folder.mkdir(parents=True, exist_ok=True)
     report, log, prompt = (folder / f"{role}-{fix_round}{suffix}" for suffix in (".json", ".log", ".prompt.md"))
     # The agent works in its slot, so the paths it gets are relative to the slot.
     seen = os.path.relpath(report, slot)
     context = {"repo": slot, "branch": values["branch"], "start": values["start_sha"], "log": str(log), "round": 0,
-               **(check or {})}
+               "template": template or role, **(check or {})}
     argv = ([run.args.runner, role, os.path.relpath(prompt, slot), seen] if run.args.runner
             else driver_agents.command(role, entry, seen))
-    text = driver_agents.render(role, {**values, "report": seen})
+    text = driver_agents.render(context["template"], {**values, "report": seen})
     if notes:
         text += "".join(driver_agents.render(note, values) for note in notes) + driver_agents.tail(text, seen)
     minutes, error = run.args.timeout[role], ""
@@ -196,7 +212,7 @@ def _agent(role: str, number: str, slot: str, values: dict[str, str], run: Run, 
         cost = driver_agents.cost(log)
         used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": float(cost or 0)}
         run.state.update(lambda state: state["run"]["agents"].append(used))
-        _ledger(f"Ticket {number}: {role} ran on {entry} for {seconds:.1f}s{f', cost {cost} USD' if cost else ''}: "
+        _ledger(f"{_who(number)}: {role} ran on {entry} for {seconds:.1f}s{f', cost {cost} USD' if cost else ''}: "
                 f"{error or 'report accepted'}.")
         if not error:
             return "", json.loads(report.read_text())
@@ -292,7 +308,7 @@ def _roles(ticket: driver_tickets.Ticket, number: int, run: Run) -> str:
 def _gated(number: str, slot: str, run: Run, commit: str) -> str:
     """Gate `commit` in the slot, unless a green record settles it (requirement 8). Returns "" or why the ticket
     is blocked. The gate runs only on the commit the driver is about to trust: a slot that is not there is red."""
-    if commit in run.state.read()["tickets"][number]["green_gates"]:
+    if commit in _record(run.state.read(), number)["green_gates"]:
         return ""
     if (at := driver_slots.head(slot)) != commit:
         return f"the slot is at {at[:7]}, not at {commit[:7]}: the gate did not run"
@@ -300,12 +316,12 @@ def _gated(number: str, slot: str, run: Run, commit: str) -> str:
 
     def settle(state: dict) -> None:
         state["run"]["gates"] += 1
-        state["tickets"][number]["green_gates"] += [commit] * green
+        _record(state, number)["green_gates"] += [commit] * green
 
     run.state.update(settle)
     if not green:
         return f"the gate is red on {commit[:7]}, record {record}"
-    _ledger(f"Ticket {number}: the gate is green on {commit[:7]}, record {record}.")
+    _ledger(f"{_who(number)}: the gate is green on {commit[:7]}, record {record}.")
     return ""
 
 
@@ -325,6 +341,13 @@ def _resolved(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str, file
     run.state.ticket(number, tip=new)
     _ledger(f"Ticket {number}: the conflict agent resolved the merge conflict in {', '.join(files)} at {new[:7]}.")
     return new, ""
+
+
+def _landed(state: dict, number: str, new: str) -> None:
+    """The ticket is merged, and `new` is the PR tip its merge made: the tidy of the end of run gives the ticket's
+    commit the tree of `new`. A ticket that merges a second time, after a resume, has its last merge only."""
+    state["tickets"][number]["phase"] = "merged"
+    state["run"]["landed"] = [one for one in state["run"]["landed"] if one[0] != number] + [[number, new]]
 
 
 def _merged(ticket: driver_tickets.Ticket, slot: str, run: Run) -> str:
@@ -351,7 +374,7 @@ def _merged(ticket: driver_tickets.Ticket, slot: str, run: Run) -> str:
             error = _gated(number, slot, run, new)
         if error := error or driver_merge.land(run.pr, new, old):
             return f"the merge: {error}"
-        run.state.ticket(number, phase="merged")
+        run.state.update(lambda state: _landed(state, number, new))
     driver_slots.release(slot)  # off the branch, so that no slot has it checked out when it is deleted
     kept = "" if driver_merge.delete(branch, run.pr) else f"; {branch} is kept"
     how = {tip: "a fast-forward", old: "a merge an earlier run made"}.get(new, "a merge commit")
@@ -471,6 +494,7 @@ def _checked(tickets: list[driver_tickets.Ticket], state: driver_state.State, sl
     if error:
         return "", [error]
     state.start(pr, [ticket.number for ticket in tickets])
+    driver_final.finish(state, pr)
     errors = [error for error in (_resumed(ticket.number, state) for ticket in tickets) if error]
     return pr, errors or driver_slots.setup(slots, args.prepare, set(kept.values()))
 
@@ -516,27 +540,30 @@ def _answers(state: driver_state.State, args) -> list[str]:
     return [error] if error else []
 
 
-def _stage(path: str | None, code: int, questions: int, blocked: list[str]) -> None:
-    """stage.json, for the dispatcher of an unattended run that did not end with exit 0 (requirement 18)."""
-    if not (path and code):
+def _stage(path: str | None, code: int, questions: int, blocked: list[str], pushed: bool) -> None:
+    """stage.json, for the dispatcher of an unattended run: how a run ended that did not end with exit 0, or that
+    it is done when the PR branch is pushed (requirement 18)."""
+    if not (path and (code or pushed)):
         return
-    body = ({"status": "awaiting-review", "artifact": str(PAGE), "open_questions": questions} if code == 2
-            else {"status": "blocked", "blocked": blocked})
+    body = {2: {"status": "awaiting-review", "artifact": str(PAGE), "open_questions": questions},
+            0: {"status": "done"}}.get(code, {"status": "blocked", "blocked": blocked})
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps({"stage": "implement", **body}, indent=1) + "\n")
 
 
-def _ended(final: dict, args) -> int:
+def _ended(final: dict, args, failed: bool) -> int:
     """The exit code (requirement 20), after the questions are published and the operator, or the dispatcher of
-    an unattended run, is told (requirement 18). Only a question whose kind parks gives exit 2."""
+    an unattended run, is told (requirement 18). Only a question whose kind parks gives exit 2. `failed`: the end
+    of run is BLOCKED; stage.json names it `final`, as its folder is named."""
     if error := _published(final["run"]):
         print(error)
         return 3
     blocked = [number for number, entry in final["tickets"].items() if entry["phase"] == "blocked"]
+    blocked += [driver_final.FINAL] * failed
     still = driver_decisions.document(final["run"])["questions"]
     code = 2 if driver_decisions.parked(final["run"]["questions"]) else int(bool(blocked))
     if args.unattended:
-        _stage(args.stage_json, code, len(still), blocked)
+        _stage(args.stage_json, code, len(still), blocked, bool(final["run"]["final"].get("pushed")))
     else:
         print(driver_decisions.text(still, str(driver_answers.FILE), str(PAGE)), end="")
     return code
@@ -563,11 +590,13 @@ def _run(tickets: list[driver_tickets.Ticket], models: dict[str, list[str]], arg
     finally:
         if driver_slots.release("."):  # slot 1 keeps the uncommitted work of a blocked ticket; else it goes back
             git(".", "checkout", "-q", pr)
+    # Every ticket thread has ended, so every slot is idle: only now may the end of run rewrite the PR branch.
+    failed, lines = (False, []) if args.only else driver_final.run(run, tickets)
     final = state.read()
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)
-    print(summary, end="")
-    return _ended(final, args)
+    print(summary + "".join(line + "\n" for line in lines), end="")
+    return _ended(final, args, failed)
 
 
 def _arguments(argv: list[str] | None) -> argparse.Namespace:
@@ -594,8 +623,11 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                         "--stage-json for the dispatcher, which gives the answers file to the next run")
     parser.add_argument("--stage-json", metavar="FILE", help="with --unattended: where the driver writes how a "
                         "run ended that is parked (exit 2) or has a BLOCKED ticket (exit 1)")
+    parser.add_argument("--push", action="store_true", help="local mode: when the final review has passed, push "
+                        "the PR branch to origin and open the PR; without it nothing is pushed")
     parser.add_argument("--only", choices=ONLY, help="test only: run this one role on the first ticket")
     args = parser.parse_args(argv)
+    args.argv = list(sys.argv[1:] if argv is None else argv)  # for the rerun command the driver prints
     args.timeout = {**driver_agents.TIMEOUTS, **dict(args.timeout)}
     return args
 
@@ -613,7 +645,7 @@ def main(argv: list[str] | None = None) -> int:
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)
     tickets, ticket_errors = driver_tickets.parse(args.tickets)
-    errors += model_errors + ticket_errors + driver_review.missing(tickets)
+    errors += model_errors + ticket_errors + driver_review.missing(tickets) + driver_final.missing()
     for error in errors:
         print(error)
     if errors:

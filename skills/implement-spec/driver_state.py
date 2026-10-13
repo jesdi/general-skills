@@ -1,7 +1,9 @@
 """state.json: the resume contract. One lock, every write a read-modify-write, published by rename. Stdlib only.
 
     {"run": {"revision", "pr_branch", "gates", "stops", "agents": [{ticket, role, entry, seconds, cost}],
-             "questions": [the questions of every stop, see driver_decisions]},
+             "questions": [the questions of every stop, see driver_decisions],
+             "start": the PR tip when the run began, "landed": [[ticket, the PR tip its merge made]] in merge order,
+             "final": the record of the end of run, see driver_final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}
 
 `note` names the prompt template of the ruling that sent the ticket back to a role; "" when there is none.
@@ -38,8 +40,10 @@ class State:
     def start(self, pr_branch: str, numbers: list[str]) -> dict:
         """Create the file for a new run, or add the tickets a resumed run does not know yet."""
         def change(state: dict) -> None:
-            state.setdefault("run", {"revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0,
-                                     "agents": [], "questions": []})
+            state.setdefault("run", {
+                "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0, "agents": [],
+                "questions": [], "start": git(".", "rev-parse", f"refs/heads/{pr_branch}").stdout.strip(),
+                "landed": [], "final": {"reviewed": None, "round": 0, "open": [], "green_gates": []}})
             tickets = state.setdefault("tickets", {})
             for number in numbers:
                 tickets.setdefault(number, _ticket())

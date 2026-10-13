@@ -115,7 +115,7 @@ COMMIT = "echo $role >> work.txt; git add -A; git commit -q -m $role\n"
 WRITER = """fields='"locked": ["work.txt"], "red": [{"test": "t", "line": "FAILED t"}]'; echo FAILED t\n"""
 IMPLEMENTER = """fields='"green": ["1 passed"]'; echo '{"total_cost_usd": 0.25}'\n"""
 # The reviewer of a plain run: it finds nothing and proves the locked file of WRITER.
-CLEAN = """case $role in reviewer|correctness) echo FAILED t
+CLEAN = """case $role in reviewer|correctness|final-reviewer) echo FAILED t
     printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": [], "mutations": [{"test": "work.txt::t", "file": "work.txt", "line": 1, "red": "FAILED t"}]}' > "$report"; exit 0;; esac
 """
 ONCE = '[ -e "$0.again" ] || { touch "$0.again"; %s; }\n'  # the first attempt only
@@ -131,7 +131,7 @@ def agents(tmp_path, capsys, body, *args, seam="none — refactor"):
     code = driver.main(["--gate", "true", "--spec", "spec.md", "--runner", str(runner), *args])
     capsys.readouterr()
     ledger = tmp_path / ".agent/implement/ledger.md"
-    return code, ledger.read_text().splitlines() if ledger.exists() else []
+    return code, [l for l in ledger.read_text().splitlines() if not l.startswith("End-of-run work skipped")] if ledger.exists() else []
 
 
 def branches():
@@ -313,7 +313,7 @@ def walk(tmp_path, capsys, body, *args, gate="true"):
     runner.chmod(0o755)
     code = driver.main(["--gate", gate, "--spec", "spec.md", "--runner", str(runner), *args])
     ledger = tmp_path / ".agent/implement/ledger.md"
-    return code, ledger.read_text().splitlines() if ledger.exists() else [], capsys.readouterr().out
+    return code, [l for l in ledger.read_text().splitlines() if not l.startswith("End-of-run work skipped")] if ledger.exists() else [], capsys.readouterr().out
 
 
 def out_of(*command):

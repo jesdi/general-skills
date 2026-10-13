@@ -57,7 +57,7 @@ rec = dict(id=f"{{time.time_ns()}}-{{os.getpid()}}", key=key, nn=nn, role=role, 
 save(rec)
 step = json.loads((rig / "plan.json").read_text()).get(key, [])
 step = step[n] if n < len(step) else {{}}
-if role in ("reviewer", "correctness") and "report" not in step:  # a role the test does not script reports no findings
+if role in ("reviewer", "correctness", "final-reviewer") and "report" not in step:  # a role the test does not script reports no findings
     reds = [f"FAILED {{p}}::test_x - AttributeError" for p in git("diff", "--name-only", "feat/csv...HEAD", "--", "tests").split()]
     proofs = [dict(test=r.split()[1], file="demo/export.py", line=1, red=r) for r in reds]
     step = dict(step, stdout="".join(r + "\\n" for r in reds), report=dict(

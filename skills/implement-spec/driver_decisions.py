@@ -64,6 +64,18 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    # The triage of the final review (requirement 19): its questions belong to no ticket, so `ticket` is "".
+    "final-finding": Kind(
+        True,
+        "Final review: a finding is open after the second review round: {subject}",
+        "The final review ran its two rounds and this finding is open. Nothing is pushed while it is open.",
+        "fix",
+        {"fix": Option(
+            "Keep the finding open. The run ends with nothing pushed, and the finding is fixed before a push.",
+            "Ruling: final-review finding stays open and nothing is pushed (fix): {subject}.", {}),
+         "accept": Option(
+            "Close the finding as it is. The branch can be pushed when each open finding is accepted.",
+            "Ruling: final-review finding closed as it is (accept): {subject}.", {})}),
 }
 
 
@@ -78,10 +90,11 @@ def contradicted(role: str, report: dict) -> str:
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int) -> dict:
     """A new open question of stop number `stop`. Its id is `<NN>-<kind>-<n>`; n counts the questions of that ticket
-    and kind in the whole run (`asked` is every question of the run), so a second stop never takes an id again."""
+    and kind in the whole run (`asked` is every question of the run), so a second stop never takes an id again.
+    A question of the end of run has no ticket: its id is `<kind>-<n>`."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    return {"id": f"{ticket}-{kind}-{number}", "title": made.title.format(**values), "why": made.why.format(**values),
+    return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
             "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "answer": None}
@@ -93,6 +106,11 @@ def document(run: dict) -> dict:
             "questions": [{name: q[name] for name in PUBLIC} for q in run["questions"] if q["answer"] is None]}
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
     return {"revision": hashlib.sha256(canonical.encode()).hexdigest(), **body}
+
+
+def rulings(questions: list[dict]) -> list[str]:
+    """The ruling sentence of each answered question, as the ledger got it, without the note of the operator."""
+    return [KINDS[q["kind"]].options[q["answer"]].ruling.format(**q) for q in questions if q["answer"] is not None]
 
 
 def parked(questions: list[dict]) -> bool:

@@ -4,7 +4,8 @@ validate(role, path, context) -> list of str, empty when the report is accepted.
   context: repo (slot path), branch, start (HEAD sha when the role started), log (the agent's log file),
            round (1 for the first review of a ticket, default 0), locked (the locked files, for that review),
            correction (true for a test-writer that corrects locked tests on a branch that holds other work),
-           restored (the locked files the driver put back to their reference before that correction).
+           restored (the locked files the driver put back to their reference before that correction),
+           owners (the ticket numbers of the run, for the fix batch of the final review).
 The schema of a role is the json block of its prompt template, so the agent reads the text the driver enforces.
 """
 from __future__ import annotations
@@ -33,9 +34,27 @@ def _seen(line: str, log: str) -> bool:
     return line in log or json.dumps(line)[1:-1] in log
 
 
+def _shas(report: dict) -> list[str]:
+    """`commits` as SHAs: the fix batch of the final review gives each commit with its ticket."""
+    return [commit["sha"] if isinstance(commit, dict) else commit for commit in report["commits"]]
+
+
+def _owner_errors(report: dict, context: dict) -> list[str]:
+    """The fix batch of the final review: each new commit on the branch is in the report with a ticket of the run.
+    The driver names each commit `fix(NN)` from that ticket, so a commit with no owner is a violation."""
+    if "owners" not in context:
+        return []
+    given, branch = _shas(report), context["branch"]
+    new = _git(context["repo"], "rev-list", f"{context['start']}..{branch}")
+    errors = [f"commit {sha[:7]} is on {branch} and not in `commits`: each commit of the batch needs its ticket"
+              for sha in new if not any(sha.startswith(one) for one in given)]
+    return errors + [f"commit {commit['sha'][:7]}: {commit['ticket']} is not a ticket of this run"
+                     for commit in report["commits"] if commit["ticket"] not in context["owners"]]
+
+
 def _commit_errors(report: dict, context: dict) -> list[str]:
     """Every commit is new since the role started and on the branch; every locked path is in those commits."""
-    repo, branch, commits = context["repo"], context["branch"], report["commits"]
+    repo, branch, commits = context["repo"], context["branch"], _shas(report)
     new = _git(repo, "rev-list", f"{context['start']}..{branch}")
     errors = [f"commit {sha[:7]} is not a new commit on {branch}"
               for sha in commits if not any(n.startswith(sha) for n in new)]
@@ -89,5 +108,5 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     # Only the role's own fields are typed by its schema: any other field of the report is ignored.
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     # Reports are a trust boundary: git and the log must show what the report claims.
-    return (_commit_errors(report, context) + _correction_errors(report, context) + _proof_errors(report, context)
-            + _locked_errors(report, context))
+    return (_commit_errors(report, context) + _owner_errors(report, context) + _correction_errors(report, context)
+            + _proof_errors(report, context) + _locked_errors(report, context))

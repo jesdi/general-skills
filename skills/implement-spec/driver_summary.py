@@ -18,11 +18,23 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
             ("cost", f"{sum(agent['cost'] for agent in run['agents']):.2f} USD")]
 
 
+def _end(run: dict) -> list[str]:
+    """What the end of run did, from its record: without this sentence a run with no final review reads as done."""
+    final = run.get("final", {})
+    if final.get("skipped"):
+        return [f"The end-of-run work (rebase, tidy, final review, push) did not run: {final['skipped']}."]
+    if final.get("pushed"):
+        return [f"{run['pr_branch']} is pushed at {final['pushed'][:7]}; its PR is {final.get('pr') or 'not open'}."]
+    if final.get("reviewed"):
+        return [f"The final review covers {run['pr_branch']} up to {final['reviewed'][:7]}. Nothing is pushed."]
+    return []
+
+
 def render(state: dict) -> str:
     run, tickets = state["run"], state["tickets"]
     merged = sum(entry["phase"] == "merged" for entry in tickets.values())
     lines = [f"{merged} of {len(tickets)} tickets are merged into {run['pr_branch']}."]
     lines += [f"Ticket {number} is not merged: its phase is {entry['phase']}."
-              for number, entry in tickets.items() if entry["phase"] != "merged"]
+              for number, entry in tickets.items() if entry["phase"] != "merged"] + _end(run)
     table = ["| Measure | Value |", "|---|---|"] + [f"| {name} | {value} |" for name, value in _rows(run, tickets)]
     return "\n".join(lines + ["", *table]) + "\n"

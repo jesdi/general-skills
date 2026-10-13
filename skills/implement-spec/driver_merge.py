@@ -11,11 +11,11 @@ import subprocess
 from driver_slots import git
 
 
-def _ancestor(commit: str, of: str) -> bool:
+def ancestor(commit: str, of: str) -> bool:
     return git(".", "merge-base", "--is-ancestor", commit, of).returncode == 0
 
 
-def _identity(tip: str) -> dict[str, str]:
+def identity(tip: str) -> dict[str, str]:
     """git's own identity when it has one; else the identity of the ticket's last commit, so the merge can be made."""
     if git(".", "var", "GIT_COMMITTER_IDENT").returncode == 0:
         return {}
@@ -28,16 +28,16 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
 
     `pr_tip` itself when the ticket is merged already, `tip` for a fast-forward, else a new merge commit.
     """
-    if _ancestor(tip, pr_tip):
+    if ancestor(tip, pr_tip):
         return pr_tip, ""
-    if _ancestor(pr_tip, tip):
+    if ancestor(pr_tip, tip):
         return tip, ""
     tree = git(".", "merge-tree", "--write-tree", "--name-only", "--no-messages", pr_tip, tip)
     if tree.returncode:
         files = ", ".join(tree.stdout.splitlines()[1:]) or tree.stderr.strip()
         return "", f"the merge into the PR branch conflicts in {files}"
     made = subprocess.run(["git", "commit-tree", tree.stdout.strip(), "-p", pr_tip, "-p", tip, "-m", message],
-                          capture_output=True, text=True, env={**os.environ, **_identity(tip)})
+                          capture_output=True, text=True, env={**os.environ, **identity(tip)})
     return (made.stdout.strip(), "") if made.returncode == 0 else ("", f"git commit-tree failed: {made.stderr.strip()}")
 
 
@@ -65,4 +65,4 @@ def land(pr_branch: str, new: str, old: str) -> str:
 def delete(branch: str, pr_branch: str) -> bool:
     """Delete a merged ticket branch. It stays while its commits are not all in the PR branch, and `git branch -D`
     itself refuses a branch that a worktree has checked out, so no slot is left detached."""
-    return _ancestor(branch, pr_branch) and git(".", "branch", "-q", "-D", branch).returncode == 0
+    return ancestor(branch, pr_branch) and git(".", "branch", "-q", "-D", branch).returncode == 0
