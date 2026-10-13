@@ -1,12 +1,7 @@
-"""The answers file `.agent/implement-answers.json`, in the shape of skills/review-page/schema.md: who may write
-it, and which of its answers the driver takes (requirement 17). Stdlib only.
+"""The answers file `.agent/implement-answers.json`, in the shape of skills/review-page/schema.md.
 
     {"v": 1, "stage": "implement", "submitted": "changes", "revision": <decisions.json revision>,
      "answers": {<question id>: <option id>, "<question id>.note": <text>}}
-
-The dispatcher writes the file from the review page; `--answer` writes it from the command line. It is input from
-outside the driver: an answer counts only when the file is submitted, is bound to the current decisions revision,
-names an open question and names one of that question's options. All else is ignored with a ledger sentence.
 """
 from __future__ import annotations
 
@@ -30,8 +25,7 @@ def pair(text: str) -> tuple[str, str]:
 
 
 def given(pairs: list[tuple[str, str]], document: dict) -> list[str]:
-    """`--answer`: write the answers file, submitted and bound to `document`. Returns [] or the usage errors; then
-    nothing is written."""
+    """Write the answers file for `--answer`, bound to `document`. Returns the usage errors; then no file is written."""
     offered = _offered(document)
     errors = [f"--answer {question}={option}: " + (f"{question} offers {', '.join(offered[question])}"
                                                    if question in offered else f"no open question {question}")
@@ -57,7 +51,7 @@ def _unbound(file: object, revision: str) -> str:
 
 
 def _each(given: dict, offered: dict[str, list[str]]) -> tuple[dict, list[str]]:
-    """Each answer of a bound file on its own: (the answers and notes that count, a sentence per ignored one)."""
+    """(the answers and notes that count, a sentence per ignored one)."""
     answers, ignored = {}, []
     for key, value in given.items():
         question = key.removesuffix(".note")
@@ -72,8 +66,7 @@ def _each(given: dict, offered: dict[str, list[str]]) -> tuple[dict, list[str]]:
 
 
 def read(document: dict) -> tuple[dict, list[str]]:
-    """(the answers that count, one ledger sentence per thing that is ignored). With no open question the file
-    is history: nothing is read."""
+    """(the answers that count, a ledger sentence per ignored thing). With no open question nothing is read."""
     offered = _offered(document)
     if not (offered and FILE.exists()):
         return {}, []

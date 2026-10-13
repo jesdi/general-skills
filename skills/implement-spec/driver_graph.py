@@ -1,4 +1,4 @@
-"""The frontier: which tickets may start now, and which wait on a running ticket's Touches. Stdlib only."""
+"""The frontier: which tickets may start now, and which wait on a running ticket's Touches."""
 from __future__ import annotations
 
 import re
@@ -22,18 +22,12 @@ def overlap(one: Ticket, other: Ticket) -> str:
 
 
 def _waits(ticket: Ticket, phases: dict[str, str], running: set[str]) -> bool:
-    """Not running, not finished, and every Blocked by ticket is merged."""
     return (ticket.number not in running and phases[ticket.number] not in ("merged", "blocked")
             and all(phases[blocker] == "merged" for blocker in ticket.blocked_by))
 
 
 def frontier(tickets: list[Ticket], phases: dict[str, str], running: set[str]) -> tuple[list[Ticket], dict[str, str]]:
-    """(tickets that may start now, in file order; held ticket number -> why).
-
-    Ready (requirement 3): every Blocked by ticket is merged and no running ticket touches a function it touches.
-    The caller starts one ticket, adds it to `running` and asks again, so two ready tickets that overlap never
-    start together.
-    """
+    """(ready tickets in file order, held number -> why). Two ready tickets can overlap: start one, then ask again."""
     by = {t.number: t for t in tickets}
     ready: list[Ticket] = []
     holds: dict[str, str] = {}

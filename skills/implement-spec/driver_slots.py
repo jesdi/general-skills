@@ -1,4 +1,4 @@
-"""Slots: the worktrees agents run in. Slot 1 is the PR worktree, slots 2..N live under .agent/worktrees/. Stdlib only.
+"""Slots: the worktrees agents run in. Slot 1 is the PR worktree, slots 2..N live under .agent/worktrees/.
 
 Every path is relative to the PR worktree, which is the driver's working directory for the whole run.
 """
@@ -14,7 +14,7 @@ def git(slot: str, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def names(listing: str) -> list[str]:
-    """The paths of a listing that git made with `-z`: no path is quoted there, whatever its name holds."""
+    """The paths of a listing that git made with `-z`."""
     return [name for name in listing.split("\0") if name]
 
 
@@ -27,12 +27,10 @@ def path(number: int) -> str:
 
 
 def create(number: int, prepare: str | None, keep: bool = False) -> str:
-    """Make slot 2..N once and prepare it once; a slot that exists is reused, off any branch. Returns "" or the error.
-    `keep`: the slot holds the work of an interrupted ticket, which runs there again; it stays as it is."""
+    """Make and prepare slot 2..N once, or reuse it off any branch (`keep`: as it is). Returns "" or the error."""
     slot = path(number)
     git(".", "worktree", "prune")  # a slot directory that was removed by hand
     if Path(slot, ".git").exists():
-        # The slot of an earlier run. Like the PR worktree, it must be clean: the driver drops no work.
         if not (keep or release(slot)):
             return f"slot {number}: {slot} has uncommitted changes: commit or discard them"
         return ""
@@ -51,7 +49,7 @@ def create(number: int, prepare: str | None, keep: bool = False) -> str:
 
 
 def setup(count: int, prepare: str | None, keep: set[int] = frozenset()) -> list[str]:
-    """Slots 2..count, before any agent (requirement 4). The first failure stops the run: [] or [the error]."""
+    """Slots 2..count, before any agent. The first failure stops the run: [] or [the error]."""
     for number in range(2, count + 1):
         if error := create(number, prepare, number in keep):
             return [error]
@@ -59,8 +57,7 @@ def setup(count: int, prepare: str | None, keep: set[int] = frozenset()) -> list
 
 
 def release(slot: str) -> bool:
-    """Take a clean slot off its branch, so the branch can be deleted and the slot reused. False: the slot has
-    uncommitted work, which stays where it is."""
+    """Take a clean slot off its branch. False: the slot has uncommitted work, which stays where it is."""
     if git(slot, "status", "--porcelain").stdout.strip():
         return False
     git(slot, "checkout", "-q", "--detach")

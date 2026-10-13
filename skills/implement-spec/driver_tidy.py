@@ -1,8 +1,7 @@
-"""History of the PR branch as commits made with git plumbing (requirement 19): the tidy into one commit per ticket,
-and the new messages of a rebased history and of a fix batch. Stdlib only.
+"""History of the PR branch as commits made with git plumbing: the tidy into one commit per ticket, and the new
+messages of a rebased history and of a fix batch.
 
-Nothing here checks out a tree or moves a ref: a new commit takes the tree of an existing commit, so a rewrite
-changes how the work is presented and never a file. The caller compares `HEAD^{tree}` before it moves the branch.
+Nothing here checks out a tree or moves a ref: a new commit takes the tree of an existing commit.
 """
 from __future__ import annotations
 
@@ -24,8 +23,7 @@ def text(commit: str) -> str:
 
 
 def same_tree(one: str, other: str) -> bool:
-    """Both commits exist and have the same tree. The trees are compared, not a diff: a commit that was dropped
-    cannot hide behind a diff that looks the same."""
+    """Both commits exist and have the same tree."""
     trees = [git(".", "rev-parse", "-q", "--verify", f"{commit}^{{tree}}").stdout.strip() for commit in (one, other)]
     return bool(trees[0]) and trees[0] == trees[1]
 
@@ -50,10 +48,7 @@ def rewrite(parent: str, steps: list[tuple[str, str]]) -> list[str]:
 
 
 def tidy(parent: str, landed: list[list[str]], tickets: dict[str, Ticket]) -> dict[str, str]:
-    """ticket number -> its one commit, in merge order, in a line on `parent`. `landed` holds, per ticket, the
-    commit the PR branch had when the ticket's merge landed: the ticket's commit takes that tree, so merge commits
-    are flattened and a conflict resolution stays with the ticket whose merge made it.
-    A ticket whose merge left the tree as it was has no commit of its own: it gets the commit before it."""
+    """ticket number -> its one commit, in a line on `parent`; a merge that changed no file gets the one before it."""
     commits = {}
     for number, source in landed:
         if not same_tree(source, parent):

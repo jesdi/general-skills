@@ -1,8 +1,6 @@
-"""The review page of the open questions: decisions.json in, HTML out (requirement 17). Stdlib only.
+"""The review page of the open questions: decisions.json in, HTML out.
 
-The page is the template of the review-page skill, which is installed next to this one, in questionnaire mode
-with its slots filled. Only the slots and the mode change (skills/review-page/SKILL.md). Every text is escaped:
-a title can hold words that an agent wrote.
+The page is the template of the review-page skill in questionnaire mode with its slots filled. Every text is escaped.
 """
 from __future__ import annotations
 
@@ -33,8 +31,7 @@ def _question(q: dict) -> str:
 
 
 def _filled(page: str, pattern: str, new: str) -> str:
-    """`page` with the one match of `pattern` replaced. A template without it is not the template this module
-    knows: an error, never a page with a part of the sample content."""
+    """`page` with the one match of `pattern` replaced; ValueError when the template has not exactly one."""
     page, count = re.subn(pattern, lambda match: new, page, flags=re.S)
     if count != 1:
         raise ValueError(f"{TEMPLATE} has {count} matches of {pattern}, not 1")
@@ -42,8 +39,7 @@ def _filled(page: str, pattern: str, new: str) -> str:
 
 
 def render(decisions: dict) -> str:
-    """The page for decisions.json. Raises OSError when the template is not there and ValueError when it has
-    another shape."""
+    """The page for decisions.json. Raises OSError with no template, ValueError when it has another shape."""
     questions = decisions["questions"]
     header = (f'<div class="eyebrow">implement-spec · decisions {escape(decisions["revision"][:12])}</div>\n'
               f"<h1>{len(questions)} open question{'s' * (len(questions) != 1)} of the implementation</h1>\n"

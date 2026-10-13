@@ -1,15 +1,8 @@
-"""Report validation: one agent report in, an error list out. Stdlib plus jsonschema.
+"""Report validation: validate(role, path, context) -> list of errors, empty when the report is accepted.
 
-validate(role, path, context) -> list of str, empty when the report is accepted.
-  context: repo (slot path), branch, start (HEAD sha when the role started), log (the agent's log file),
-           round (1 for the first review of a ticket, default 0), locked (the locked files, for that review),
-           correction (true for a test-writer that corrects locked tests on a branch that holds other work),
-           restored (the locked files the driver put back to their reference before that correction),
-           owners (the ticket numbers of the run, for the fix batch of the final review),
-           merged (for a test-writer: the locked files of the merged tickets that its ticket does not lock) and
-           pr (the PR tip, with `merged`).
-The schema of a role is the json block of its prompt template, so the agent reads the text the driver enforces.
-"""
+context: repo (slot path), branch, start (HEAD when the role started), log, round (1 = first review), locked,
+  correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
+  owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip)."""
 from __future__ import annotations
 
 import json
@@ -28,8 +21,7 @@ def schema(role: str) -> dict:
 
 
 def _git(repo: str, *args: str, end: str = "\n") -> list[str]:
-    """The lines of a git answer. For a list of paths, pass `-z` and `end="\\0"`: git quotes no path there, so a
-    path with any name equals the path that the report names."""
+    """The lines of a git answer. For a list of paths, pass `-z` and `end="\\0"`: git quotes no path there."""
     out = subprocess.run(["git", "-C", repo, "-c", "core.quotePath=false", *args], capture_output=True, text=True).stdout
     return [line for line in out.split(end) if line]
 
@@ -45,8 +37,7 @@ def _shas(report: dict) -> list[str]:
 
 
 def _owner_errors(report: dict, context: dict) -> list[str]:
-    """The fix batch of the final review: each new commit on the branch is in the report with a ticket of the run.
-    The driver names each commit `fix(NN)` from that ticket, so a commit with no owner is a violation."""
+    """The fix batch of the final review: each new commit on the branch is in the report with a ticket of the run."""
     if "owners" not in context:
         return []
     given, branch = _shas(report), context["branch"]
@@ -58,8 +49,7 @@ def _owner_errors(report: dict, context: dict) -> list[str]:
 
 
 def _commit_errors(report: dict, context: dict) -> list[str]:
-    """Every commit is new since the role started and on the branch; every locked path is in a commit that the
-    role made on the branch. A rerun may leave a locked file as its rejected attempt committed it."""
+    """Every commit is new since the role started and on the branch; every locked path is in such a commit."""
     repo, branch, commits = context["repo"], context["branch"], _shas(report)
     new = _git(repo, "rev-list", f"{context['start']}..{branch}")
     errors = [f"commit {sha[:7]} is not a new commit on {branch}"
@@ -71,9 +61,7 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
 
 
 def _correction_errors(report: dict, context: dict) -> list[str]:
-    """A correction changes only the files it lists in `locked`: its commit becomes the reference of the locked-file
-    check, so no other file may come in with it, such as work that the implementer left in the tree. A locked file
-    the driver `restored` to its reference before the correction is in the commit by design."""
+    """A correction changes only the files it lists in `locked` and the files the driver `restored`."""
     if not context.get("correction"):
         return []
     changed = _git(context["repo"], "diff", "--name-only", "-z", context["start"], context["branch"], end="\0")
@@ -83,9 +71,7 @@ def _correction_errors(report: dict, context: dict) -> list[str]:
 
 
 def _merged_errors(report: dict, context: dict) -> list[str]:
-    """A test-writer changes a locked file of a merged ticket only when it lists the file in `locked` (requirement
-    7): an unlisted change would be refused when the ticket lands. A file that is as the role found it, or as the
-    PR tip has it (the branch took the PR branch in), is not changed."""
+    """A test-writer changes a locked file of a merged ticket only when it lists the file in `locked`."""
     def blob(commit: str, path: str) -> list[str]:
         return _git(context["repo"], "rev-parse", "-q", "--verify", f"{commit}:{path}")
 
@@ -123,8 +109,7 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     found = sorted(jsonschema.Draft202012Validator(rules).iter_errors(report), key=lambda e: str(list(e.path)))
     if found:
         return [f"{'.'.join(map(str, e.path)) or 'report'}: {e.message}" for e in found]
-    # Only the role's own fields are typed by its schema: any other field of the report is ignored.
+    # The schema types only the role's own fields: any other field of the report is dropped.
     report = {name: value for name, value in report.items() if name in rules["properties"]}
-    # Reports are a trust boundary: git and the log must show what the report claims.
     return (_commit_errors(report, context) + _owner_errors(report, context) + _correction_errors(report, context)
             + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context))
