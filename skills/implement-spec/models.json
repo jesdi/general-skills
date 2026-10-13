@@ -1,0 +1,10 @@
+{
+  "explorer": ["sonnet@medium"],
+  "test-writer": ["sonnet@medium"],
+  "implementer": ["opus@medium", "fable@high"],
+  "reviewer": ["sonnet@high", "opus@high"],
+  "correctness": ["openai/gpt-6.1-sol@medium", "opus@medium"],
+  "fixer": ["opus@medium"],
+  "final-reviewer": ["fable@high"],
+  "conflict": ["opus@medium"]
+}

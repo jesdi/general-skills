@@ -76,6 +76,26 @@ python=$(managed_uv python find --no-project --system --managed-python --no-pyth
     managed_uv python install --no-bin "$python_version" >&2 || fail 'Cannot provision Python; check network access and retry'
     python=$(managed_uv python find --no-project --system --managed-python --no-python-downloads "$python_version") || fail 'Cannot locate managed Python'
 }
+# The one dependency (design.md): jsonschema with its closure pinned, in a venv built once per pin set.
+jsonschema_version=4.26.0
+venv=$cache/venv/$python_version-jsonschema-$jsonschema_version
+if [ ! -x "$venv/bin/python" ]; then
+    [ "${IMPLEMENT_SPEC_OFFLINE:-0}" != 1 ] || fail 'jsonschema is not cached; provision this cache online first'
+    mkdir -p "$cache/venv" || fail 'Cannot create runtime cache'
+    stage=$(mktemp -d "$cache/venv/.build.XXXXXX") || fail 'Cannot create build directory'
+    trap 'rm -rf "$stage"' EXIT
+    trap 'exit 3' HUP INT TERM
+    managed_uv venv --quiet --python "$python" "$stage/venv" >&2 &&
+        managed_uv pip install --quiet --python "$stage/venv/bin/python" "jsonschema==$jsonschema_version" \
+            attrs==26.1.0 referencing==0.37.0 rpds-py==2026.9.1 jsonschema-specifications==2025.9.1 >&2 ||
+        fail 'Cannot provision jsonschema; check network access and retry'
+    # Publish by rename: a concurrent first run never sees a partial venv. A run that loses the race
+    # (the rename fails, or lands inside the winner's directory) uses the winner's venv.
+    [ -x "$venv/bin/python" ] || mv "$stage/venv" "$venv" 2>/dev/null || :
+    [ -x "$venv/bin/python" ] || fail 'Cannot install cached venv'
+    rm -rf "$stage"
+    trap - EXIT HUP INT TERM
+fi
 # Ignore Python-specific ambient settings for the engine, but preserve them for
-# child coverage processes. -I would also remove the sibling module directory.
-exec "$python" -E -s "$skill_dir/driver.py" "$@"
+# child processes. -I would also remove the sibling module directory.
+exec "$venv/bin/python" -E -s "$skill_dir/driver.py" "$@"

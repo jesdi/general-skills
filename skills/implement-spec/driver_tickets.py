@@ -32,6 +32,11 @@ class Ticket:
     lines: dict[str, int]  # field name -> 1-based line
     blocked_by: list[str] = field(default_factory=list)
 
+    @property
+    def refactor(self) -> bool:
+        """Seam `none — refactor`: no criterion and no test-writer."""
+        return bool(_NONE.match(self.seam or ""))
+
 
 def _read(path: Path) -> Ticket:
     found: dict[str, tuple[str, int]] = {}  # the first entry of each field wins
@@ -55,7 +60,7 @@ def _read(path: Path) -> Ticket:
 def _missing(ticket: Ticket, alone: bool) -> list[str]:
     required = (("title", ticket.title), ("Blocked by", ticket.blocked), ("Seam", ticket.seam))
     errors = [f"{ticket.file}: missing {name}" for name, value in required if not value]
-    if not ticket.criteria and not _NONE.match(ticket.seam or ""):
+    if not ticket.criteria and not ticket.refactor:
         errors.append(f"{ticket.file}: missing criterion")
     if not ticket.touches and not alone:
         where = f" (expected after Seam, line {ticket.lines['Seam']})" if ticket.seam else ""
