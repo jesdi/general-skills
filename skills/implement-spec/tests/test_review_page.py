@@ -9,7 +9,7 @@ from pathlib import Path
 
 import driver_review_page
 
-REVIEW_PAGE = Path(__file__).resolve().parents[1] / "review-page"
+REVIEW_PAGE = Path(__file__).resolve().parents[2] / "review-page"
 TEMPLATE = (REVIEW_PAGE / "template.html").read_text()
 ID = re.compile(r"[a-z0-9_-]{1,64}")
 WHAT = "<b>&\"quoted\"</b>"

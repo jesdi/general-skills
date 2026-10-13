@@ -1,9 +1,13 @@
 """The fixture repository of the in-process tests: a clean git worktree on feat/x with .agent ignored."""
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-import driver_agents
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # the driver modules are one folder up
+
+import driver_agents  # noqa: E402
 
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 
