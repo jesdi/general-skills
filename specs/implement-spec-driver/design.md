@@ -11,8 +11,16 @@
   `state.json` write is a read-modify-write under one lock, atomic through rename — no
   cross-process locking of writers, against the lost-update race the red-team found. A second
   driver process is kept out as a whole: the driver holds one exclusive `flock` on
-  `.agent/implement/lock` for its run, and a second one exits 3 — the kernel frees the lock
+  `implement-spec.lock` in the git common directory for its run, and a second one exits 3,
+  in the same worktree or in another worktree of the repository — the kernel frees the lock
   with the process, against two drivers that write one state and move the same refs.
+- **The locked tests of merged tickets are checked on the merge result**, not at review:
+  under the merge lock, each locked file of a merged ticket must be the same blob with the same mode in the
+  tree that is about to land as in the PR tip, unless the landing ticket's own test-writer
+  listed it; a difference refuses the landing, and the ref moves only from the tip that the
+  check read — one reference (the PR tip) for every case, against a per-ticket reference
+  that gave a false finding for a branch that took the PR branch in and no finding for a
+  file that was locked after the ticket changed it.
 - **End-of-run work starts only when every slot is idle** and the PR branch is never checked
   out in slot 1 while a ticket occupies it; merges into the PR branch use plumbing — serial
   tail, against a tidy rewriting history under a running ticket.
@@ -79,17 +87,18 @@ No database. Every record is a file under `.agent/implement/` or a git object; t
 | `state.json` | `tickets[NN].round` | 0..4 | the fix-loop budget |
 | `state.json` | `tickets[NN].test_writer_sha`, `locked` | set together by the test-writer; a correction moves `test_writer_sha` to its commit and only adds to `locked` | the locked-file check needs both |
 | `state.json` | `tickets[NN].held` | locked file -> the older test-writer commit that stays its reference after a correction that did not list it | a change the implementer made before the correction stays a finding |
-| `state.json` | `tickets[*].locked` of each merged ticket | unchanged in a later ticket since that ticket's `test_writer_sha` (a refactor ticket: since the commit its branch started from), at each review; equal to the PR tip after a resolved merge conflict | only a test-writer changes a locked file, so a later ticket cannot weaken the locked test of an earlier one |
+| `state.json` | `tickets[*].locked` of each merged ticket | at each landing, under the merge lock: the same tree entry (mode, type, blob) in the tree that is about to land (a fast-forward tip or a merge commit) as in the PR tip, unless the landing ticket has the file in its own `locked`; the PR ref moves only from the tip that the check read, with one more try after a tip that moved; before each correction the driver restores, in the tree, each such file that the ticket changed to the version of the PR tip | one check on the merge result: a later ticket cannot weaken or delete the locked test of an earlier one, also when the earlier ticket locked the file after the later one changed it; a ticket branch that took the PR branch in is equal by construction |
 | `state.json` | `tickets[NN].note` | "" or the name of a prompt template | tells the next role what a ruling or an interrupt left |
 | `state.json` | `tickets[NN].tip` | must be on `ticket/NN` at resume; for a merged ticket, in the PR branch | an unverifiable tip returns the ticket to `implement` from the test-writer commit |
 | `state.json` | `tickets[NN].green_gates[]` | each names one commit and settles only that commit | a settled gate is never rerun |
 | `state.json` | `tickets[NN].slot` | unique among running tickets | one ticket per slot |
 | `state.json` | whole file | written under one lock, rename-atomic | no lost update between parallel tickets |
-| `.agent/implement/lock` | whole file | exclusive `flock`, non-blocking, held by the one driver that runs; not taken by `--dry-run` | no second driver on the same state, slots and refs |
+| `<git common directory>/implement-spec.lock` | whole file | exclusive `flock`, non-blocking, held by the one driver that runs; shared by every worktree of the repository and never a path of a worktree; not taken by `--dry-run`, nor by a wrong call in a worktree with no `.agent/implement/` | no second driver on the same refs, also from another worktree |
 | report | `status` | enum DONE, DONE_WITH_CONCERNS, NEEDS_CONTEXT, BLOCKED | schema violation otherwise |
 | report | `commits[]` | on `ticket/NN`, newer than the role's start | reports cannot claim old work |
 | report (implementer) | `commits[]` | at least one | an empty implementation is a violation |
 | report (test-writer) | `locked[]` | each path exists in `test_writer_sha` | locked set is verifiable |
+| report (test-writer) | `locked[]` | holds each locked file of a merged ticket that the role changed | an unlisted change would be refused at the landing; the report is rejected with one rerun |
 | report (test-writer) | `red[].line` | substring of the agent's log | a red that was never seen is a violation |
 | report (reviewer) | `mutations[].red` | substring of the agent's log | a mutation proof that was never run is a violation |
 | report (reviewer) | `findings[].severity`, `kind` | enums `critical, important, minor` / `code, fixture, test` | routing keys |

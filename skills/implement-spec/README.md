@@ -22,7 +22,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
-One driver runs in a repository at a time. The driver holds a kernel file lock on `.agent/implement/lock` for the whole run, and a second driver ends with exit 3 and names the lock. The lock ends with its process, so a driver that was killed leaves no lock behind. `--dry-run` takes no lock.
+One driver runs in a repository at a time. The driver holds a kernel file lock on `implement-spec.lock` in the git common directory (`git rev-parse --git-common-dir`) for the whole run. Each worktree of the repository shares that directory, so a second driver in the same worktree or in another one ends with exit 3 and names the lock file. The file is not in a worktree, so `git status` never shows it. The lock ends with its process, so a driver that was killed leaves no lock behind. `--dry-run` takes no lock. A wrong call in a worktree that has no `.agent/implement/` takes no lock and makes no file; where an earlier run left that folder, the driver takes the lock first, then makes the checks.
 
 ## Flags
 
@@ -73,7 +73,7 @@ Everything is under `.agent/`, which is never committed.
 | Path | Content |
 |---|---|
 | `.agent/implement/state.json` | The resume contract: the run record and one record for each ticket (`driver_state.py`). |
-| `.agent/implement/lock` | An empty file. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
+| `<git common directory>/implement-spec.lock` | An empty file, not in the worktree. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
 | `.agent/implement/ledger.md` | One plain sentence for each event. Only the driver writes it, and it reads no fact from it. |
 | `.agent/implement/summary.md` | The result in sentences, and the measurement table: gates, agents, wall time, fix rounds, human stops, cost. |
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |
@@ -95,8 +95,10 @@ A ticket is ready when each ticket in its **Blocked by** line is merged and no r
 1. **test-writer** (`prompts/test-writer.md`). It writes one black-box test for each criterion through the Seam and commits them red. Those files are locked. A ticket with Seam `none — refactor` has no test-writer.
 2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green.
 3. **Gate.** The driver runs `--gate` on the ticket tip.
-4. **Review.** The driver compares each locked file with the test-writer commit: the locked files of the ticket, and the locked files of each ticket that is merged. A file that differs is a critical finding `locked file changed: <path>`. A refactor ticket has no test-writer commit, so the driver compares with the commit that the ticket branch started from. Only a test-writer changes a locked file: the test-writer of a later ticket can add a test to a file that an earlier ticket locked, and lists that file in `locked`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
-5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file: the locked files of the ticket must be as the reviewed tip has them, and the locked files of each merged ticket as the PR branch has them. A second conflict blocks the ticket.
+4. **Review.** The driver compares each locked file of the ticket with the test-writer commit. A file that differs is a critical finding `locked file changed: <path>`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
+5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file of the ticket. A second conflict blocks the ticket.
+   **The landing check.** Merges are serial. Before the PR branch moves, the driver compares the tree that is about to land (the ticket tip of a fast-forward, or the merge commit) with the PR tip: each locked file of each merged ticket must be the same tree entry in both: the same blob with the same mode, so a file that became a symlink is a difference. A file that only one of them has is a difference. A file that the landing ticket lists in its own `locked` is not checked: the test-writer of a later ticket can add a test to a file that an earlier ticket locked, and must list that file. A test-writer report that changes such a file and does not list it is rejected, with the usual one rerun. A difference refuses the landing: the ticket is BLOCKED with `locked file changed: <path>` in the ledger, the PR branch does not move, and no fix round runs. The PR branch moves only from the tip that the check read; when another hand moved the branch in between, the driver makes the merge, the check and the gate again, one time. Only that case starts the landing again: a refused landing and a red merge gate block the ticket. The second try runs no conflict agent, so a conflict there blocks the ticket, and so does a branch that moved again.
+   **Before a correction.** A test-writer that corrects locked tests (after `overrule-test`, or for a fixture finding) starts from the locked versions: the driver puts back, in the tree, each locked file of the ticket and each locked file of a merged ticket that the ticket changed, and the ledger names each file. A file of a merged ticket goes back to the version of the PR branch.
 
 Rules for each agent:
 
@@ -116,7 +118,7 @@ Rules for each agent:
 A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
 
 - Rounds 1 and 2 run on the first entry of the implementer list.
-- Rounds 3 and 4 run on the next implementer entry whose CLI is on PATH. When there is none, they stay on the first entry and the ledger says so.
+- Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.
 - There is no ruling at round 2.
 - Findings that are open after round 4 make the ticket BLOCKED. The run ends with exit 1, and the driver writes one question of kind `finding` for each.
 
@@ -166,7 +168,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 
 | Role | Template | More fields | Checks after the schema |
 |---|---|---|---|
-| test-writer | `prompts/test-writer.md` | `locked` (paths), `red` (`test`, `line`) | With DONE: one commit, one locked file and one red line or more. Each locked path is in the commits. Each `line` is in the log. |
+| test-writer | `prompts/test-writer.md` | `locked` (paths), `red` (`test`, `line`) | With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. |
 | implementer | `prompts/implementer.md` | `green` | With DONE: one commit or more. |
 | reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`) | In the first review of a tip: `mutations` is required, with a proof for each locked test file. Each `red` is in the log. |
 | correctness | `prompts/correctness.md` | the same as the reviewer | `mutations` is optional. |
@@ -195,7 +197,7 @@ Answer with `--answer <question id>=<option id>` on the next run, or through the
 
 | Check | Where it lives |
 |---|---|
-| Locked tests with a demonstrated red | `driver_report.py` `_proof_errors`: each red line of the test-writer report must be in its log. `driver_review.py` `locked_findings`: a locked file that differs from the test-writer commit is a critical finding, before each review. `others` adds the locked files of each merged ticket to that check, so a later ticket cannot change the locked test of an earlier one; `driver.py` `_resolved` makes the same check on a resolved merge conflict before it lands. |
+| Locked tests with a demonstrated red | `driver_report.py` `_proof_errors`: each red line of the test-writer report must be in its log. `driver_review.py` `locked_findings`: a locked file of the ticket that differs from the test-writer commit is a critical finding, before each review. `driver_merge.py` `refused`, called from `driver.py` `_candidate` under the merge lock: a locked file of a merged ticket that differs between the PR tip and the tree that is about to land refuses the landing, so a later ticket cannot change the locked test of an earlier one. `driver_report.py` `_merged_errors` rejects a test-writer report that changes such a file and does not list it. |
 | One mutation proof for each locked test | `prompts/reviewer.md` asks for one proof for each locked test. `driver_report.py` `_locked_errors` and `_proof_errors` reject a first review with no proof for a locked test file, or with a red line that is not in the log. `driver_review.py` `follow` finds the proofs that a fix makes due again. |
 | One independent correctness pass for each risky ticket | `driver_fixloop.py` `_review` adds the pass for a ticket with a **Risk** line. `driver_agents.py` `correctness_entry` picks the entry of another provider, and `load_models` stops the run when there is none or its CLI is not on PATH. |
 | One full gate for each candidate | `driver_gate.py` `run`, called from `driver.py` `_gated`: one record for each commit the driver is about to trust. Green is exit 0 on a tree that is clean before and after, with HEAD not moved. |

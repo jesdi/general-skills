@@ -46,7 +46,6 @@ from driver_slots import git
 
 OUT = Path(".agent/implement")
 STATE = OUT / "state.json"
-LOCK = OUT / "lock"  # one driver process per repository holds it for its whole run (driver_state.lock)
 DECISIONS = OUT / "decisions.json"
 PAGE = Path(".agent/implement-review.html")
 # `--only` is test only: one role on the first ticket, with no gate, review or merge.
@@ -77,6 +76,9 @@ class Run:
     def agent(self, role: str, number: str, slot: str, values: dict[str, str], **how) -> tuple[str, dict]:
         """One role with its one rerun: ("", report) or (why the ticket is blocked, {}). A report that says BLOCKED
         or NEEDS_CONTEXT blocks too, and a contradicted locked test asks the operator (requirement 17)."""
+        if role == "test-writer":  # also a correction: its report may not change a merged ticket's locked file unseen
+            merged = driver_merge.protected(self.state.read()["tickets"], number)
+            how["check"] = {**(how.get("check") or {}), "merged": merged, "pr": self.tip()}
         error, report = _agent(role, number, slot, values, self, **how)
         if subject := driver_decisions.contradicted(role, report):
             # The commits of the implementer stay: after the ruling the ticket goes on from them, not from a reset.
@@ -88,6 +90,9 @@ class Run:
         """The ticket is about to block on a choice of the operator: one question of `kind` per subject. `fields`
         go to the ticket record with the stop."""
         self.asks[number] = (kind, subjects, report, fields)
+
+    def restored(self, number: str, slot: str) -> list[str]:
+        return _restored(number, slot, self)
 
     def gated(self, number: str, slot: str, commit: str) -> str:
         return _gated(number, slot, self, commit)
@@ -278,12 +283,15 @@ def _values(ticket: driver_tickets.Ticket, slot: str, run: Run) -> dict[str, str
             "writer_report": os.path.relpath(OUT / ticket.number / "test-writer-0.json", slot)}
 
 
-def _restored(number: str, slot: str, entry: dict, others: list[str]) -> list[str]:
+def _restored(number: str, slot: str, run: Run) -> list[str]:
     """Before a correction: each locked file that the implementer changed, in a commit or in the tree, goes back to
-    its reference version in the tree (requirement 7). The correction then starts from the locked version, and its
-    commit carries that version plus its own change: no change of the implementer becomes the reference.
-    `others` are the locked files of the merged tickets."""
-    paths = driver_review.restore_locked(slot, entry, others)
+    its reference version in the tree (requirement 7): a locked file of the ticket to its test-writer commit, a
+    locked file of a merged ticket to the PR tip. The correction then starts from the locked version, and its
+    commit carries that version plus its own change: no change of the implementer becomes the reference, and none
+    comes into the ticket's own locked files when the correction lists a file of a merged ticket."""
+    tickets = run.state.read()["tickets"]
+    paths = (driver_review.restore_locked(slot, tickets[number])
+             + driver_merge.restore(slot, run.tip(), driver_merge.protected(tickets, number)))
     for path in paths:
         _ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
                 "the tree, so the correction starts from the locked version.")
@@ -304,22 +312,20 @@ def _roles(ticket: driver_tickets.Ticket, number: int, run: Run) -> str:
     if notes == ["interrupted"]:
         _ledger(f"Ticket {ticket.number}: resumed in slot {number} with the work the interrupted {roles[0]} left.")
     values = {**_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
-    # The locked files of the merged tickets: a correction may not make an implementer's change of one the reference.
-    others = driver_review.others(run.state.read()["tickets"], ticket.number)
     for role in roles:
         run.state.ticket(ticket.number, phase=DURING.get(role, "review"))
         values["start_sha"] = start
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
         if check["correction"]:
-            check["restored"] = _restored(ticket.number, slot, entry, others)
+            check["restored"] = _restored(ticket.number, slot, run)
         error, report = run.agent(role, ticket.number, slot, values, notes=notes, check=check)
         if error:
             return f"the {role}: {error}"
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":  # only its schema types `locked`
             # A correction lists only the files it corrected: the earlier ones stay locked.
-            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"], others))
+            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"]))
             values["locked"] = " ".join(facts["locked"])
         run.state.ticket(ticket.number, phase=AFTER.get(role, "review"), note="", **facts)
         start, notes = facts["tip"], []
@@ -351,14 +357,11 @@ def _resolved(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str, file
     with conflicts in `files`, and the agent commits it. Returns (the new ticket tip, "") or ("", why the ticket
     is blocked)."""
     number = ticket.number
-    pr, tickets = run.tip(), run.state.read()["tickets"]
-    values = {**_values(ticket, slot, run), "start_sha": tip, "pr_sha": pr, "files": " ".join(files)}
+    values = {**_values(ticket, slot, run), "start_sha": tip, "pr_sha": run.tip(), "files": " ".join(files)}
     error, _ = run.agent("conflict", number, slot, values)
-    # The resolution may not touch a locked test: each locked file of the ticket is as the reviewed tip has it, and
-    # each locked file of a merged ticket is as the PR tip has it. The review found that the ticket did not change
-    # one of those, so the merge has the version of the PR branch.
-    locked = (driver_review.locked_changes(slot, tip, tickets[number]["locked"])
-              + driver_review.locked_changes(slot, pr, driver_review.others(tickets, number)))
+    # The resolution may not touch a locked test of the ticket: each one is as the reviewed tip has it. The locked
+    # files of the merged tickets are checked when the resolved tip lands (driver_merge.refused).
+    locked = driver_review.locked_changes(slot, tip, run.state.read()["tickets"][number]["locked"])
     if error := error or "; ".join(finding["title"] for finding in locked):
         driver_merge.abort(slot)  # the driver's own open merge; nothing to close when the agent committed it
         return "", f"the conflict agent: {error}"
@@ -375,14 +378,14 @@ def _landed(state: dict, number: str, new: str) -> None:
     state["run"]["landed"] = [one for one in state["run"]["landed"] if one[0] != number] + [[number, new]]
 
 
-def _committed(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str) -> tuple[str, str, str, str]:
+def _committed(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str, agent: bool) -> tuple[str, str, str, str]:
     """The merge of the ticket tip `tip` with the PR tip, as a commit that no ref holds yet; a conflict goes to the
-    conflict agent, once. Returns (the ticket tip, the PR tip the merge is made on, the commit to land, "") or, in
-    the last place, why the ticket is blocked."""
+    conflict agent, once, and only when `agent` is true. Returns (the ticket tip, the PR tip the merge is made on,
+    the commit to land, "") or, in the last place, why the ticket is blocked."""
     message = f"Merge ticket/{ticket.number} into {run.pr}"
     old = run.tip()
     new, error = driver_merge.commit(old, tip, message)
-    if error and (files := driver_merge.begin(slot, old)):
+    if error and agent and (files := driver_merge.begin(slot, old)):
         tip, error = _resolved(ticket, slot, run, tip, files)
         if not error:
             # Only another hand moves the PR branch now. A merge that conflicts again blocks the ticket.
@@ -392,20 +395,39 @@ def _committed(ticket: driver_tickets.Ticket, slot: str, run: Run, tip: str) -> 
     return tip, old, new, error
 
 
+def _candidate(ticket: driver_tickets.Ticket, slot: str, run: Run, first: bool) -> tuple[str, str, str, str]:
+    """One try of the landing, under the merge lock: the commit to land, checked and gated. Returns (the ticket tip,
+    the PR tip the check read, the commit to land, "") or, in the last place, why the ticket is blocked. Only the
+    `first` try may run the conflict agent (requirement 11: once): a conflict on the second try blocks the ticket."""
+    number = ticket.number
+    git(slot, "checkout", "-q", f"ticket/{number}")  # a try before this one left the slot on its merge commit
+    tip, old, new, error = _committed(ticket, slot, run, run.state.ticket(number, phase="merge")["tip"], first)
+    # Requirement 7: no locked file of a merged ticket differs between the PR tip and the tree that lands on it.
+    error = error or driver_merge.refused(run.state.read()["tickets"], number, old, new)
+    if not error and new != old:
+        # A merge commit, or the commit of the conflict agent, is a tree no gate has seen. It is gated in the
+        # ticket's own slot before the PR branch moves; a fast-forward of a gated tip has its green record.
+        # A checkout that fails leaves the slot on another commit, and then the gate does not run.
+        git(slot, "checkout", "-q", "--detach", new)
+        error = _gated(number, slot, run, new)
+    return tip, old, new, error
+
+
 def _merged(ticket: driver_tickets.Ticket, slot: str, run: Run) -> str:
     """Merge the reviewed tip into the PR branch, then delete the ticket branch. Returns "" or why the ticket
     is blocked. The slot is on the ticket branch at that tip."""
     number, branch = ticket.number, f"ticket/{ticket.number}"
     # Merges are serial, the merge gate and the conflict agent included: the commit the gate saw is the commit that lands.
     with run.merging:
-        tip, old, new, error = _committed(ticket, slot, run, run.state.ticket(number, phase="merge")["tip"])
-        if not error and new != old:
-            # A merge commit, or the commit of the conflict agent, is a tree no gate has seen. It is gated in the
-            # ticket's own slot before the PR branch moves; a fast-forward of a gated tip has its green record.
-            # A checkout that fails leaves the slot on another commit, and then the gate does not run.
-            git(slot, "checkout", "-q", "--detach", new)
-            error = _gated(number, slot, run, new)
-        if error := error or driver_merge.land(run.pr, new, old):
+        for first in (True, False):
+            tip, old, new, error = _candidate(ticket, slot, run, first)
+            if error:
+                break  # a refused landing, a red merge gate or a conflict is final: only a stale ref starts again
+            # The check and the ref move are one step: git moves the ref only from the tip that the check read.
+            # When another hand moved the PR branch in between, the step starts again from the new tip, one time.
+            if not (error := driver_merge.land(run.pr, new, old)) or run.tip() == old:
+                break
+        if error:
             return f"the merge: {error}"
         run.state.update(lambda state: _landed(state, number, new))
     driver_slots.release(slot)  # off the branch, so that no slot has it checked out when it is deleted
@@ -689,19 +711,29 @@ def _width(tickets: list[driver_tickets.Ticket]) -> None:
     print(f"max frontier width: {driver_tickets.max_frontier_width(tickets)}")
 
 
+def _lock(args: argparse.Namespace) -> Path | None:
+    """The file that one driver per repository locks for its whole run (driver_state.lock): it is in the git common
+    directory, which every worktree of the repository shares and no `git status` reports. None, with each error
+    printed, for a wrong first call: that call ends before the lock and makes no file. Where an earlier run left
+    its folder, the lock comes first, because the driver that holds it changes what the checks read."""
+    common = git(".", "rev-parse", "--git-common-dir")
+    # Outside a repository no call is valid: the checks of the worktree fail, so no path is made from an empty answer.
+    if (common.returncode or not OUT.exists()) and not _validated(args):
+        return None
+    return Path(common.stdout.strip()).resolve() / "implement-spec.lock"
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _arguments(argv)
     if args.dry_run:  # it changes nothing, so it needs no lock
         if valid := _validated(args):
             _width(valid[0])
         return 0 if valid else 3
-    # A wrong first call makes no file: it ends before the lock. Where an earlier run left its folder, the lock
-    # comes first, because the driver that holds it changes what the checks read.
-    if not (OUT.exists() or _validated(args)):
+    if not (lock := _lock(args)):
         return 3
-    held = driver_state.lock(LOCK)
+    held = driver_state.lock(lock)
     if not held:
-        print(f"implement-spec: another driver runs in this repository: it holds the lock {LOCK}. Wait until it "
+        print(f"implement-spec: another driver runs in this repository: it holds the lock {lock}. Wait until it "
               "ends, then run the driver again.")
         return 3
     with held:

@@ -169,63 +169,130 @@ def test_a_fixture_correction_that_is_rejected_blocks_the_ticket(tmp_path):
 
 WEAK = "def test_x():\n    assert True\n"
 LOCKED_01 = tw("01")["files"]["tests/test_01.py"]
-CHANGED_01 = "Ticket 02: critical finding of kind code from the driver at tests/test_01.py:1: locked file changed: tests/test_01.py."
+REFUSED_01 = "Ticket 02: BLOCKED at the merge: locked file changed: tests/test_01.py."
+CHEAT = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
 
 
 def on_pr(rig, path):
     return subprocess.run(["git", "-C", str(rig.repo), "show", f"feat/csv:{path}"], capture_output=True, text=True).stdout
 
 
-def test_a_later_ticket_that_weakens_a_locked_test_of_a_merged_ticket_does_not_merge(tmp_path):
-    """Final review, correctness 3: ticket 02 replaced the locked assertion of ticket 01, merged and was pushed."""
-    cheat = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
-    rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [cheat], "02/fixer": [{}, {}]}))
-    assert rig.led("Ticket 02:", "locked file changed") == [CHANGED_01], rig.ledger()
-    (found,) = [f for f in json.loads((rig.folder("02") / "findings-0.json").read_text()) if f["source"] == "driver"]
-    assert found["evidence"] == f"git diff {rig.sha('02', 'test-writer')}..HEAD -- tests/test_01.py"
-    assert "BLOCKED at fix round 1: report" in blocked(rig, "02")
+def test_a_later_ticket_that_weakens_a_locked_test_of_a_merged_ticket_does_not_land(tmp_path):
+    """Final review, correctness 3: ticket 02 replaced the locked assertion of ticket 01, merged and was pushed.
+    Ticket 09: the check is at the landing, on the tree that is about to land, so the review has no such finding."""
+    rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [CHEAT]}))
+    assert blocked(rig, "02") == REFUSED_01 and rig.led("locked file changed") == [REFUSED_01], rig.ledger()
+    assert json.loads((rig.folder("02") / "findings-0.json").read_text()) == [] and not rig.calls("02", "fixer")
     assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and "feat: 02 rows" not in rig.pr_subjects()
-    assert rig.state()["tickets"]["01"]["phase"] == "merged" and not rig.led("Ticket 01:", "locked file changed")
+    assert [rig.state()["tickets"][nn]["phase"] for nn in ("01", "03")] == ["merged", "merged"]
 
 
-def test_the_fix_round_that_puts_the_locked_test_of_the_merged_ticket_back_lets_the_ticket_merge(tmp_path):
-    cheat = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
-    back = fix("02", 1, files={"tests/test_01.py": LOCKED_01, "demo/export.py": "x = 1\n"})
-    rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [cheat], "02/fixer": [back]}))
-    assert rig.code == 0, rig.ledger()
-    assert rig.led("Ticket 02:", "locked file changed") == [CHANGED_01] and rig.state()["tickets"]["02"]["round"] == 1
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and "fix: 02 round 1" in rig.pr_subjects()
-
-
-@pytest.mark.parametrize("listed", [True, False])
-def test_the_test_writer_of_a_later_ticket_may_extend_the_locked_file_of_a_merged_ticket(tmp_path, listed):
-    more = LOCKED_01 + "\n\ndef test_y():\n    assert 02 == 'y'\n"
+def extends(text, listed):
     writer = tw("02")
-    writer["files"]["tests/test_01.py"] = more
+    writer["files"]["tests/test_01.py"] = text
     writer["report"]["locked"] += ["tests/test_01.py"] * listed
-    rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [writer]}))
+    return writer
+
+
+def test_the_test_writer_of_a_later_ticket_may_extend_the_locked_file_of_a_merged_ticket_when_it_lists_it(tmp_path):
+    more = LOCKED_01 + "\n\ndef test_y():\n    assert 02 == 'y'\n"
+    rig = Inside(under(tmp_path, "listed"), three()).run(plan(**{"02/test-writer": [extends(more, True)]}))
     assert rig.code == 0, rig.ledger()
     assert not rig.led("locked file changed") and on_pr(rig, "tests/test_01.py") == more
-    assert rig.state()["tickets"]["02"]["locked"] == ["tests/test_02.py"] + ["tests/test_01.py"] * listed
-    # What the test-writer of 02 wrote is locked for the implementer of 02, in either case.
-    cheat = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
+    assert rig.state()["tickets"]["02"]["locked"] == ["tests/test_02.py", "tests/test_01.py"]
+    # What the test-writer of 02 wrote is locked for the implementer of 02: the check of its own review finds it.
     again = Inside(under(tmp_path, "cheat"), three()).run(
-        plan(**{"02/test-writer": [writer], "02/implementer": [cheat], "02/fixer": [{}, {}]}))
-    assert again.led("Ticket 02:", "locked file changed") == [CHANGED_01] and on_pr(again, "tests/test_01.py") == LOCKED_01
+        plan(**{"02/test-writer": [extends(more, True)], "02/implementer": [CHEAT], "02/fixer": [{}, {}]}))
+    assert again.led("Ticket 02:", "locked file changed") == [
+        "Ticket 02: critical finding of kind code from the driver at tests/test_01.py:1: locked file changed: tests/test_01.py."]
+    assert on_pr(again, "tests/test_01.py") == LOCKED_01
+    # An unlisted change is a report violation: one rerun with the error, then BLOCKED before any implementer.
+    unlisted = Inside(under(tmp_path, "unlisted"), three()).run(plan(**{"02/test-writer": [extends(more, False)] * 2}))
+    error = ("tests/test_01.py is a locked file of a merged ticket, and `locked` does not list it: list it in "
+             "`locked`, or leave the file as it was")
+    assert blocked(unlisted, "02") == f"Ticket 02: BLOCKED at the test-writer: {error}."
+    first, second = unlisted.calls("02", "test-writer")
+    assert f"The driver rejected the earlier attempt: {error}" in second["prompt"]
+    assert not unlisted.calls("02", "implementer") and on_pr(unlisted, "tests/test_01.py") == LOCKED_01
 
 
 def test_a_refactor_ticket_may_not_change_a_locked_test_of_a_merged_ticket(tmp_path):
-    """It has no test-writer commit: the reference is the commit its branch started from."""
+    """It has no test-writer and no locked file of its own: the landing check is the one that protects ticket 01."""
     files = three(**{"02-quote-fields.md": test_review.ticket("02", "Quote fields", "01", seam="none — refactor", criteria=())})
-    cheat = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
-    rig = Inside(tmp_path, files).run(plan(**{"02/implementer": [cheat], "02/fixer": [{}, {}]}))
-    assert rig.led("Ticket 02:", "locked file changed") == [CHANGED_01], rig.ledger()
-    start = rig.calls("02", "implementer")[0]["head"]
-    (found,) = [f for f in json.loads((rig.folder("02") / "findings-0.json").read_text()) if f["source"] == "driver"]
-    assert found["evidence"] == f"git diff {start}..HEAD -- tests/test_01.py" and not rig.calls("02", "test-writer")
-    assert "BLOCKED at fix round 1: report" in blocked(rig, "02") and on_pr(rig, "tests/test_01.py") == LOCKED_01
+    rig = Inside(tmp_path, files).run(plan(**{"02/implementer": [CHEAT]}))
+    assert blocked(rig, "02") == REFUSED_01 and not rig.calls("02", "test-writer"), rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01
     clean = Inside(under(tmp_path, "clean"), files).run(plan())
     assert clean.code == 0 and not clean.led("locked file changed"), clean.ledger()
+
+
+# A correction is a test-writer: a file that it lists is its ticket's own. It must start from the locked version.
+APPEND = "--- a/tests/test_01.py\n+++ b/tests/test_01.py\n@@ -1,2 +1,3 @@\n def test_x():\n     assert True\n+# corrected\n"
+RESTORED_01 = ("Ticket 02: tests/test_01.py was not the locked version at the correction: the driver restored it in "
+               "the tree, so the correction starts from the locked version.")
+
+
+def appending(tmp_path, **changes):
+    """A correction of 02 that appends a line to tests/test_01.py as the implementer of 02 left it, and lists it."""
+    (tmp_path / "append.patch").write_text(APPEND)
+    step = {**tw("02"), "git": [["apply", str(tmp_path / "append.patch")]], "commit": "test: 02 corrected", **changes}
+    step["report"] = {**step["report"], "locked": ["tests/test_02.py", "tests/test_01.py"]}
+    return step
+
+
+def proves(nn, path, name="test_x"):
+    """A clean review of `nn` with one more mutation proof, for the locked test file `path`."""
+    step, red = review(nn), f"FAILED {path}::{name} - AssertionError"
+    step["report"]["mutations"] += [dict(test=f"{path}::{name}", file="demo/export.py", line=1, red=red)]
+    return {**step, "stdout": step["stdout"] + red + "\n"}
+
+
+def test_an_overrule_correction_starts_from_the_locked_file_of_the_merged_ticket(tmp_path):
+    """Review round 1, I1 (probe b7b): the implementer of 02 weakened the test of 01, the correction listed the file."""
+    contra = {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["locked test contradicts spec: tests/test_02.py::test_x"], "green": []}
+    correction = appending(tmp_path, files={"tests/test_02.py": "def test_x():\n    assert '02' == '02'\n"})
+    steps = plan(**{"02/implementer": [{**CHEAT, "report": contra}, impl("02", text="def fn_02():\n    return 'two'\n")],
+                    "02/test-writer": [tw("02"), correction], "02/reviewer": [proves("02", "tests/test_01.py")]})
+    rig = Inside(tmp_path, three()).run(steps)
+    assert rig.code == 2, rig.ledger()
+    rig.run(steps, "--answer", "02-locked-test-1=overrule-test")
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01, rig.ledger()
+    assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
+
+
+def test_a_fixture_correction_starts_from_the_locked_file_of_the_merged_ticket(tmp_path):
+    """Review round 1, I1 (probe b6b): the same through the fixture correction of the fix loop."""
+    stale = finding("STALE", kind="fixture", file="tests/test_02.py")
+    correction = appending(tmp_path, files={"tests/test_02.py": "def test_x():\n    assert '02' == 'x'  # corrected\n"})
+    rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
+                                                "02/reviewer": [review("02", [stale]), proves("02", "tests/test_01.py")]}))
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01, rig.ledger()
+    assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
+
+
+ACCENT = "tests/tést.py"
+
+
+def accented(tmp_path, name, **steps):
+    """Ticket 01 locks a test file whose name git prints quoted (core.quotePath) when nobody asks otherwise."""
+    writer = tw("01")
+    writer["files"][ACCENT] = "def test_y():\n    assert 1 == 'y'\n"
+    writer["report"]["locked"] += [ACCENT]
+    proofs = [proves("01", ACCENT, "test_y")] * 2
+    return Inside(under(tmp_path, name), three()).run(plan(**{"01/test-writer": [writer], "01/reviewer": proofs, **steps}))
+
+
+def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_and_at_the_landing(tmp_path):
+    """Review round 1, I2: the quoted form of the path matched nothing, so no check saw the file."""
+    own = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", ACCENT: WEAK})
+    rig = accented(tmp_path, "review", **{"01/implementer": [own], "01/fixer": [{}, {}]})
+    assert rig.led(f"Ticket 01: critical finding of kind code from the driver at {ACCENT}:1: locked file changed: {ACCENT}."), rig.ledger()
+    assert "BLOCKED at fix round 1" in blocked(rig)
+    later = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", ACCENT: WEAK})
+    rig = accented(tmp_path, "landing", **{"02/implementer": [later]})
+    assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py", ACCENT], rig.ledger()
+    assert blocked(rig, "02") == f"Ticket 02: BLOCKED at the merge: locked file changed: {ACCENT}."
+    assert "assert 1 == 'y'" in on_pr(rig, ACCENT)
 
 
 # ---------------------------------------------------------------- the rounds
@@ -247,19 +314,14 @@ def test_round_3_stays_on_its_entry_when_the_implementer_has_no_next_entry(tmp_p
     rig = Inside(tmp_path, ONE, {"implementer": [OPUS]})
     rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3 + [review("01")], "01/fixer": [fix("01", n) for n in (1, 2, 3)]}))
     assert rig.code == 0, rig.ledger()
-    assert rig.led(f"Ticket 01 round 3: no next implementer entry has its CLI on PATH, so the round stays on {OPUS}.")
+    assert rig.led(f"Ticket 01 round 3: the implementer has no next entry, so the round stays on {OPUS}.")
     assert len(rig.led("fixer ran on", OPUS)) == 3
 
 
-def test_the_escalation_takes_the_next_entry_whose_cli_is_on_path(monkeypatch):
+def test_the_escalation_takes_the_next_entry_of_the_list():
     models = {"implementer": ["a@low", "openai/b@low", "c@low"]}
-    monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: cli)
     assert [driver_fixloop.entry(models, n) for n in (1, 2, 3, 4)] == ["a@low", "a@low", "openai/b@low", "openai/b@low"]
-    monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None if cli == "codex" else cli)
-    assert driver_fixloop.entry(models, 3) == "c@low"
-    # No later entry has its CLI: the round stays on the first. A run cannot show this: it needs both CLIs to start,
-    # the implementer's for its first entry and the other for the correctness pass.
-    assert driver_fixloop.entry({"implementer": ["a@low", "openai/b@low"]}, 3) == "a@low"
+    assert driver_fixloop.entry({"implementer": ["a@low"]}, 3) == "a@low"
 
 
 @pytest.mark.parametrize("step, error", [
@@ -411,9 +473,10 @@ def test_a_conflict_resolution_that_changes_a_locked_file_of_a_merged_ticket_doe
     done = {"status": "DONE", "commits": ["$SHA"], "files": ["demo/cli.py"], "concerns": []}
     rig = conflict(tmp_path, {"files": {"demo/cli.py": test_review.cli("resolved"), "tests/test_03.py": WEAK},
                               "commit": "merge: resolve cli", "report": done})
-    assert "BLOCKED at the merge: the conflict agent: locked file changed: tests/test_03.py." in blocked(rig)
+    # The resolution is a commit of the ticket; the landing check refuses the tree that it would put on the PR branch.
+    assert "BLOCKED at the merge: locked file changed: tests/test_03.py." in blocked(rig)
     assert rig.tip() == rig.sha("03", "implementer") and on_pr(rig, "tests/test_03.py") == tw("03")["files"]["tests/test_03.py"]
-    assert rig.state()["tickets"]["01"]["tip"] == rig.sha("01", "implementer")
+    assert rig.state()["tickets"]["01"]["tip"] == rig.calls("01", "conflict")[0]["sha"]
 
 
 def test_a_conflict_agent_that_gives_up_leaves_no_open_merge_in_the_slot(tmp_path):

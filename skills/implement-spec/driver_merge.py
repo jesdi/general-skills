@@ -2,13 +2,14 @@
 The one merge with a tree is the conflicting one: it is opened in the ticket's own slot for the conflict agent.
 
 The PR branch is checked out in no slot while tickets run, so moving its ref is safe. The caller serializes merges.
+`refused` is the locked-file check of the landing (requirement 7): the locked files of the merged tickets.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 
-from driver_slots import git
+from driver_slots import git, names
 
 
 def ancestor(commit: str, of: str) -> bool:
@@ -54,6 +55,52 @@ def begin(slot: str, pr_tip: str) -> list[str]:
 def abort(slot: str) -> None:
     """Close the merge that `begin` opened: the slot is on its branch as before, with a clean tree."""
     git(slot, "merge", "--abort")
+
+
+def protected(tickets: dict, number: str) -> list[str]:
+    """The locked files of every merged ticket of `tickets` of state.json that ticket `number` does not lock itself.
+    Its test-writer may change one: a file that it lists in `locked` is a locked file of this ticket too.
+    A record with no `locked` locked nothing: this runs in the middle of a landing and does not raise."""
+    merged = {path for entry in tickets.values() if entry.get("phase") == "merged" for path in entry.get("locked") or []}
+    return sorted(merged - set(tickets.get(number, {}).get("locked") or []))
+
+
+def _entries(commit: str, paths: list[str]) -> tuple[dict[str, str], str]:
+    """(path -> its tree entry: mode, type and object id, for each of `paths` that the commit `commit` has, "") or
+    ({}, why git cannot tell). A file that became a symlink or got another mode has another entry.
+    Only a path that a commit which exists does not have is absent: an id that is no commit, or any other git
+    failure, is an error, so the check never passes unseen."""
+    tree = git(".", "ls-tree", "-z", f"{commit}^{{commit}}", "--", *paths)
+    if tree.returncode:
+        return {}, f"cannot read the locked files at {commit}: {tree.stderr.strip() or f'git ls-tree exit {tree.returncode}'}"
+    return {path: entry for entry, _, path in (line.partition("\t") for line in names(tree.stdout))}, ""
+
+
+def refused(tickets: dict, number: str, old: str, new: str) -> str:
+    """Requirement 7 at the landing of ticket `number`: "" or why the commit `new` may not land on the PR tip
+    `old`. Each locked file of a merged ticket must be the same blob, with the same mode, in both; a file that only
+    one has differs.
+    The caller lands `new` only from `old` (`land`), so the check and the ref move are one step."""
+    paths = protected(tickets, number)
+    if not paths:
+        return ""  # `git ls-tree` with no path lists the whole tree
+    (before, error), (after, failed) = _entries(old, paths), _entries(new, paths)
+    return error or failed or "; ".join(f"locked file changed: {path}" for path in paths
+                                        if before.get(path) != after.get(path))
+
+
+def restore(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
+    """Before a correction: each of `paths` (`protected`) that the ticket changed, in a commit or in the tree of
+    `slot`, goes back to the version of the PR tip in the tree; a file that the PR tip does not have is removed.
+    Returns those paths. A file that the correction lists becomes a locked file of its ticket, so it must start from
+    the locked version. "Changed" is against the commit that the branch has in common with the PR tip: a file that
+    only the PR branch changed since then is not the ticket's change. With no such commit, it is against the PR tip."""
+    base = git(slot, "merge-base", "HEAD", pr_tip).stdout.strip() or pr_tip
+    changed = names(git(slot, "diff", "--name-only", "-z", base, "--", *paths).stdout) if paths else []
+    for path in changed:
+        if git(slot, "checkout", "-q", pr_tip, "--", path).returncode:
+            git(slot, "rm", "-q", "-f", "--", path)
+    return changed
 
 
 def land(pr_branch: str, new: str, old: str) -> str:

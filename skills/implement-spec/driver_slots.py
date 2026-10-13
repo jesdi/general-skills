@@ -9,7 +9,13 @@ from pathlib import Path
 
 
 def git(slot: str, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", "-C", slot, *args], capture_output=True, text=True)
+    # core.quotePath off: git prints a path with a non-ASCII name as it is, so it equals the path that a report names.
+    return subprocess.run(["git", "-C", slot, "-c", "core.quotePath=false", *args], capture_output=True, text=True)
+
+
+def names(listing: str) -> list[str]:
+    """The paths of a listing that git made with `-z`: no path is quoted there, whatever its name holds."""
+    return [name for name in listing.split("\0") if name]
 
 
 def head(slot: str) -> str:

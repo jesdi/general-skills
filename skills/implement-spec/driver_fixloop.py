@@ -1,7 +1,7 @@
 """A gated ticket tip in, a reviewed tip out: the review, the fixture corrections and the fix rounds (requirements
 5, 7, 9, 10 and 13). Stdlib only.
 
-`run` is the driver's Run: its `agent`, `gated` and `ledger` do the work, so this module only decides what is next.
+`run` is the driver's Run: its `agent`, `gated`, `restored` and `ledger` do the work, so this module only decides what is next.
 Reports of a ticket are `<role>-<K>.json`: K is the fix round the agent follows (reviewer, correctness) or is
 (fixer). A fixture correction after the review of round K is `test-writer-<K+1>.json`.
 """
@@ -45,18 +45,12 @@ class Job:
                 "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
                 "findings": self.findings(review), "proofs": " ".join(self.again)}
 
-    def guard(self) -> tuple[list[str], str]:
-        """What the locked-file check knows beside the ticket record: (the locked files of the merged tickets, the
-        commit the ticket branch started from)."""
-        tickets = self.run.state.read()["tickets"]
-        return driver_review.others(tickets, self.ticket.number), driver_review.started(self.slot, self.run.pr)
-
 
 def entry(models: dict[str, list[str]], round: int) -> str:
-    """The implementer entry a fix round runs on: the first in rounds 1 and 2; in rounds 3 and 4 the next one
-    whose CLI is on PATH (requirement 2 checks only the first), and the first again when there is none."""
-    first, *later = models["implementer"]
-    return next(filter(driver_agents.installed, later * (round > 2)), first)
+    """The implementer entry a fix round runs on: the first in rounds 1 and 2, the second in rounds 3 and 4, and the
+    first again when the list has one entry. The CLI of each provider is on PATH: no run starts without both."""
+    entries = models["implementer"]
+    return entries[round > 2 and len(entries) > 1]
 
 
 def _told(job: Job, findings: list[dict]) -> list[dict]:
@@ -92,7 +86,7 @@ def _review(job: Job) -> tuple[str, list[dict]]:
     """Review `job.tip`: ("", the merged findings) or (why the ticket is blocked, [])."""
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
-    found = _told(job, driver_review.locked_findings(job.slot, state, *job.guard()))
+    found = _told(job, driver_review.locked_findings(job.slot, state))
     # A ticket with a Risk line gets the correctness pass: a second agent, on another provider (requirement 13).
     cast = [("reviewer", ""), *[("correctness", driver_agents.correctness_entry(run.models))] * bool(job.ticket.risk)]
     error, reports = driver_review.undisturbed(
@@ -114,12 +108,13 @@ def _correct(job: Job, fixture: list[dict]) -> str:
     titles = "; ".join(finding["title"] for finding in fixture)
     if job.corrected:
         return f"the review: a fixture finding is open after the test-writer correction: {titles}"
+    run.restored(number, job.slot)  # a correction starts from the locked version of each locked file
     error, report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"], fix_round=job.round + 1)
     if error:
         return f"the fixture correction: {error}"
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip, *job.guard()))
+    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
     for finding in fixture:
         run.ledger(f"Ticket {number}: fixture correction in {finding['file']}, outside the fix rounds: "
                    f"{finding['title']}: {finding['evidence']}. The test-writer corrected it at {job.tip[:7]}.")
@@ -134,7 +129,7 @@ def _fix(job: Job) -> str:
     run.state.ticket(number, phase="fix", round=job.round)
     if job.round == 3:
         run.ledger(f"Ticket {number} round 3: escalated to {on}." if on != run.models["implementer"][0] else
-                   f"Ticket {number} round 3: no next implementer entry has its CLI on PATH, so the round stays on {on}.")
+                   f"Ticket {number} round 3: the implementer has no next entry, so the round stays on {on}.")
     error, _ = run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round)
     if error:
         return f"fix round {job.round}: {error}"

@@ -59,7 +59,13 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
    appended; a second violation marks the ticket BLOCKED.
 7. **Locked tests.** The driver records the test-writer's commit and locked files and, before
    every review, checks `git diff <test-writer-sha>..HEAD -- <locked files>` is empty. A
-   non-empty diff is a critical finding added to the review.
+   non-empty diff is a critical finding added to the review. The locked files of tickets
+   that are already merged are protected at the landing: under the merge lock, each such
+   file must be the same in the tree that is about to land as in the PR tip at that moment,
+   unless the landing ticket's own test-writer or sanctioned correction lists the file as
+   locked. A difference refuses the landing with `locked file changed: <path>`, and the PR
+   branch does not move. A test-writer report that changes a merged ticket's locked file
+   without listing it is a violation.
 8. **Gate by the driver.** The driver runs the `--gate` command on a clean tree at the commit
    it is about to trust, with `IMPLEMENT_SPEC_BASE=<PR branch>` and `PYTHONPYCACHEPREFIX` in
    the environment, and writes a gate record with start and end time, commit, status, exit
@@ -74,7 +80,9 @@ Risk: persistence), `03-cli-flag.md` (Blocked by: None, Seam `demo export` CLI, 
 10. **Fixture corrections.** A finding with `kind: fixture` dispatches one test-writer
     correction, records the file and reason in the ledger, and does not count as a round.
 11. **Merge.** A ticket that passes review is merged into the PR branch through git plumbing,
-    never a checkout in slot 1. A fast-forward of a tip with a green gate record skips the
+    and the PR branch is never checked out in a slot that runs a ticket (the merge gate may
+    check a merge commit out, detached, in the merging ticket's own slot after its agents
+    ended). A fast-forward of a tip with a green gate record skips the
     merge gate; any other merge runs it. A conflict dispatches the conflict agent once, then
     the gate. The ticket branch is deleted while its commits are ancestors of the PR tip.
 12. **Timeouts.** Each role has a timeout in minutes (test-writer 30, implementer 90,

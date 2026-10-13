@@ -73,11 +73,6 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
     return models, [error for error in found if error]
 
 
-def installed(entry: str) -> bool:
-    """The CLI of the entry's provider is on PATH."""
-    return bool(shutil.which(PROVIDERS[split(entry)[0]][0]))
-
-
 def command(role: str, entry: str, report: str) -> list[str]:
     """The CLI call for one agent; the prompt goes to its stdin."""
     provider, model, effort = split(entry)

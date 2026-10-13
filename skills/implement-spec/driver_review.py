@@ -4,8 +4,8 @@ findings, and the mutation proofs a fix makes due again. It reads git; only `res
 Stdlib only.
 
 A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `driver`.
-The locked-file check of a ticket covers two sets of files: the files its own test-writer locked, and `others`, the
-locked files of every ticket that is merged. Only a test-writer changes a locked file.
+The locked-file check of a review covers the files that the ticket's own test-writer locked. The locked files of the
+merged tickets are checked at the landing (driver_merge.refused).
 A mutation proof is keyed by (production file, line); the line is the one the file has at the ticket tip.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import re
 from typing import Callable, TypeVar
 
 import driver_agents
-from driver_slots import git, head
+from driver_slots import git, head, names
 from driver_tickets import Ticket
 
 # The checks of the correctness pass belong to the review-diff skill, which is installed next to this one.
@@ -39,76 +39,50 @@ def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:
     A diff that git cannot make is a finding too: the check never passes unseen."""
     if not (sha and locked):
         return []  # a refactor ticket has no test-writer
-    diff = git(slot, "diff", "--name-only", f"{sha}..HEAD", "--", *locked)
-    titles = ({path: f"locked file changed: {path}" for path in diff.stdout.splitlines()} if diff.returncode == 0
+    diff = git(slot, "diff", "--name-only", "-z", f"{sha}..HEAD", "--", *locked)
+    titles = ({path: f"locked file changed: {path}" for path in names(diff.stdout)} if diff.returncode == 0
               else {locked[0]: f"locked file check failed: {diff.stderr.strip()}"})
     return [{"severity": "critical", "file": path, "line": 1, "title": title, "kind": "code", "source": "driver",
              "evidence": f"git diff {sha}..HEAD -- {path}"} for path, title in titles.items()]
 
 
-def others(tickets: dict, number: str) -> list[str]:
-    """Requirement 7 across tickets: the locked files of every merged ticket of `tickets` of state.json that ticket
-    `number` does not lock itself. An implementer, a fixer or a conflict agent of this ticket may not change one.
-    Its test-writer may: a file that it lists becomes a locked file of this ticket too."""
-    merged = {path for entry in tickets.values() if entry["phase"] == "merged" for path in entry["locked"]}
-    return sorted(merged - set(tickets[number]["locked"]))
-
-
-def started(slot: str, pr: str) -> str:
-    """The commit that the ticket branch in `slot` started from on the PR branch `pr`: the reference of a ticket
-    that has no test-writer commit (a refactor ticket). When git cannot name it, the reference is the PR branch,
-    so the check never passes unseen."""
-    return git(slot, "merge-base", "HEAD", f"refs/heads/{pr}").stdout.strip() or f"refs/heads/{pr}"
-
-
-def _references(entry: dict, others: list[str] | tuple = (), start: str | None = None) -> list[tuple[str | None, list[str]]]:
-    """(the commit that is the reference, the files it is the reference of) for the ticket record `entry` and the
-    locked files `others` of the merged tickets: that is `test_writer_sha`, or `start` for a ticket that has none,
-    or for a file in `held` the older commit named there."""
+def _references(entry: dict) -> list[tuple[str | None, list[str]]]:
+    """(the test-writer commit that is the reference, its locked files) for the ticket record `entry`: that is
+    `test_writer_sha`, or for a file in `held` the older commit named there."""
     held = entry["held"]
-    groups = [(entry["test_writer_sha"] or start, [path for path in [*entry["locked"], *others] if path not in held])]
+    groups = [(entry["test_writer_sha"], [path for path in entry["locked"] if path not in held])]
     return groups + [(sha, [path for path, at in held.items() if at == sha]) for sha in dict.fromkeys(held.values())]
 
 
-def locked_findings(slot: str, entry: dict, others: list[str] | tuple = (), start: str | None = None) -> list[dict]:
-    """The locked-file check for the ticket record `entry`: each locked file, and each of `others`, against its
-    reference."""
-    return [finding for sha, paths in _references(entry, others, start) for finding in locked_changes(slot, sha, paths)]
+def locked_findings(slot: str, entry: dict) -> list[dict]:
+    """The locked-file check for the ticket record `entry`: each locked file against its reference."""
+    return [finding for sha, paths in _references(entry) for finding in locked_changes(slot, sha, paths)]
 
 
-def restore_locked(slot: str, entry: dict, others: list[str] | tuple = ()) -> list[str]:
-    """Before a correction: each locked file, and each of `others`, that the tree has in another version than its
-    reference, after a commit or an edit of the implementer, goes back to the reference version in the tree.
-    Returns those paths. A diff that git cannot make restores nothing: the check of the next review then fails in
-    the open."""
+def restore_locked(slot: str, entry: dict) -> list[str]:
+    """Before a correction: each locked file that the tree has in another version than its reference, after a
+    commit or an edit of the implementer, goes back to the reference version in the tree. Returns those paths.
+    A diff that git cannot make restores nothing: the check of the next review then fails in the open."""
     restored = []
-    for sha, paths in _references(entry, others):
-        changed = git(slot, "diff", "--name-only", sha, "--", *paths).stdout.splitlines() if sha and paths else []
-        for path in changed:
-            git(slot, "checkout", "-q", sha, "--", path)
-        restored += changed
+    for sha, paths in _references(entry):
+        if sha and paths:
+            restored += names(git(slot, "diff", "--name-only", "-z", sha, "--", *paths).stdout)
+    for path in restored:
+        git(slot, "checkout", "-q", entry["held"].get(path, entry["test_writer_sha"]), "--", path)
     return restored
 
 
-def _differ(slot: str, old: str, new: str, paths: list[str]) -> list[str]:
-    """The files of `paths` that differ between two commits. A diff that git cannot make gives each file: the
-    check never passes unseen."""
-    diff = git(slot, "diff", "--name-only", old, new, "--", *paths)
-    return diff.stdout.splitlines() if diff.returncode == 0 else paths
-
-
-def written(slot: str, entry: dict, listed: list[str], tip: str, others: list[str] | tuple = (),
-            start: str | None = None) -> dict:
+def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
     """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed` in
-    `locked`. `tip` is the new reference. When it is a correction on a branch that holds other work, a locked file,
-    or one of `others`, that the correction does not list and that differs from the old reference keeps the old
-    one in `held`: a change that the implementer made before the correction stays a finding of the next review.
-    The old reference is `test_writer_sha`, or `start` for a ticket that had none."""
-    reference = entry["test_writer_sha"] or start
+    `locked`. `tip` is the new reference. When it is a correction on a branch that holds other work, a locked file
+    that the correction does not list and that differs from the old reference keeps the old one in `held`: a change
+    that the implementer made before the correction stays a finding of the next review."""
     held = {path: sha for path, sha in entry["held"].items() if path not in listed}
-    unlisted = [path for path in [*entry["locked"], *others] if path not in listed and path not in held]
-    if reference and unlisted:
-        held.update(dict.fromkeys(_differ(slot, reference, tip, unlisted), reference))
+    others = [path for path in entry["locked"] if path not in listed and path not in held]
+    if entry["test_writer_sha"] and others:
+        diff = git(slot, "diff", "--name-only", "-z", entry["test_writer_sha"], tip, "--", *others)
+        # A diff that git cannot make holds each file: the check never passes unseen.
+        held.update(dict.fromkeys(names(diff.stdout) if diff.returncode == 0 else others, entry["test_writer_sha"]))
     return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
 
 

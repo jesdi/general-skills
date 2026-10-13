@@ -580,28 +580,118 @@ def test_an_interrupt_kills_the_running_agents_and_stops_the_driver_at_once(repo
 
 
 def test_a_second_driver_on_the_same_repository_exits_3_and_changes_nothing(repo, tmp_path, capsys):
-    """Final review, correctness 1: two drivers on one state.json lose updates and move the same refs."""
+    """Final review, correctness 1: two drivers on one state.json lose updates and move the same refs. Ticket 09:
+    the lock is in the git common directory, so it is the same file in every worktree of the repository."""
     repo(t01=ticket("01", **REFACTOR))
-    lock = tmp_path / ".agent/implement/lock"
-    lock.parent.mkdir(parents=True)
+    lock = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec.lock"
     with lock.open("w") as other:  # the first driver: it holds the kernel lock while it runs
         fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
         code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
         assert (code, out) == (3, "implement-spec: another driver runs in this repository: it holds the lock "
-                                  ".agent/implement/lock. Wait until it ends, then run the driver again.\n")
-        assert ledger == [] and not (tmp_path / ".agent/implement/state.json").exists() and branches() == ["feat/x"]
+                                  f"{lock}. Wait until it ends, then run the driver again.\n")
+        assert ledger == [] and not (tmp_path / ".agent/implement").exists() and branches() == ["feat/x"]
         assert not Path(f"{tmp_path}-runner.calls").exists()
         assert run(capsys) == (0, "max frontier width: 1\n")  # --dry-run changes nothing, so it needs no lock
     # The lock ends with its holder, also one that was killed: no file is left to remove by hand.
     code, _, out = walk(tmp_path, capsys, WORK + REPORT)
     assert code == 0 and "1 of 1 tickets are merged into feat/x." in out
     assert walk(tmp_path, capsys, "exit 9\n")[0] == 0  # the run let its lock go when it ended
+    assert out_of("git", "status", "--porcelain") == ""
 
 
 def test_a_wrong_call_takes_no_lock_and_makes_no_file(repo, tmp_path, capsys):
     repo(t01="nothing here\n")
     code, _, out = walk(tmp_path, capsys, "exit 9\n")
     assert code == 3 and out.startswith("01-t.md: missing title\n") and not (tmp_path / ".agent/implement").exists()
+    assert not (tmp_path / ".git/implement-spec.lock").exists()
+
+
+def test_a_run_outside_a_repository_takes_no_lock_and_makes_no_file(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
+    (tmp_path / ".agent/implement").mkdir(parents=True)  # what an earlier run left does not make the call valid
+    code, _, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 3 and "git status failed" in out and [path.name for path in tmp_path.iterdir()] == [".agent"]
+
+
+def test_a_pr_branch_that_another_hand_moves_during_the_merge_gate_starts_the_landing_again(repo, tmp_path, capsys):
+    """Ticket 09: the locked-file check and the ref move are one step. The ref moves only from the tip the check
+    read; from a tip that moved, the merge, the check and the gate are made again."""
+    two(repo)
+    mark = tmp_path.parent / f"{tmp_path.name}-moved"
+    # The gate of the first merge commit puts one more commit on the PR branch, as another hand would.
+    gate = (f'[ -e {mark} ] || [ -z "$(git rev-parse -q --verify HEAD^2)" ] || {{ touch {mark}; git update-ref '
+            'refs/heads/feat/x "$(git commit-tree "feat/x^{tree}" -p feat/x -m other)"; }')
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    assert code == 0 and mark.exists(), out
+    subjects = out_of("git", "log", "--format=%s", walked()).splitlines()
+    assert "other" in subjects and {"implementer 01", "implementer 02"} <= set(subjects)
+    assert len([line for line in ledger if "merged into feat/x as a merge commit" in line]) == 1
+    assert "| gates run | 5 |" in out  # two ticket tips, the stale merge commit, the new one, the end of run
+
+
+# Ticket 09, review round 1 (m1, Codex 6): the restart has a bound, and only a stale ref starts it.
+MERGE_GATE = '[ -z "$(git rev-parse -q --verify HEAD^2)" ] || '  # the rest of the line runs for a merge commit only
+MOVE = 'git update-ref refs/heads/feat/x "$(git commit-tree "feat/x^{tree}" -p feat/x -m other)"'
+
+
+def merge_blocked(ledger):
+    (line,) = [line for line in ledger if "BLOCKED" in line]
+    return line
+
+
+def test_a_pr_branch_that_moves_at_each_merge_gate_blocks_the_ticket_after_the_second_try(repo, tmp_path, capsys):
+    two(repo)
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=MERGE_GATE + MOVE)
+    assert code == 1, out
+    assert "BLOCKED at the merge: " in merge_blocked(ledger) and "feat/x" in merge_blocked(ledger)
+    assert "| gates run | 4 |" in out  # two ticket tips and two merge commits: the landing is tried two times
+    assert out_of("git", "log", "--format=%s", "feat/x").splitlines().count("other") == 2
+
+
+def test_a_red_merge_gate_does_not_start_the_landing_again_when_the_pr_branch_moved(repo, tmp_path, capsys):
+    two(repo)
+    mark = tmp_path.parent / f"{tmp_path.name}-red"
+    gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {MOVE}; exit 1; }}'
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    assert code == 1 and "BLOCKED at the merge: the gate is red on " in merge_blocked(ledger), out
+    assert "| gates run | 3 |" in out
+
+
+def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(repo, tmp_path, capsys):
+    """Requirement 11: the conflict agent runs once for each merge. The second try runs no agent."""
+    two(repo)
+    mark = tmp_path.parent / f"{tmp_path.name}-foreign"
+    # Another hand commits both work files to the PR branch: the one of the ticket in flight is an add/add conflict.
+    foreign = ('( export GIT_INDEX_FILE="$(git rev-parse --git-dir)/foreign-index"; git read-tree feat/x; '
+               'blob=$(echo foreign | git hash-object -w --stdin); for nn in 01 02; do '
+               'git update-index --add --cacheinfo 100644,$blob,work-$nn.txt; done; git update-ref refs/heads/feat/x '
+               '"$(git commit-tree "$(git write-tree)" -p feat/x -m other)"; rm "$GIT_INDEX_FILE" )')
+    gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {foreign}; }}'
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    assert code == 1 and mark.exists(), out
+    assert "BLOCKED at the merge: the merge into the PR branch conflicts in work-0" in merge_blocked(ledger)
+    assert not [line for line in ledger if "conflict ran on" in line] and "| gates run | 3 |" in out
+
+
+def test_the_landing_check_runs_while_the_ticket_holds_the_merge_lock(repo, tmp_path, capsys, monkeypatch):
+    """Review round 1, m2: the check and the ref move are one step only under the lock that makes merges serial."""
+    two(repo)
+    runs, held, check = [], [], driver.driver_merge.refused
+
+    class Seen(driver.Run):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            runs.append(self)
+
+    def refused(*args):
+        held.append(runs[0].merging.locked())
+        return check(*args)
+
+    monkeypatch.setattr(driver, "Run", Seen)
+    monkeypatch.setattr(driver.driver_merge, "refused", refused)
+    code, _, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
+    assert code == 0 and held == [True, True], out
 
 
 # Fix round 1 of ticket 03.
