@@ -16,7 +16,7 @@
   "scripts": {
     "test": "vitest run",
     "test:coverage": "vitest run --coverage --coverage.reportOnFailure",
-    "test:python": "mkdir -p .crap && python3 -m coverage run -m pytest skills/backlog skills/crap-gate -q && python3 -m coverage json -o .crap/python.json",
+    "test:python": "mkdir -p .crap && python3 -m coverage run -m pytest skills/backlog skills/crap-gate -q && python3 -m coverage run -a -m pytest skills/implement-spec -q && python3 -m coverage json -o .crap/python.json",
     "crap-gate": "sh skills/crap-gate/run.sh",
     "check": "sh scripts/check.sh",
     "generate-manifest": "tsx scripts/generate-manifest.ts"

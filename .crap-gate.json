@@ -15,7 +15,7 @@
     },
     {
       "name": "python",
-      "paths": ["skills/backlog/**/*.py", "skills/crap-gate/**/*.py"],
+      "paths": ["skills/backlog/**/*.py", "skills/crap-gate/**/*.py", "skills/implement-spec/**/*.py"],
       "exclude": ["**/test_*.py"],
       "complexity": { "tool": "python" },
       "coverage": {
