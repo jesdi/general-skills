@@ -2,7 +2,8 @@
 
 Interface choices (ticket 02): `--runner <script>` is called as `<script> <role> <prompt> <report>` in the slot
 directory. A plain run (no --dry-run) branches ticket/NN from the PR tip in slot 1, runs the test-writer (unless the
-Seam is `none — refactor`) then the implementer, and stops; exit 0 when both reports are accepted, 1 on BLOCKED.
+Seam is `none — refactor`) then the implementer; from ticket 03 on an accepted ticket goes on to the driver's gate (`true` here) and a
+merge into the PR branch, which deletes `ticket/NN`. Exit 0 when the ticket merges, 1 on BLOCKED.
 `--only <role>` runs that one role on the first ticket and stops. `--spec <path>` names the spec for the prompts.
 `--timeout <role>=<minutes>` (repeatable, fractions allowed) overrides a role timeout.
 """
@@ -93,6 +94,7 @@ class World:
         (self.repo / "specs/csv/spec.md").write_text("# csv spec\n")
         git(self.repo, "add", "specs")
         git(self.repo, "commit", "-q", "-m", "spec")
+        self.base = git(self.repo, "rev-parse", "HEAD").strip()
         self.models = models_file(self.tmp, **models)
         self.runner = self.tmp / "runner/run-agent"
         self.runner.parent.mkdir()
@@ -115,7 +117,7 @@ class World:
         return path.read_text() if path.exists() else ""
 
     def ticket_commits(self):
-        return git(self.repo, "rev-list", "--reverse", "feat/csv..ticket/01").split()
+        return git(self.repo, "rev-list", "--reverse", "--no-merges", f"{self.base}..feat/csv").split()
 
 
 def ok(proc):
@@ -306,7 +308,7 @@ def test_timeout_keeps_the_tree_and_reruns_once_with_double_the_limit(env):
     assert "wip.txt" in second["status"]
     prompt = second["prompt"].lower()
     assert "timed out" in prompt and "in the tree" in prompt and "timed out" not in first["prompt"].lower()
-    assert git(w.repo, "show", "ticket/01:wip.txt") == "half done\n"
+    assert git(w.repo, "show", "feat/csv:wip.txt") == "half done\n"
 
 
 def test_second_timeout_blocks_the_ticket(env):

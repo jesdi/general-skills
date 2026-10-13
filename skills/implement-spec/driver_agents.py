@@ -11,6 +11,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
@@ -21,6 +22,9 @@ TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 READ_ONLY = ("reviewer", "correctness")
+LIVE: set[int] = set()  # the process groups of the agents that run now
+STOPPED = False  # set by stop(): no agent starts after it
+_LIVE = threading.Lock()  # an agent starts or the run stops, never both at once
 
 
 def split(entry: str) -> tuple[str, str, str]:
@@ -78,11 +82,16 @@ def tail(prompt: str, report: str) -> str:
     return prompt[prompt.rfind("\n", 0, prompt.rfind(report)):]
 
 
-def launch(argv: list[str], prompt: Path, log: Path, seconds: float) -> int | None:
-    """Run one agent to its end; stdout and stderr go to `log`. Returns the exit code, None after a timeout."""
+def launch(argv: list[str], prompt: Path, log: Path, seconds: float, slot: str = ".") -> int | None:
+    """Run one agent in `slot` to its end; stdout and stderr go to `log`. Returns the exit code, None after a timeout."""
     with prompt.open() as stdin, log.open("w") as out:
-        # Its own process group, so the children that edit the tree stop with it.
-        proc = subprocess.Popen(argv, stdin=stdin, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+        with _LIVE:
+            if STOPPED:
+                raise InterruptedError("the run is stopped")
+            # Its own process group, so the children that edit the tree stop with it.
+            proc = subprocess.Popen(argv, cwd=slot, stdin=stdin, stdout=out, stderr=subprocess.STDOUT,
+                                    start_new_session=True)
+            LIVE.add(proc.pid)
         try:
             return proc.wait(seconds)
         except subprocess.TimeoutExpired:
@@ -90,9 +99,24 @@ def launch(argv: list[str], prompt: Path, log: Path, seconds: float) -> int | No
         finally:
             # Every exit path, Ctrl-C too: nothing of the agent may write to the tree or the log after this.
             # No such group = all gone; macOS answers EPERM for a group of zombies.
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(proc.pid, signal.SIGKILL)
+            _kill(proc.pid)
             proc.wait()
+            LIVE.discard(proc.pid)
+
+
+def _kill(group: int) -> None:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(group, signal.SIGKILL)
+
+
+def stop() -> None:
+    """Kill every running agent and let no other start. For an interrupted run: its ticket threads would let the
+    agents finish, and would start the next ones."""
+    global STOPPED
+    with _LIVE:
+        STOPPED = True
+        for group in list(LIVE):
+            _kill(group)
 
 
 def cost(log: Path) -> str | None:
