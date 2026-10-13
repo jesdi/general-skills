@@ -16,11 +16,11 @@ def ancestor(commit: str, of: str) -> bool:
     return git(".", "merge-base", "--is-ancestor", commit, of).returncode == 0
 
 
-def identity(tip: str) -> dict[str, str]:
+def identity(tip: str, slot: str = ".") -> dict[str, str]:
     """git's own identity when it has one; else the identity of the ticket's last commit, so the merge can be made."""
-    if git(".", "var", "GIT_COMMITTER_IDENT").returncode == 0:
+    if git(slot, "var", "GIT_COMMITTER_IDENT").returncode == 0:
         return {}
-    name, email = git(".", "log", "-1", "--format=%an%n%ae", tip).stdout.splitlines()
+    name, email = git(slot, "log", "-1", "--format=%an%n%ae", tip).stdout.splitlines()
     return {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
 
 
@@ -45,7 +45,9 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
 def begin(slot: str, pr_tip: str) -> list[str]:
     """Open the merge of `pr_tip` into the branch that `slot` has checked out, for the conflict agent to commit.
     Returns the files in conflict; with none there is nothing to resolve and the slot is as it was."""
-    git(slot, "merge", "--no-commit", "--no-ff", pr_tip)
+    # git merge needs a committer even with --no-commit; a machine with no git identity (CI) gets the ticket's own.
+    env = {**os.environ, **identity("HEAD", slot)}
+    subprocess.run(["git", "-C", slot, "merge", "--no-commit", "--no-ff", pr_tip], capture_output=True, env=env)
     files = git(slot, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
     if not files:
         abort(slot)

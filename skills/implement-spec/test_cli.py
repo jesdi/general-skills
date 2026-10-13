@@ -11,7 +11,7 @@ import pytest
 SKILL = Path(__file__).parent.resolve()
 RUN = SKILL / "run.sh"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
-TOOLS = ("sh", "uname", "dirname", "readlink", "git", "env", "mktemp", "curl", "tar", "mv", "rm", "mkdir",
+TOOLS = ("sh", "uname", "dirname", "readlink", "git", "env", "mktemp", "curl", "tar", "gzip", "mv", "rm", "mkdir",
          "sha256sum", "shasum", "cat", "chmod", "ln", "date", "basename")
 ROLES = ("explorer", "test-writer", "implementer", "reviewer", "correctness", "fixer", "final-reviewer", "conflict")
 NONE = "None (can start immediately)"

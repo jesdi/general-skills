@@ -128,3 +128,17 @@ def test_the_landing_check_compares_the_mode_and_the_type_of_a_locked_file_too(r
     assert driver_merge.refused(tickets, "02", file, file) == ""
     assert driver_merge.refused(tickets, "02", file, runs) == "locked file changed: t.py"
     assert driver_merge.refused(tickets, "02", file, link) == "locked file changed: t.py"
+
+
+def test_begin_opens_the_conflicting_merge_on_a_machine_with_no_git_identity(repo, monkeypatch, tmp_path):
+    repo()
+    sh("git", "branch", "ticket/01")
+    commit_on("ticket/01", "a.txt", "ticket\n")
+    sh("git", "branch", "pr")
+    pr_tip = commit_on("pr", "a.txt", "pr\n")
+    sh("git", "checkout", "-q", "ticket/01")
+    (tmp_path / "noident").write_text("[user]\n\tuseConfigOnly = true\n")  # git may not guess a name, as on CI
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "noident"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.delenv("GIT_CONFIG_COUNT")
+    assert driver_merge.begin(".", pr_tip) == ["a.txt"]
