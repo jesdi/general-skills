@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-08T23:26:31.695Z",
+  "generatedAt": "2026-10-14T03:34:13.674Z",
   "skills": [
     {
       "name": "backlog",
@@ -46,8 +46,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.7",
-      "hash": "sha256-dfcd2f6a13fd06dd4fb7a45bb0d85ae39228ec804dc94c845310afa72808d3d5",
+      "version": "0.1.8",
+      "hash": "sha256-cafda530227caa971251cbe0d677f758630f96d6178f75a5e32b93417efe033e",
       "description": "Implement a specification in code."
     },
     {
@@ -76,8 +76,8 @@
     },
     {
       "name": "review-page",
-      "version": "0.1.0",
-      "hash": "sha256-f5fc0964e0558c6b9ca5d9ed77c3647b22cbc1d9710a9dfdf270d8c062caa741",
+      "version": "0.1.1",
+      "hash": "sha256-e8204e4c6f05e2721a20d9ac3f72b8ff84a2854647688bb9bf057312b53a59f4",
       "description": "One interactive HTML page for a plan review or a questionnaire, built from a fixed template. Use when a pipeline session must deliver a plan review or a questionnaire as an interactive page the console shows."
     },
     {
@@ -94,8 +94,8 @@
     },
     {
       "name": "to-tickets",
-      "version": "0.1.4",
-      "hash": "sha256-66822a4d85cd7b851d9073591723dbf228f58a1f8cb3ccf0fd9f57f38c90aca1",
+      "version": "0.1.5",
+      "hash": "sha256-58d4b24183ba3ff59a97de963ab0cd8bbac91d526941eeb7ec0a84274e918faf",
       "description": "Break a spec, plan, or the current conversation into numbered tracer-bullet ticket files under .agent/tickets/, each declaring its blocking edges and acceptance criteria phrased as observable behavior. Use after a spec is approved and before implementation starts."
     },
     {
