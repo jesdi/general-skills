@@ -66,8 +66,9 @@ a 30-second deadline. Because the check runs in the background, a repaired skill
 may appear in the next session. Project installs stay
 at the versions committed in `.my-skills.json`.
 
-Existing hooks keep the CLI version that registered them. After a CLI release,
-run `npx -y @jesdi/skills-cli@latest hook` once to register the new behavior.
+The hook runs the latest CLI release, so a new release needs no new `hook`.
+A hook written by a CLI before 0.4.2 keeps the version that wrote it: run
+`npx -y @jesdi/skills-cli@latest hook` once to move it to `@latest`.
 
 To keep a skill at its installed version, pin it: `skills-cli pin <skill>
 --global`. No own-skill update touches a pinned skill until `unpin`. To stop all

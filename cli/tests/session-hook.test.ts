@@ -100,16 +100,13 @@ describe('session-update.sh', () => {
     return { ctx, calls, run, callCount };
   }
 
-  it('updates the global skills on the first session, outside the project, with this CLI version', async () => {
+  it('updates the global skills on the first session, outside the project, with the latest CLI', async () => {
     const { ctx, calls, run, callCount } = await setup();
     run();
     expect(await callCount()).toBe(1);
-    const { version } = JSON.parse(
-      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
-    );
     const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
     expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
-    expect(args).toBe(`-y @jesdi/skills-cli@${version} session-update`);
+    expect(args).toBe('-y @jesdi/skills-cli@latest session-update');
   });
 
   it('checks on every session, even when the daily update stamp is recent', async () => {

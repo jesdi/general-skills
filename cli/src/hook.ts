@@ -1,11 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { storeDir, type Ctx } from './paths.js';
-
-const pkg = JSON.parse(
-  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-);
 
 /**
  * Runs a background check on every session. The CLI verifies external skills
@@ -13,13 +9,14 @@ const pkg = JSON.parse(
  *
  * The session's directory can be an untrusted checkout, so the script leaves
  * it before npx reads a project `.npmrc` or `node_modules`. The CLI runs at
- * the version that wrote the script, never at an unseen newer one.
+ * its latest release, so a new release reaches every machine without a new
+ * `skills-cli hook`.
  */
 const SESSION_UPDATE_SCRIPT = `#!/bin/sh
 # Written by @jesdi/skills-cli; a global install or \`skills-cli hook\` writes it again.
 dir="$HOME/.my-skills"
 cd "$dir" || exit 0
-(npx -y @jesdi/skills-cli@${pkg.version} session-update </dev/null >>"$dir/.session-update.log" 2>&1 &)
+(npx -y @jesdi/skills-cli@latest session-update </dev/null >>"$dir/.session-update.log" 2>&1 &)
 exit 0
 `;
 
