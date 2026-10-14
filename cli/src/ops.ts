@@ -20,7 +20,7 @@ import {
   type InstalledSkill,
   type ProjectState,
 } from './state.js';
-import { ensureSessionHook } from './hook.js';
+import { ensureSessionHook, setAutoUpdate } from './hook.js';
 import { installSkill, uninstallSkill } from './store.js';
 import { join } from 'node:path';
 
@@ -33,6 +33,12 @@ export interface CliCtx extends Ctx {
    * non-interactive: such an install fails instead of asking.
    */
   promptAgents?: () => Promise<readonly AgentId[]>;
+  /**
+   * Interactive hook used by the first global install to ask whether global
+   * skills update themselves. Absent means non-interactive: no hook, and the
+   * question waits for the next interactive install.
+   */
+  promptAutoUpdate?: () => Promise<boolean>;
 }
 
 export async function fetchSkills(ctx: CliCtx): Promise<FetchLatestResult> {
@@ -103,6 +109,15 @@ async function ensureDefaultAgents(scope: Scope, ctx: CliCtx): Promise<void> {
 }
 
 /**
+ * Ask once (through `ctx.promptAutoUpdate`) whether global skills update
+ * themselves, and record the answer. A recorded answer is never asked again.
+ */
+export async function askAutoUpdate(ctx: CliCtx): Promise<void> {
+  if ((await loadGlobalState(ctx)).autoUpdate !== undefined || !ctx.promptAutoUpdate) return;
+  await setAutoUpdate(ctx, await ctx.promptAutoUpdate());
+}
+
+/**
  * Install skills. `agents` given → written as a per-skill override on each
  * entry; `undefined` → the entries inherit the scope's top-level `agents`
  * (asking for it once if it does not exist yet).
@@ -121,12 +136,13 @@ export async function opInstall(
   refusePinned(await loadState(scope, ctx), names);
   if (agents) validateAgents(agents);
   else await ensureDefaultAgents(scope, ctx);
+  if (scope === 'global') await askAutoUpdate(ctx);
   const installed: { name: string; version: string }[] = [];
   for (const name of names) {
     installed.push(await installFromFetched(fetched, name, agents, scope, ctx));
   }
-  // Global skills keep themselves up to date from the first install on.
-  if (scope === 'global') await ensureSessionHook(ctx);
+  // Global skills keep themselves up to date only when the user chose so.
+  if (scope === 'global' && (await loadGlobalState(ctx)).autoUpdate) await ensureSessionHook(ctx);
   return installed;
 }
 

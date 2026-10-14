@@ -203,11 +203,36 @@ describe('pinned skills', () => {
 });
 
 describe('global install', () => {
-  it('registers the session update hook', async () => {
+  const settingsOf = (ctx: { home: string }) => join(ctx.home, '.claude', 'settings.json');
+  const autoUpdateOf = async (ctx: { home: string }) =>
+    JSON.parse(await readFile(join(ctx.home, '.config', 'my-skills', 'state.json'), 'utf8')).autoUpdate;
+
+  it('asks once and registers the session update hook on yes', async () => {
+    let asked = 0;
+    const ctx = { ...(await makeCtx()), promptAutoUpdate: async () => { asked++; return true; } };
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    expect(asked).toBe(1);
+    expect(await autoUpdateOf(ctx)).toBe(true);
+    expect(await readFile(settingsOf(ctx), 'utf8')).toContain('.session-update.sh');
+  });
+
+  it('asks once and registers no hook on no', async () => {
+    let asked = 0;
+    const ctx = { ...(await makeCtx()), promptAutoUpdate: async () => { asked++; return false; } };
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    expect(asked).toBe(1);
+    expect(await autoUpdateOf(ctx)).toBe(false);
+    expect(existsSync(settingsOf(ctx))).toBe(false);
+    expect(existsSync(join(ctx.home, '.my-skills', '.session-update.sh'))).toBe(false);
+  });
+
+  it('registers no hook and records nothing when it cannot ask', async () => {
     const ctx = await makeCtx();
     await opInstall(['hello-world'], ['claude'], 'global', ctx);
-    const settings = await readFile(join(ctx.home, '.claude', 'settings.json'), 'utf8');
-    expect(settings).toContain('.session-update.sh');
+    expect(await autoUpdateOf(ctx)).toBeUndefined();
+    expect(existsSync(settingsOf(ctx))).toBe(false);
   });
 
   it('a project install registers no hook', async () => {

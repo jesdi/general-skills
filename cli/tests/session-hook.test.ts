@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureSessionHook } from '../src/hook.js';
+import { ensureSessionHook, removeSessionHook } from '../src/hook.js';
 
 async function makeCtx(...configDirs: string[]) {
   const ctx = {
@@ -75,6 +75,31 @@ describe('ensureSessionHook', () => {
   });
 });
 
+describe('removeSessionHook', () => {
+  it('removes only its own hook from every agent config and deletes the script', async () => {
+    const ctx = await makeCtx('.claude', '.codex');
+    const claude = join(ctx.home, '.claude', 'settings.json');
+    const codex = join(ctx.home, '.codex', 'hooks.json');
+    await writeFile(
+      claude,
+      JSON.stringify({
+        model: 'opus',
+        hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'mine.sh' }] }] },
+      }),
+    );
+    await ensureSessionHook(ctx);
+    expect(await removeSessionHook(ctx)).toEqual([claude, codex]);
+    const config = await readJson(claude);
+    expect(config.model).toBe('opus');
+    expect(config.hooks.SessionStart).toEqual([
+      { matcher: 'startup', hooks: [{ type: 'command', command: 'mine.sh' }] },
+    ]);
+    expect((await readJson(codex)).hooks.SessionStart).toEqual([]);
+    expect(existsSync(join(ctx.home, '.my-skills', '.session-update.sh'))).toBe(false);
+    expect(await removeSessionHook(ctx)).toEqual([]);
+  });
+});
+
 describe('session-update.sh', () => {
   /** Run the installed script with a fake `npx` that records its arguments. */
   async function setup() {
@@ -100,16 +125,13 @@ describe('session-update.sh', () => {
     return { ctx, calls, run, callCount };
   }
 
-  it('updates the global skills on the first session, outside the project, with this CLI version', async () => {
+  it('updates the global skills on the first session, outside the project, with the latest CLI', async () => {
     const { ctx, calls, run, callCount } = await setup();
     run();
     expect(await callCount()).toBe(1);
-    const { version } = JSON.parse(
-      await readFile(new URL('../package.json', import.meta.url), 'utf8'),
-    );
     const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
     expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
-    expect(args).toBe(`-y @jesdi/skills-cli@${version} session-update`);
+    expect(args).toBe('-y @jesdi/skills-cli@latest session-update');
   });
 
   it('checks on every session, even when the daily update stamp is recent', async () => {

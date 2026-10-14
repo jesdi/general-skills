@@ -25,3 +25,15 @@ export async function promptAgentsInteractive(): Promise<AgentId[]> {
   if (p.isCancel(agents)) throw new Error('cancelled — nothing was changed');
   return agents as AgentId[];
 }
+
+/**
+ * `CliCtx.promptAutoUpdate` implementation for an interactive terminal: ask
+ * once and treat a cancel as an abort so nothing gets written.
+ */
+export async function promptAutoUpdateInteractive(): Promise<boolean> {
+  const on = await p.confirm({
+    message: 'Auto-update global skills (latest CLI) each session?',
+  });
+  if (p.isCancel(on)) throw new Error('cancelled — nothing was changed');
+  return on;
+}
