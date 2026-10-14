@@ -35,10 +35,9 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # pnpm 10 publishes through the bundled npm CLI; OIDC needs npm >= 11.5.1.
+          node-version: lts/*
           cache: pnpm
-      # pnpm 10 publishes through the npm CLI; OIDC needs npm >= 11.5.1.
-      - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
       - run: pnpm generate-manifest
       - name: Release if skills changed, publish if version missing
