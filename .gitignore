@@ -13,3 +13,6 @@ __pycache__/
 
 # Local CRAP scores, coverage reports and test logs
 .crap/
+
+# Agent working state (tickets, ledgers, driver notes) — never committed
+.agent/

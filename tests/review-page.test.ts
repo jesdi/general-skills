@@ -194,6 +194,12 @@ describe('review-page template.html (stylesheet)', () => {
       }
     }
   });
+
+  it('breaks a long token in a question, so that a question is never wider than the screen', () => {
+    // A test id or a path has no break point; the property is inherited by the title, the why and the options.
+    const [, body] = css().match(/\n\.q\s*\{([^{}]*)\}/) ?? [];
+    expect(body).toMatch(/overflow-wrap\s*:\s*anywhere/);
+  });
 });
 
 // ---- template.html: behaviour ---------------------------------------------

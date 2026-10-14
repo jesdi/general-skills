@@ -1,0 +1,1 @@
+This is the scoped review after the fix batch: the range holds only the `fix(NN)` commits, and the commits up to {reviewed} have their review. Check that each critical or important finding in {findings} is fixed and that the fix commits break nothing else.
