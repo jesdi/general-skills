@@ -7,8 +7,26 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  # Trusted publishing (OIDC), no npm token. Only this job can request an
+  # id-token, so the tests never run next to one.
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
       id-token: write
@@ -19,14 +37,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
+      # pnpm 10 publishes through the npm CLI; OIDC needs npm >= 11.5.1.
+      - run: npm install -g npm@11
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
       - run: pnpm --filter @jesdi/skills-cli build
       - name: Bump if this version is published, then publish
         working-directory: cli
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           if pnpm view "@jesdi/skills-cli@$VERSION" version >/dev/null 2>&1; then
