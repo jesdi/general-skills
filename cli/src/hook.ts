@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { storeDir, type Ctx } from './paths.js';
+import { loadGlobalState, saveGlobalState } from './state.js';
 
 /**
  * Runs a background check on every session. The CLI verifies external skills
@@ -13,7 +14,7 @@ import { storeDir, type Ctx } from './paths.js';
  * `skills-cli hook`.
  */
 const SESSION_UPDATE_SCRIPT = `#!/bin/sh
-# Written by @jesdi/skills-cli; a global install or \`skills-cli hook\` writes it again.
+# Written by @jesdi/skills-cli; \`skills-cli hook\` writes it again, \`skills-cli hook --off\` removes it.
 dir="$HOME/.my-skills"
 cd "$dir" || exit 0
 (npx -y @jesdi/skills-cli@latest session-update </dev/null >>"$dir/.session-update.log" 2>&1 &)
@@ -30,21 +31,43 @@ interface HookGroup {
   hooks?: { type: string; command: string; timeout?: number }[];
 }
 
+type HookConfig = { hooks?: { SessionStart?: HookGroup[] } };
+
+async function readConfig(file: string): Promise<HookConfig> {
+  if (!existsSync(file)) return {};
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`malformed config file ${file}: ${(err as Error).message}`);
+  }
+}
+
 /** Add the command to the file's SessionStart hooks. False when it is already there. */
 async function register(file: string, command: string): Promise<boolean> {
-  let config: { hooks?: { SessionStart?: HookGroup[] } } = {};
-  if (existsSync(file)) {
-    try {
-      config = JSON.parse(await readFile(file, 'utf8'));
-    } catch (err) {
-      throw new Error(`malformed config file ${file}: ${(err as Error).message}`);
-    }
-  }
+  const config = await readConfig(file);
   const groups = ((config.hooks ??= {}).SessionStart ??= []);
   if (groups.some((g) => g.hooks?.some((h) => h.command === command))) return false;
   groups.push({ hooks: [{ type: 'command', command, timeout: 10 }] });
   await writeFile(file, JSON.stringify(config, null, 2) + '\n');
   return true;
+}
+
+/** Remove the command from the file's SessionStart hooks. False when it is not there. */
+async function unregister(file: string, command: string): Promise<boolean> {
+  if (!existsSync(file)) return false;
+  const config = await readConfig(file);
+  const groups = config.hooks?.SessionStart ?? [];
+  const kept = groups
+    .map((g) => ({ ...g, hooks: g.hooks?.filter((h) => h.command !== command) }))
+    .filter((g, i) => g.hooks?.length || !groups[i].hooks?.length);
+  if (JSON.stringify(kept) === JSON.stringify(groups)) return false;
+  config.hooks!.SessionStart = kept;
+  await writeFile(file, JSON.stringify(config, null, 2) + '\n');
+  return true;
+}
+
+function scriptPath(ctx: Ctx): string {
+  return join(storeDir('global', ctx), '.session-update.sh');
 }
 
 /**
@@ -53,9 +76,8 @@ async function register(file: string, command: string): Promise<boolean> {
  * config files it changed.
  */
 export async function ensureSessionHook(ctx: Ctx): Promise<string[]> {
-  const store = storeDir('global', ctx);
-  const script = join(store, '.session-update.sh');
-  await mkdir(store, { recursive: true });
+  const script = scriptPath(ctx);
+  await mkdir(storeDir('global', ctx), { recursive: true });
   await writeFile(script, SESSION_UPDATE_SCRIPT);
   const changed: string[] = [];
   for (const [dir, name] of HOOK_CONFIGS) {
@@ -64,4 +86,24 @@ export async function ensureSessionHook(ctx: Ctx): Promise<string[]> {
     if (await register(file, `sh '${script}'`)) changed.push(file);
   }
   return changed;
+}
+
+/** Unregister the hook from every agent config and delete the script. Returns the config files it changed. */
+export async function removeSessionHook(ctx: Ctx): Promise<string[]> {
+  const script = scriptPath(ctx);
+  const changed: string[] = [];
+  for (const [dir, name] of HOOK_CONFIGS) {
+    const file = join(ctx.home, dir, name);
+    if (await unregister(file, `sh '${script}'`)) changed.push(file);
+  }
+  await rm(script, { force: true });
+  return changed;
+}
+
+/** Record the auto-update choice and add or remove the hook to match. Returns the config files it changed. */
+export async function setAutoUpdate(ctx: Ctx, on: boolean): Promise<string[]> {
+  const state = await loadGlobalState(ctx);
+  state.autoUpdate = on;
+  await saveGlobalState(ctx, state);
+  return on ? ensureSessionHook(ctx) : removeSessionHook(ctx);
 }

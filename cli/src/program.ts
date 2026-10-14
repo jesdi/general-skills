@@ -11,7 +11,7 @@ import {
   opUninstall,
   type CliCtx,
 } from './ops.js';
-import { ensureSessionHook } from './hook.js';
+import { setAutoUpdate } from './hook.js';
 import { opSessionUpdate } from './session.js';
 import { type AgentId, type Scope } from './paths.js';
 import { validateAgents } from './state.js';
@@ -35,6 +35,9 @@ function defaultCtx(): CliCtx {
     project: process.cwd(),
     promptAgents: process.stdin.isTTY
       ? async () => (await import('./prompts.js')).promptAgentsInteractive()
+      : undefined,
+    promptAutoUpdate: process.stdin.isTTY
+      ? async () => (await import('./prompts.js')).promptAutoUpdateInteractive()
       : undefined,
   };
 }
@@ -74,10 +77,10 @@ async function listSkills(cliCtx: CliCtx): Promise<void> {
   }
 }
 
-async function registerHook(cliCtx: CliCtx): Promise<void> {
-  const changed = await ensureSessionHook(cliCtx);
-  for (const file of changed) console.log(`registered in ${file}`);
-  if (changed.length === 0) console.log('already registered');
+async function registerHook(opts: { off?: boolean }, cliCtx: CliCtx): Promise<void> {
+  const changed = await setAutoUpdate(cliCtx, !opts.off);
+  for (const file of changed) console.log(`${opts.off ? 'removed from' : 'registered in'} ${file}`);
+  if (changed.length === 0) console.log(opts.off ? 'not registered' : 'already registered');
 }
 
 export function buildProgram(ctx?: CliCtx): Command {
@@ -153,8 +156,9 @@ export function buildProgram(ctx?: CliCtx): Command {
 
   program
     .command('hook')
-    .description('register the session-start hook that keeps global skills up to date')
-    .action(() => registerHook(cliCtx));
+    .description('turn on automatic updates of global skills: register the session-start hook')
+    .option('--off', 'turn automatic updates off: remove the hook')
+    .action((opts) => registerHook(opts, cliCtx));
 
   program.action(async () => {
     const { runWizard } = await import('./wizard.js');

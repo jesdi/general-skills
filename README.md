@@ -49,13 +49,18 @@ npx @jesdi/skills-cli list
 npx @jesdi/skills-cli uninstall <skill> [--global]
 npx @jesdi/skills-cli pin <skill> [--global]     # keep the installed version
 npx @jesdi/skills-cli unpin <skill> [--global]
-npx @jesdi/skills-cli hook                 # register the session update hook
+npx @jesdi/skills-cli hook [--off]         # turn automatic updates on (or off)
 npx @jesdi/skills-cli session-update       # run the session checks now
 ```
 
 ## Automatic updates
 
-A global install registers a session-start hook in Claude Code
+The first global install asks once whether global skills update themselves,
+and `~/.config/my-skills/state.json` records the answer (`autoUpdate`). A
+non-interactive install does not ask and turns nothing on. To change the
+answer later, run `skills-cli hook` (on) or `skills-cli hook --off` (off).
+
+With automatic updates on, a session-start hook is registered in Claude Code
 (`~/.claude/settings.json`) and Codex (`~/.codex/hooks.json`), for each one
 that is present. Every session runs `skills-cli session-update` in the
 background. It checks all external skills on every run and updates own global
@@ -67,13 +72,13 @@ may appear in the next session. Project installs stay
 at the versions committed in `.my-skills.json`.
 
 The hook runs the latest CLI release, so a new release needs no new `hook`.
-A hook written by a CLI before 0.4.2 keeps the version that wrote it: run
+A hook written by an earlier CLI keeps the version that wrote it: run
 `npx -y @jesdi/skills-cli@latest hook` once to move it to `@latest`.
 
 To keep a skill at its installed version, pin it: `skills-cli pin <skill>
 --global`. No own-skill update touches a pinned skill until `unpin`. To stop all
-automatic updates, remove the hook entry from the two config files; the next
-global install or `skills-cli hook` adds it again.
+automatic updates, run `skills-cli hook --off`: it removes the hook from both
+config files and deletes the script.
 
 ## Third-party skills (not vendored)
 

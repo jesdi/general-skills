@@ -1,5 +1,6 @@
 import * as p from '@clack/prompts';
 import {
+  askAutoUpdate,
   opApplyUpdates,
   opCheckUpdates,
   opDecline,
@@ -58,6 +59,8 @@ export async function runWizard(ctx: CliCtx): Promise<void> {
   // top-level default; later choices are per-skill overrides - unless they
   // match the default, in which case the entries simply inherit it.
   const override = await settleAgents(agents as AgentId[], scope, ctx);
+  // Asked here, not inside the install, so the question never sits under the spinner.
+  if (scope === 'global') await askAutoUpdate(ctx);
 
   const spinner = p.spinner();
   spinner.start('Installing\u2026');

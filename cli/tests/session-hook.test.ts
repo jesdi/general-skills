@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { ensureSessionHook } from '../src/hook.js';
+import { ensureSessionHook, removeSessionHook } from '../src/hook.js';
 
 async function makeCtx(...configDirs: string[]) {
   const ctx = {
@@ -72,6 +72,31 @@ describe('ensureSessionHook', () => {
     await writeFile(file, '{ nope');
     await expect(ensureSessionHook(ctx)).rejects.toThrow(file);
     expect(await readFile(file, 'utf8')).toBe('{ nope');
+  });
+});
+
+describe('removeSessionHook', () => {
+  it('removes only its own hook from every agent config and deletes the script', async () => {
+    const ctx = await makeCtx('.claude', '.codex');
+    const claude = join(ctx.home, '.claude', 'settings.json');
+    const codex = join(ctx.home, '.codex', 'hooks.json');
+    await writeFile(
+      claude,
+      JSON.stringify({
+        model: 'opus',
+        hooks: { SessionStart: [{ matcher: 'startup', hooks: [{ type: 'command', command: 'mine.sh' }] }] },
+      }),
+    );
+    await ensureSessionHook(ctx);
+    expect(await removeSessionHook(ctx)).toEqual([claude, codex]);
+    const config = await readJson(claude);
+    expect(config.model).toBe('opus');
+    expect(config.hooks.SessionStart).toEqual([
+      { matcher: 'startup', hooks: [{ type: 'command', command: 'mine.sh' }] },
+    ]);
+    expect((await readJson(codex)).hooks.SessionStart).toEqual([]);
+    expect(existsSync(join(ctx.home, '.my-skills', '.session-update.sh'))).toBe(false);
+    expect(await removeSessionHook(ctx)).toEqual([]);
   });
 });
 

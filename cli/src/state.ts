@@ -22,6 +22,8 @@ export interface GlobalState {
   schemaVersion: 1;
   /** Default agents for every skill without its own `agents`. */
   agents?: AgentId[];
+  /** Session hook on (`true`) or off (`false`); asked at the first global install. */
+  autoUpdate?: boolean;
   skills: Record<string, InstalledSkill>;
   declined: Record<string, string>;
 }
