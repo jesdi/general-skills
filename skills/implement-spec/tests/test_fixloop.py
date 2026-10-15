@@ -544,6 +544,32 @@ def test_the_correctness_prompt_keeps_the_agent_off_the_tree_the_reviewer_edits(
     assert "run no tests" in text
 
 
+def test_the_correctness_pass_reads_the_untracked_inputs_of_the_driver_from_the_working_tree(tmp_path):
+    """Issue 66: the ticket and the findings files are in the ignored .agent/, so git at the tip has none of them."""
+    rig = Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
+    rig.run(plan(**{"02/correctness": [correct([finding("C-IMPORTANT")])], "02/fixer": [fix("02", 1)]}))
+    assert rig.code == 0, rig.ledger()
+    again = rig.prompt("correctness-1", "02")
+    inputs = (".agent/tickets/02-quote-fields.md", ".agent/implement/02/findings-0.json")
+    assert all(path in again for path in inputs), again
+    tracked = subprocess.run(["git", "-C", str(rig.repo), "ls-files", *inputs], capture_output=True, text=True).stdout
+    assert tracked == ""
+    assert "read the spec, the ticket and the findings file from the working tree" in again
+
+
+@pytest.mark.parametrize("role", ["reviewer", "correctness"])
+def test_the_schema_of_a_review_says_that_commits_holds_only_the_agents_own_commits(role):
+    """Issue 66: a reviewer that lists a commit of the range costs a rerun (`is not a new commit`)."""
+    description = driver_report.schema(role)["properties"]["commits"]["description"]
+    assert "only the commits you created" in description.lower() and "empty" in description
+
+
+def test_the_reviewer_schema_asks_for_one_proof_for_each_locked_test_file_in_the_first_review():
+    """Issue 66: a first review with no proof for a locked test file costs a rerun."""
+    description = driver_report.schema("reviewer")["properties"]["mutations"]["description"]
+    assert "each locked test file" in description and "`<locked file>::<test name>`" in description
+
+
 def test_git_identity_is_not_needed_to_open_the_merge_for_the_conflict_agent(tmp_path):
     import driver_merge
     rig = Inside(tmp_path)
