@@ -26,7 +26,8 @@ def _ticket() -> dict:
 def _final() -> dict:
     """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
     return {"skipped": "", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
-            "reviewed": None, "round": 0, "open": [], "batch": None, "green_gates": [], "pushed": None, "pr": None}
+            "reviewed": None, "round": 0, "open": [], "batch": None, "green_gates": [], "pushed": None, "body": None,
+            "pr": None}
 
 
 class State:
@@ -44,6 +45,8 @@ class State:
                 "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0, "agents": [],
                 "questions": [], "start": git(".", "rev-parse", f"refs/heads/{pr_branch}").stdout.strip(),
                 "landed": [], "final": _final()})
+            for key, value in _final().items():  # a run of an older driver lacks the newer keys
+                state["run"]["final"].setdefault(key, value)
             tickets = state.setdefault("tickets", {})
             for number in numbers:
                 tickets.setdefault(number, _ticket())

@@ -66,7 +66,7 @@ def stray(rig, text="by hand"):
 
 # ---------------------------------------------------------------- the story: local stop, rerun, push
 
-def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the_pr_once(tmp_path):
+def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the_pr_once(tmp_path, pr_skill):
     rig = Inside(tmp_path, THREE, FINAL_MODELS)
     rig.run(plan())
     assert rig.code == 0, rig.out + "\n".join(rig.ledger())
@@ -95,7 +95,11 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     (pr,) = rig.prs()
     assert pr["argv"][:10] == ["pr", "create", "--base", "main", "--head", "feat/csv", "--title", "csv spec",
                                "--body-file", ".agent/implement/final/pr-body.md"]
-    assert [f"- {nn}: {row['sha'][:7]} {TITLES[nn]}" for nn, row in zip(order, rows)] == pr["body"].splitlines()[4:7]
+    assert pr["body"].startswith("## Summary\n\nCSV export.\n\n## Tickets\n"), "the pr-writer's body, then the facts"
+    assert [f"- {nn}: {row['sha'][:7]} {TITLES[nn]}" for nn, row in zip(order, rows)] == pr["body"].splitlines()[8:11]
+    (writer,) = rig.final_calls("pr-writer")
+    assert f"PR method: {pr_skill}\n" in writer["prompt"]
+    assert "Facts of the run, which the driver puts after your body:\n## Tickets" in writer["prompt"]
     assert "## Rulings\n\nNone.\n" in pr["body"] and "Scoped review after the fix batch: not needed" in pr["body"]
     assert f"Pushed feat/csv at {tip} to origin." in rig.out and "PR: https://github.example/pull/1" in rig.out
     assert f"feat/csv is pushed at {tip[:7]}; its PR is https://github.example/pull/1." in rig.out
@@ -103,7 +107,7 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
 
     rig.run(plan(), "--push")
     assert rig.code == 0 and len(rig.pushes()) == 1 and len(rig.prs()) == 1, "a second push rerun sends nothing"
-    assert (len(rig.calls()), len(rig.gates())) == (calls, gates)
+    assert (len(rig.calls()), len(rig.gates())) == (calls + 1, gates), "the one agent of the pushes is the pr-writer"
 
 
 def test_the_final_review_does_not_start_while_a_ticket_is_not_merged_and_the_ledger_says_so_once(tmp_path):
@@ -491,6 +495,24 @@ def test_without_the_review_diff_skill_every_repository_stops_before_any_agent(t
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == (f"{tmp_path}/review-diff/SKILL.md is missing: the final review runs through it; install the "
                        "review-diff skill next to implement-spec\n")
+
+
+def test_a_push_without_the_pr_skill_stops_before_any_agent_and_a_local_run_does_not_need_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty-claude-home"))
+    rig = Inside(tmp_path, ONE).run(plan(), "--push")
+    assert rig.code == 3 and not rig.calls(), rig.out
+    assert rig.out.startswith("the pr skill is missing: the PR body follows it; install it with ")
+
+    rig.run(plan())
+    assert rig.code == 0 and not rig.final_calls("pr-writer"), rig.out
+
+    (tmp_path / "home/.agents/skills/pr").mkdir(parents=True)
+    (tmp_path / "home/.agents/skills/pr/SKILL.md").write_text("---\nname: pr\n---\n")
+    rig.run(plan(), "--push")
+    assert rig.code == 0 and len(rig.prs()) == 1, rig.out
+    (writer,) = rig.final_calls("pr-writer")
+    assert f"PR method: {tmp_path}/home/.agents/skills/pr/SKILL.md\n" in writer["prompt"]
 
 
 def test_without_an_origin_the_run_ends_reviewed_and_a_push_is_refused_at_the_start_and_after_the_tidy(tmp_path):

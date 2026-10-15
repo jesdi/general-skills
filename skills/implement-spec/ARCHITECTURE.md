@@ -78,7 +78,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 ### Work is never dropped
 
 - A role that commits keeps its tree after a timeout or an interrupt; its rerun continues from it.
-- A read-only role (reviewer, correctness, final-reviewer) has no work to keep. When it changes its slot, the
+- A read-only role (reviewer, correctness, final-reviewer, pr-writer) has no work to keep. When it changes its slot, the
   driver restores the slot and runs the review one more time (`Run.read_only`).
 - A slot with uncommitted work of an interrupted or parked ticket is kept for that ticket (`driver_state.kept`).
 - A blocked ticket keeps its slot when the slot is not clean.

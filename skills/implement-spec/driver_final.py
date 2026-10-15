@@ -41,6 +41,14 @@ ROUNDS = 2  # the full review and the scoped one after the fix batch
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
 
 
+def pr_skill() -> Path | None:
+    """The SKILL.md of the pr skill, which the PR body follows: next to this skill, else in the skill folder of the
+    Claude home or of the shared home of Codex and OpenCode."""
+    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    homes = (driver_agents.SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
+    return next((home / "pr" / "SKILL.md" for home in homes if (home / "pr" / "SKILL.md").is_file()), None)
+
+
 def _has_origin() -> bool:
     return git(".", "remote", "get-url", "origin").returncode == 0
 
@@ -51,6 +59,9 @@ def precondition_errors(push: bool) -> list[str]:
     if not REVIEW_DIFF.exists():
         errors.append(f"{REVIEW_DIFF} is missing: the final review runs through it; install the review-diff skill "
                       "next to implement-spec")
+    if push and not pr_skill():
+        errors.append("the pr skill is missing: the PR body follows it; install it with "
+                      "`npx skills add mattpocock/skills --skill pr`, or run without --push and --unattended")
     if push and not _has_origin():
         errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
                       "add the remote, or run without them to stop before the push")
@@ -401,8 +412,8 @@ def _name(run: Run) -> str:
     return next((line[2:].strip() for line in lines if line.startswith("# ")), run.pr)
 
 
-def _body(run: Run, final: dict, tickets: list[Ticket]) -> str:
-    """The PR body: the ticket-to-commit map, the fix commits, the rulings and the review coverage."""
+def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
+    """The end of the PR body: the ticket-to-commit map, the fix commits, the rulings and the review coverage."""
     titles, tip = {ticket.number: ticket.title for ticket in tickets}, final["reviewed"]
     fixes = git(".", "log", "--reverse", "--format=- %h %s", f"{final['tidied']}..{tip}").stdout.strip()
     rulings = driver_decisions.rulings(run.state.read()["run"]["questions"])
@@ -413,10 +424,28 @@ def _body(run: Run, final: dict, tickets: list[Ticket]) -> str:
         "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed"})
 
 
+def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
+    """Write the PR body: what the pr-writer wrote with the method of the pr skill, then the facts of the run. A body
+    written for the reviewed tip is kept, so a PR that failed to open costs no second agent."""
+    body, tip = OUT / FINAL / "pr-body.md", final["reviewed"]
+    if final["body"] == tip and body.is_file():
+        return body
+    method, facts = pr_skill(), _facts(run, final, tickets)
+    if not method:
+        raise Blocked("the pr skill is missing: the PR body follows it; install it with "
+                      "`npx skills add mattpocock/skills --skill pr`")
+    values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
+              "gate": str(OUT / FINAL / f"gate-{tip[:7]}.log"), "pr_skill": str(method), "facts": facts}
+    with during("the PR body"):
+        report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent("pr-writer", FINAL, ".", values))
+    body.write_text(f"{report['body'].strip()}\n\n{facts}")
+    run.state.update(lambda state: state["run"]["final"].update(body=tip))
+    return body
+
+
 def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
     """Open the PR, ready for review, and return its URL."""
-    body = OUT / FINAL / "pr-body.md"
-    body.write_text(_body(run, final, tickets))
+    body = _write_body(run, final, tickets)
     made = subprocess.run(["gh", "pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run),
                            "--body-file", str(body)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if made.returncode:

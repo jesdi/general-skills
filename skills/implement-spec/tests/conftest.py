@@ -16,6 +16,18 @@ def ticket(number, blocked="None (can start immediately)", touches="`demo/x.py: 
     return f"# {number}: Ticket {number}\n\n**Blocked by:** {blocked}\n\n**Seam:** {seam}\n\n**Touches:** {touches}\n\n- [ ] It works\n"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def pr_skill(tmp_path_factory):
+    """The Claude home of every test, module rigs included, has the pr skill, which the PR body follows. Rigs copy
+    os.environ."""
+    home = tmp_path_factory.mktemp("claude-home")
+    (home / "skills/pr").mkdir(parents=True)
+    (home / "skills/pr/SKILL.md").write_text("---\nname: pr\n---\n")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("CLAUDE_CONFIG_DIR", str(home))
+        yield home / "skills/pr/SKILL.md"
+
+
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
     """A clean git worktree with .agent ignored; returns a writer for the ticket set."""

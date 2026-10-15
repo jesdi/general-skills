@@ -44,7 +44,7 @@ One driver runs in a repository at a time. The driver holds a kernel file lock o
 | `--only ROLE` | Test only. Run one role (`test-writer`, `implementer`, `reviewer` or `correctness`) on the first ticket, with no gate and no merge. |
 | `--help`, `-h` | Print the flags and exit. |
 
-Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, reviewer 45, correctness 30, fixer 60, final-reviewer 60, conflict 30.
+Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, reviewer 45, correctness 30, fixer 60, final-reviewer 60, conflict 30, pr-writer 20.
 
 `run.sh` downloads `uv`, Python 3.13 and `jsonschema` once into `~/.cache/implement-spec`. `IMPLEMENT_SPEC_CACHE_DIR` moves that cache. `IMPLEMENT_SPEC_OFFLINE=1` forbids the download. `run.sh` supports macOS and Linux only, on x86_64 or ARM64, and needs `curl`, `tar` and `sha256sum` or `shasum` for the first download.
 
@@ -81,7 +81,7 @@ Everything is under `.agent/`, which is never committed.
 | `.agent/implement/<NN>/<role>-<K>.json`, `.log`, `.prompt.md` | The report, the log and the prompt of one agent. K is the fix round. |
 | `.agent/implement/<NN>/gate-<sha7>.log` | One gate record: start, commit, status, command, output, exit, the state after the command, end. |
 | `.agent/implement/<NN>/findings-<K>.json` | The merged findings of the review after fix round K. |
-| `.agent/implement/final/` | The same files for the end of run, and `pr-body.md`. |
+| `.agent/implement/final/` | The same files for the end of run, and `pr-body.md`: the pr-writer's body, then the facts of the run. |
 | `.agent/implement/pycache/` | Compiled Python of the gate, kept out of the slots. |
 | `.agent/implement-review.html` | The page with the open questions. |
 | `.agent/implement-answers.json` | The answers: `{"v": 1, "stage": "implement", "submitted": …, "revision": …, "answers": {…}}`. |
@@ -131,7 +131,7 @@ The end of run starts only when every ticket is merged and every slot is idle. I
 3. **Gate**, then the **final-reviewer** (`prompts/final-reviewer.md`) on the whole range, with the method of the `review-diff` skill. It gets the minor findings of the tickets and the rulings of the operator.
 4. **Fix batch.** Critical and important findings go to one fixer (`prompts/final-fixer.md`). The driver names each of its commits `fix(NN): …` from the ticket in the report. Then the gate, then one scoped review of those commits.
 5. Findings that are open after the second review become questions of kind `final-finding`. There is no third review.
-6. **Push.** With `--push` or `--unattended`, the driver pushes the reviewed tip once, with no force, and opens the PR with `gh`, ready for review. Without them it prints the two tips and the command to run again with `--push`.
+6. **Push.** With `--push` or `--unattended`, the driver pushes the reviewed tip once, with no force, and opens the PR with `gh`, ready for review. The **pr-writer** (`prompts/pr-writer.md`) writes the body with the method of the `pr` skill; the driver puts the facts of the run after it: the ticket-to-commit map, the fix commits, the rulings and the review coverage (`prompts/pr-body.md`). A push stops before any agent when no `pr` skill is next to this skill, in `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` or in `~/.agents/skills`. Without them it prints the two tips and the command to run again with `--push`.
 
 History rules:
 
@@ -174,6 +174,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 | correctness | `prompts/correctness.md` | the same as the reviewer | `mutations` is optional. |
 | fixer | `prompts/fixer.md` | `green`, `ticket` | With DONE: one commit or more. |
 | final-reviewer | `prompts/final-reviewer.md` | `findings` | None. |
+| pr-writer | `prompts/pr-writer.md` | `body`; `commits` is empty | None. |
 | fixer of the final review | `prompts/final-fixer.md` | `green`; `commits` is a list of (`sha`, `ticket`) | Each new commit on the branch is in `commits`, with a ticket of the run. |
 | conflict | `prompts/conflict.md`, `prompts/rebase-conflict.md` | none | With DONE: one commit or more. No locked file may change. |
 
