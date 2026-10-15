@@ -244,6 +244,45 @@ def test_a_correction_of_its_own_file_leaves_the_work_in_the_tree_to_the_impleme
     assert git(rig.repo, "show", f"feat/csv:{OTHER}") == OTHER_TEST
 
 
+def proved(findings=()):
+    """A reviewer step with a mutation proof for each of the two locked files."""
+    step = review("01", findings)
+    red = "FAILED tests/test_01b.py::test_y - AssertionError at demo/export.py:1"
+    step["report"]["mutations"].append(dict(test=f"{OTHER}::test_y", file="demo/export.py", line=1, red=red))
+    return {**step, "stdout": step["stdout"] + red + "\n"}
+
+
+STRONGER = "def test_x():\n    assert '01' == '01'  # stronger\n"
+
+
+@pytest.mark.parametrize("cheat", [False, True])
+def test_a_second_correction_of_a_locked_file_is_its_new_reference(tmp_path, capsys, cheat):
+    # Issue #75: the review correction (#70) changes tests/test_01.py and first lists only the other file. Before
+    # the fix it was accepted, `held` kept the overrule commit as the reference, and each review after a fix that
+    # did not touch the file found "locked file changed". A correction now lists each file it changes.
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    files = {"tests/test_01.py": STRONGER.replace("stronger", "draft"), OTHER: OTHER_TEST + "# stronger\n"}
+    unlisted = {**correction(), "files": files, "commit": "test: 01 stronger"}
+    unlisted["report"] = {**unlisted["report"], "locked": [OTHER], "files": [OTHER]}
+    # The rerun lists both files: the commit of the rejected attempt is in its commits too.
+    listed = {**unlisted, "files": {"tests/test_01.py": STRONGER}}
+    listed["report"] = {**unlisted["report"], "locked": ["tests/test_01.py", OTHER]}
+    gutted = fix("01", 1, files={"demo/export.py": "x = 1\n", "tests/test_01.py": "# gutted\n"})
+    fixes = [gutted, fix("01", 2, files={"demo/export.py": "x = 2\n", "tests/test_01.py": STRONGER})] if cheat else [
+        fix("01", 1)]
+    scenario = plan(**{"01/test-writer": [two_locked(), correction(), unlisted, listed],
+                       "01/implementer": [blocked(), impl("01")], "01/fixer": fixes,
+                       "01/reviewer": [proved([vacuous]), proved([finding("STUCK")])] + [proved()] * 3})
+    rig = Inside(tmp_path, ONE).run(scenario)
+    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
+    assert rig.code == 0, rig.ledger()
+    assert rig.led("BLOCKED", "correction") == [] and rig.led("its commits also change tests/test_01.py")
+    entry = rig.state()["tickets"]["01"]
+    assert entry["held"] == {} and entry["test_writer_sha"] == rig.calls("01", "test-writer")[3]["sha"]
+    assert len(rig.led("locked file changed: tests/test_01.py")) == cheat, "only a fixer's change is a finding"
+    assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == STRONGER
+
+
 def test_a_locked_file_keeps_its_old_reference_until_a_test_writer_lists_it(repo, tmp_path):
     def commit(name, text):
         (tmp_path / name).write_text(text)
