@@ -69,13 +69,20 @@ def _check_out_ticket(ticket: Ticket, slot_number: int, entry: dict, run: Run) -
     return driver_slots.head(slot)
 
 
+def _blocked_report(number: str, run: Run) -> str:
+    """The report of the last `locked-test` stop of the ticket: an implementer's or a fixer's."""
+    asked = [q["evidence"][0] for q in run.state.read()["run"]["questions"]
+             if (q["ticket"], q["kind"]) == (number, "locked-test")]
+    return asked[-1] if asked else str(OUT / number / "implementer-0.json")
+
+
 def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
     """The pointers every prompt of the ticket gets. An agent works in its slot, so paths are relative to it."""
     folder = OUT / ticket.number
     return {"spec": os.path.relpath(run.args.spec, slot), "seam": ticket.seam, "pr_branch": run.pr,
             "branch": f"ticket/{ticket.number}", "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
             "correctness": str(driver_review.CORRECTNESS),
-            "blocked_report": os.path.relpath(folder / "implementer-0.json", slot),
+            "blocked_report": os.path.relpath(_blocked_report(ticket.number, run), slot),
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
 
 

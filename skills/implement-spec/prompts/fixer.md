@@ -7,8 +7,9 @@ Branch: {branch}, at commit {start_sha}
 Locked files: {locked}
 Findings of the review: {findings}
 
-Fix each finding of severity critical or important in the findings file. Leave the minor findings: the final review gets them. Leave each finding of kind `fixture`: the test-writer corrects those.
+Fix each finding of severity critical or important in the findings file. Leave the minor findings: the final review gets them. Leave each finding of kind `fixture` and each finding of kind `test` on a locked file: the test-writer corrects those.
 Never edit a locked file. The one exception is a finding `locked file changed`: make that file equal to its content at {test_writer_sha}.
+If a locked test contradicts the spec or the ticket, so that no fix can make it green, stop and report BLOCKED with a concern that starts with `locked test contradicts spec:`, then the test and the evidence.
 Use targeted tests while you work. The driver runs the gate on your final commit, and a re-review reads the lines you changed.
 A finding from the `gate` is a red gate: its file is the gate record. Read the output there and make the gate green.
 Commit your work on the checked-out ticket branch. Do not dispatch subagents.

@@ -353,10 +353,11 @@ def test_a_template_of_another_shape_is_an_error_and_every_text_of_a_question_is
 
 # ---------------------------------------------------------------- questions
 
-def test_only_an_implementer_blocked_on_the_contradiction_concern_is_a_stop():
+def test_only_an_implementer_or_a_fixer_blocked_on_the_contradiction_concern_is_a_stop():
     report = {"status": "BLOCKED", "concerns": [CONTRA, "other", "locked test contradicts spec: b::c", driver_decisions.CONTRADICTS]}
     assert driver_decisions.contradicted("implementer", report) == "tests/test_01.py::test_x; b::c"
-    assert driver_decisions.contradicted("fixer", report) == ""
+    assert driver_decisions.contradicted("fixer", report) == "tests/test_01.py::test_x; b::c"
+    assert driver_decisions.contradicted("reviewer", report) == ""
     assert driver_decisions.contradicted("implementer", {**report, "status": "DONE"}) == ""
     assert driver_decisions.contradicted("implementer", {}) == "", "a rejected report is no report"
     assert driver_decisions.contradicted("implementer", {"status": "BLOCKED", "concerns": [driver_decisions.CONTRADICTS]}) == ""

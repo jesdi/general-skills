@@ -12,7 +12,7 @@ The output section of the checks file does not apply here: your findings go into
 Read file content from git at {start_sha} (`git diff`, `git show {start_sha}:<path>`), never from the working tree, and run no tests: another agent makes temporary edits in this worktree while you work.
 The one exception is the input of the driver, which git can lack because `.agent/` is ignored: read the spec, the ticket and the findings file from the working tree. The other agent does not edit them.
 Report only a defect that you can show with a concrete sequence of events. `mutations` is optional for this pass.
-Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `code`, `test`, or `fixture` when a locked test encodes a stale path, format or setup detail.
+Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `fixture` when a locked test encodes a stale path, format or setup detail; `test` when a test is weak or missing, as a locked test that stays green when you break the line it protects; `code` for anything else. The test-writer corrects each `fixture` finding and each critical or important `test` finding on a locked file, and the fixer gets the rest.
 Do not commit and do not dispatch subagents. Leave the tree as you found it.
 
 Write one JSON report at {report}. When your sandbox is read-only, give the JSON as your whole final message and the driver saves it there. The report matches this schema:

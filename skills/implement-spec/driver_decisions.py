@@ -37,7 +37,7 @@ KINDS = {
         {"overrule-test": Option(
             "The test is wrong. The test-writer corrects it in one correction run, then the implementer runs again.",
             "Ruling: {ticket} locked test overruled: the test-writer corrects {subject}, then the implementer runs "
-            "again.", {"phase": "test-writer", "note": "overruled"}),
+            "again.", {"phase": "test-writer", "note": "overruled", "round": 0}),  # new tests, new fix rounds
          "overrule-implementer": Option(
             "The test is right. The implementer runs again and makes the test green as it is.",
             "Ruling: {ticket} locked test stands: the implementer is overruled on {subject} and runs again.",
@@ -73,8 +73,9 @@ KINDS = {
 
 
 def contradicted(role: str, report: dict) -> str:
-    """The locked tests an implementer's BLOCKED report says contradict the spec; "" when it is not that stop."""
-    if role != "implementer" or report.get("status") != "BLOCKED":
+    """The locked tests that a BLOCKED report of an implementer or a fixer says contradict the spec; "" when it is not
+    that stop."""
+    if role not in ("implementer", "fixer") or report.get("status") != "BLOCKED":
         return ""
     return "; ".join(filter(None, (concern[len(CONTRADICTS):].strip() for concern in report["concerns"]
                                    if concern.startswith(CONTRADICTS))))

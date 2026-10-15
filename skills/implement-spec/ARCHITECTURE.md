@@ -12,7 +12,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 |---|---|
 | `driver.py` | The command line, the checks before the first agent, the walk of the ticket graph, one ticket from its phase to merged or blocked, the landing on the PR branch, the exit code |
 | `driver_run.py` | `Run` (what all ticket threads share), one agent with its one rerun, the gate call, the ledger, `Blocked` |
-| `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, fixture correction, fix rounds |
+| `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, test-writer correction, fix rounds |
 | `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push |
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
