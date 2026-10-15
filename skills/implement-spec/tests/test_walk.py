@@ -66,6 +66,8 @@ if role in ("reviewer", "correctness", "final-reviewer") and "report" not in ste
     proofs = [dict(test=r.split()[1], file="demo/export.py", line=1, red=r) for r in reds]
     step = dict(step, stdout="".join(r + "\\n" for r in reds), report=dict(
         status="DONE", commits=[], files=[], concerns=[], findings=[], mutations=proofs))
+if role == "pr-writer" and "report" not in step:  # an unscripted pr-writer writes one section
+    step = dict(step, report=dict(status="DONE", commits=[], files=[], concerns=[], body="## Summary\\n\\nCSV export."))
 for name in step.get("touch", []):
     (rig / "sig" / name).touch()
 for name in step.get("wait", []):

@@ -6,5 +6,6 @@
   "correctness": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
   "fixer": ["claude-opus-5@medium"],
   "final-reviewer": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
-  "conflict": ["claude-opus-5@medium"]
+  "conflict": ["claude-opus-5@medium"],
+  "pr-writer": ["claude-opus-5@medium"]
 }

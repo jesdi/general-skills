@@ -18,10 +18,10 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parent
 # Minutes per role.
 TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45, "correctness": 30, "fixer": 60,
-            "final-reviewer": 60, "conflict": 30}
+            "final-reviewer": 60, "conflict": 30, "pr-writer": 20}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
-READ_ONLY = ("reviewer", "correctness", "final-reviewer")
+READ_ONLY = ("reviewer", "correctness", "final-reviewer", "pr-writer")
 # A process group is here only while its leader is not reaped: then no other process can have its id.
 LIVE: set[int] = set()
 STOPPED = False

@@ -263,10 +263,10 @@ def test_a_rerun_after_the_tidy_runs_no_agent_no_gate_and_sends_no_ticket_back(s
     assert all(stop_lines(now.out))
 
 
-def test_the_push_rerun_pushes_once_opens_the_pr_with_map_and_rulings_and_runs_nothing(story):
+def test_the_push_rerun_pushes_once_opens_the_pr_with_map_and_rulings_and_runs_only_the_pr_writer(story):
     rig, before, now = story.rig, story.again, story.pushed
     assert now.code == 0, rig.output()
-    assert (now.calls, now.gates, now.tip) == (before.calls, before.gates, before.tip)
+    assert (now.calls, now.gates, now.tip) == (before.calls + 1, before.gates, before.tip), "only the pr-writer runs"
     assert rig.pushes() == [f"refs/heads/feat/csv {now.tip}"] and ref(rig.origin, "refs/heads/feat/csv") == now.tip
     (pr,) = rig.prs()
     assert "--draft" not in pr["argv"]
