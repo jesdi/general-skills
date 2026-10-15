@@ -74,7 +74,7 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None if cli == "codex" else cli)
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
     # The default reviewer and final-reviewer start on codex, so this file gives both a claude entry.
-    claude = {"reviewer": ["claude-opus-5@medium"], "final-reviewer": ["claude-opus-5@medium"]}
+    claude = {"reviewer": ["claude-opus-5-5@medium"], "final-reviewer": ["claude-opus-5-5@medium"]}
     models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude,
                                   "correctness": ["openai/gpt-sol@medium"], "fixer": ["other/x@low"]}))
     assert run(capsys, "--models", str(models)) == (
@@ -90,11 +90,14 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
         3, "correctness: codex is not on PATH (model entry openai/gpt-sol@low)\n")
 
 
-@pytest.mark.parametrize("entry", ["claude-opus-5@turbo", "openai/gpt-sol", "openai/@low"])
+# Each entry is invalid on purpose: `turbo` is no effort of the anthropic provider, the second entry has no
+# effort, and the third has no model.
+@pytest.mark.parametrize("entry", ["claude-opus-5-5@turbo", "openai/gpt-sol", "openai/@low"],
+                         ids=["unknown-effort", "no-effort", "no-model"])
 def test_an_entry_needs_a_model_and_an_effort_of_its_provider(repo, capsys, tmp_path, entry):
     repo(t01=ticket("01"))
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
-    models.write_text(json.dumps({"reviewer": ["claude-opus-5@low", entry]}))
+    models.write_text(json.dumps({"reviewer": ["claude-opus-5-5@low", entry]}))
     code, out = run(capsys, "--models", str(models))
     assert code == 3 and out.startswith(f"reviewer: model entry {entry} needs a model and an effort from ")
 
@@ -173,7 +176,7 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
     assert code == 0
     tip = walked("--short=7")
     assert [line.partition(" for ")[0] for line in ledger] == [
-        "Ticket 01: test-writer ran on claude-sonnet-5@medium", "Ticket 01: implementer ran on claude-sonnet-5@medium",
+        "Ticket 01: test-writer ran on claude-sonnet-5-5@medium", "Ticket 01: implementer ran on claude-sonnet-5-5@medium",
         f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
         "Ticket 01: reviewer ran on openai/gpt-6-astra@medium",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
@@ -413,7 +416,7 @@ def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gate
     number, tip = line[7:9], walked()
     assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
     assert f"Ticket {number}: the gate is green on {tip[:7]}, record .agent/implement/{number}/gate-{tip[:7]}.log." in ledger
-    assert "| gates run | 4 |" in out and "| agents, conflict on claude-opus-5@medium | 1 |" in out
+    assert "| gates run | 4 |" in out and "| agents, conflict on claude-opus-5-5@medium | 1 |" in out
     assert dict(state_of(tmp_path)["run"]["landed"])[number] == tip
     prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
     assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")
@@ -794,7 +797,7 @@ def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(t
     monkeypatch.setattr(driver_agents, "PREFLIGHT_MINUTES", 0.02)
     models, _ = driver_agents.load_models(None)
     models["reviewer"] = ["openai/gpt-astra@medium"]
-    assert driver_agents.used_entries(models) == ["claude-opus-5@medium", "claude-sonnet-5@medium",
+    assert driver_agents.used_entries(models) == ["claude-opus-5-5@medium", "claude-sonnet-5-5@medium",
                                                   "openai/gpt-6-astra@medium", "openai/gpt-6.1-sol@medium",
                                                   "openai/gpt-astra@medium"]
     assert driver_agents.preflight(models) == [
