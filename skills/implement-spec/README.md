@@ -100,7 +100,7 @@ A ticket is ready when each ticket in its **Blocked by** line is merged and no r
 4. **Review.** The driver compares each locked file of the ticket with the test-writer commit. A file that differs is a critical finding `locked file changed: <path>`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
 5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file of the ticket. A second conflict blocks the ticket.
    **The landing check.** Merges are serial. Before the PR branch moves, the driver compares the tree that is about to land (the ticket tip of a fast-forward, or the merge commit) with the PR tip: each locked file of each merged ticket must be the same tree entry in both: the same blob with the same mode, so a file that became a symlink is a difference. A file that only one of them has is a difference. A file that the landing ticket lists in its own `locked` is not checked: the test-writer of a later ticket can add a test to a file that an earlier ticket locked, and must list that file. A test-writer report that changes such a file and does not list it is rejected, with the usual one rerun. A difference refuses the landing: the ticket is BLOCKED with `locked file changed: <path>` in the ledger, the PR branch does not move, and no fix round runs. The PR branch moves only from the tip that the check read; when another hand moved the branch in between, the driver makes the merge, the check and the gate again, one time. Only that case starts the landing again: a refused landing and a red merge gate block the ticket. The second try runs no conflict agent, so a conflict there blocks the ticket, and so does a branch that moved again.
-   **Before a correction.** A test-writer that corrects locked tests (after `overrule-test`, or for a fixture finding) starts from the locked versions: the driver puts back, in the tree, each locked file of the ticket and each locked file of a merged ticket that the ticket changed, and the ledger names each file. A file of a merged ticket goes back to the version of the PR branch.
+   **Before a correction.** A test-writer that corrects locked tests (after `overrule-test`, or for a `fixture` finding or a `test` finding on a locked file) starts from the locked versions: the driver puts back, in the tree, each locked file of the ticket and each locked file of a merged ticket that the ticket changed, and the ledger names each file. A file of a merged ticket goes back to the version of the PR branch.
 
 Rules for each agent:
 
@@ -113,13 +113,13 @@ Rules for each agent:
 
 | Finding | What the driver does |
 |---|---|
-| kind `fixture`, any severity | One test-writer correction, outside the fix rounds. The next review is a full review. |
+| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. |
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
 A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
 
-A red gate on the commit of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts. The re-review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of the implementer or of a fixture correction.
+A red gate on the commit of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts. The re-review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of the implementer or of a test-writer correction.
 
 - Rounds 1 and 2 run on the first entry of the implementer list.
 - Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.
@@ -190,7 +190,7 @@ A question is a bounded choice for the operator. `driver_decisions.py` `KINDS` h
 
 | Kind | Question id | Asked when | Run exit | Options |
 |---|---|---|---|---|
-| `locked-test` | `<NN>-locked-test-<n>` | An implementer reports BLOCKED with a concern that starts with `locked test contradicts spec:`. | 2 | `overrule-test`: the test-writer corrects the test, then the implementer runs again. `overrule-implementer` (recommended): the implementer runs again. |
+| `locked-test` | `<NN>-locked-test-<n>` | An implementer or a fixer reports BLOCKED with a concern that starts with `locked test contradicts spec:`. | 2 | `overrule-test`: the test-writer corrects the test from that report, then the implementer runs again, and the fix rounds count from 0: the corrected tests are a new contract. `overrule-implementer` (recommended): the implementer runs again. |
 | `finding` | `<NN>-finding-<n>` | A finding is open after fix round 4. One question for each finding. | 1 | `accept`: close the finding; the ticket merges when each of its findings is accepted. `split` (recommended) and `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. |
 | `final-finding` | `final-finding-<n>` | A finding is open after the second round of the final review. | 2 | `fix` (recommended): the finding stays open and nothing is pushed. `accept`: close the finding. |
 

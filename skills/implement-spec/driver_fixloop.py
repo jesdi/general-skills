@@ -1,7 +1,7 @@
-"""A gated ticket tip in, a reviewed tip out: the review, the fixture corrections and the fix rounds.
+"""A gated ticket tip in, a reviewed tip out: the review, the test-writer corrections and the fix rounds.
 
 Reports of a ticket are `<role>-<K>.json`: K is the fix round the agent follows (reviewer, correctness) or is
-(fixer). A fixture correction after the review of round K is `test-writer-<K+1>.json`.
+(fixer). A test-writer correction after the review of round K is `test-writer-<K+1>.json`.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class Job:
     previous: str = ""  # the tip before the last fix; "" makes the next review a full one
     proofs: set[tuple[str, int]] = field(default_factory=set)  # mutation proofs so far, at `tip`
     again: set[tuple[str, int]] = field(default_factory=set)  # each proof at `tip` that a fix made due again
-    corrected: bool = False  # the last step was a fixture correction
+    corrected: bool = False  # the last step was a test-writer correction
     red: bool = False  # the gate of `tip` is red, so no review saw it
 
     def pointers(self, review: int) -> dict[str, str]:
@@ -99,21 +99,21 @@ def _review(job: Job) -> list[dict]:
     return found
 
 
-def _correct_fixture(job: Job, fixture: list[dict]) -> None:
-    """One test-writer correction for the fixture findings. It is outside the fix rounds."""
+def _correct(job: Job, findings: list[dict]) -> None:
+    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds."""
     run, number = job.run, job.ticket.number
     if job.corrected:
-        titles = "; ".join(finding["title"] for finding in fixture)
-        raise Blocked(f"the review: a fixture finding is open after the test-writer correction: {titles}")
+        titles = "; ".join(finding["title"] for finding in findings)
+        raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {titles}")
     run.restore_locked_files(number, job.slot)
-    with during("the fixture correction"):
+    with during("the test-writer correction"):
         report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
                            fix_round=job.round + 1)
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
     run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
-    for finding in fixture:
-        ledger(f"Ticket {number}: fixture correction in {finding['file']}, outside the fix rounds: "
+    for finding in findings:
+        ledger(f"Ticket {number}: {finding['kind']} correction in {finding['file']}, outside the fix rounds: "
                f"{finding['title']}: {finding['evidence']}. The test-writer corrected it at {job.tip[:7]}.")
 
 
@@ -137,18 +137,19 @@ def _fix(job: Job) -> None:
         # No review saw `before`: the next review covers the fix before it too, and its due proofs stay due.
         due |= set(driver_review.follow(job.slot, before, job.tip, job.again))
     else:
-        # No review has seen a fixture correction, so the review after a fix on a corrected tip is a full one.
+        # No review has seen a test-writer correction, so the review after a fix on a corrected tip is a full one.
         job.previous = "" if job.corrected else before
     job.corrected, job.proofs, job.again = False, set(followed), due
 
 
 def _act_on(job: Job, found: list[dict]) -> bool:
-    """Do what the findings of a review ask for: a fixture correction, a fix round, or a stop. True: none is open."""
-    fixture, to_fix = driver_review.route(found)
+    """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
+    locked = job.run.state.read()["tickets"][job.ticket.number]["locked"]
+    to_correct, to_fix = driver_review.route(found, locked)
     # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
     locked_file_changed = any(finding["source"] == "driver" for finding in found)
-    if fixture and not locked_file_changed:
-        _correct_fixture(job, fixture)
+    if to_correct and not locked_file_changed:
+        _correct(job, to_correct)
         if not to_fix:
             return False
     if not to_fix:

@@ -127,7 +127,7 @@ def test_a_changed_locked_file_is_fixed_before_a_fixture_finding_is_corrected(tm
     assert (entry["round"], entry["test_writer_sha"]) == (1, rig.calls("01", "test-writer")[1]["sha"])
     assert entry["locked"] == ["tests/test_01.py"] and (rig.folder() / "test-writer-2.json").exists()
     assert rig.led("fixture correction in tests/test_01.py, outside the fix rounds: STALE: STALE.")
-    assert "This call is a fixture correction" in rig.prompt("test-writer-2") and "findings-1.json" in rig.prompt("test-writer-2")
+    assert "This call is a correction of the locked tests" in rig.prompt("test-writer-2") and "findings-1.json" in rig.prompt("test-writer-2")
 
 
 def test_a_locked_file_check_that_git_cannot_make_is_a_finding(tmp_path):
@@ -141,7 +141,7 @@ def test_a_fixture_finding_that_comes_back_after_its_correction_blocks_the_ticke
     stale = finding("STALE", kind="fixture", file="tests/test_01.py")
     correction = {**tw("01"), "files": {"tests/test_01.py": "# corrected\n"}, "commit": "test: 01 fixture fix"}
     rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), correction], "01/reviewer": [review("01", [stale])] * 2}))
-    assert blocked(rig).endswith("BLOCKED at the review: a fixture finding is open after the test-writer correction: STALE.")
+    assert blocked(rig).endswith("BLOCKED at the review: a locked-test finding is open after the test-writer correction: STALE.")
     assert len(rig.calls("01", "test-writer")) == 2 and rig.state()["tickets"]["01"]["round"] == 0
 
 
@@ -160,10 +160,65 @@ def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_start
     assert [gate["commit"] for gate in rig.walk_gates()] == [rig.sha("01", "implementer"), rig.sha("01", "fixer")]
 
 
+def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_fix_round(tmp_path):
+    # A failed mutation proof: the fixer may not edit the locked file, so a fix round could never close it.
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    correction = {**tw("01"), "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), correction],
+                                       "01/reviewer": [review("01", [vacuous]), review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer"]
+    entry = rig.state()["tickets"]["01"]
+    assert (entry["round"], entry["test_writer_sha"]) == (0, rig.calls("01", "test-writer")[1]["sha"])
+    assert rig.led("correction in tests/test_01.py, outside the fix rounds: VACUOUS: VACUOUS.")
+    # Only a severe finding of kind `test` on a locked file goes to the test-writer.
+    minor, elsewhere = finding("M", "minor", kind="test", file="tests/test_01.py"), finding("E", kind="test")
+    assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"]) == ([vacuous], [elsewhere])
+
+
+CONTRA = "locked test contradicts spec: tests/test_01.py::test_x"
+OVERRULED = {**tw("01"), "files": {"tests/test_01.py": "def test_x():\n    assert '01' == '01'\n"},
+             "commit": "test: 01 overruled"}
+AGAIN = impl("01", text="def fn_01():\n    return 'again'\n")
+
+
+def fixer_stops():
+    return {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": [CONTRA], "green": [], "ticket": "01"}}
+
+
+def test_a_fixer_that_reports_a_wrong_locked_test_opens_the_locked_test_question(tmp_path):
+    steps = plan(**{"01/reviewer": [review("01", [STUCK]), review("01")], "01/fixer": [fixer_stops()],
+                    "01/test-writer": [tw("01"), OVERRULED], "01/implementer": [impl("01"), AGAIN]})
+    rig = Inside(tmp_path).run(steps)
+    assert rig.code == 2, rig.ledger()
+    (asked,) = rig.state()["run"]["questions"]
+    assert (asked["id"], asked["evidence"][0]) == ("01-locked-test-1", ".agent/implement/01/fixer-1.json")
+    rig.run(steps, "--answer", "01-locked-test-1=overrule-test")
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "fixer", "test-writer", "implementer", "reviewer"]
+    # The correction reads the concerns of the fixer that stopped, not those of the implementer.
+    assert "01/fixer-1.json" in rig.prompt("test-writer-0") and "implementer-0.json" not in rig.prompt("test-writer-0")
+
+
+def test_the_fix_rounds_count_from_0_after_an_overruled_test(tmp_path):
+    stuck = review("01", [STUCK])
+    steps = plan(**{"01/reviewer": [stuck] * 5 + [review("01")],
+                    "01/fixer": [fix("01", 1), fix("01", 2), fix("01", 3), fixer_stops(), fix("01", 5)],
+                    "01/test-writer": [tw("01"), OVERRULED], "01/implementer": [impl("01"), AGAIN]})
+    rig = Inside(tmp_path).run(steps)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 4, rig.ledger()
+    rig.run(steps, "--answer", "01-locked-test-1=overrule-test")
+    # The corrected tests are a new contract: the first finding on them gets a fix round, not the round-4 stop.
+    assert rig.code == 0, rig.ledger()
+    assert rig.state()["tickets"]["01"]["round"] == 1 and not rig.led("after round 4")
+
+
 def test_a_fixture_correction_that_is_rejected_blocks_the_ticket(tmp_path):
     stale = finding("STALE", kind="fixture", file="tests/test_01.py")
     rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), {}, {}], "01/reviewer": [review("01", [stale])]}))
-    assert "BLOCKED at the fixture correction: report .agent/implement/01/test-writer-1.json is not" in blocked(rig)
+    assert "BLOCKED at the test-writer correction: report .agent/implement/01/test-writer-1.json is not" in blocked(rig)
 
 
 # ---------------------------------------------------------------- the locked files of the merged tickets

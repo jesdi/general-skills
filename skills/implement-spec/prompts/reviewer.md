@@ -11,7 +11,7 @@ Check the diff against the ticket and the spec, then for quality. Check that eac
 In round 1, for each locked test, break the production line the test protects, run the test, print its failing output, then revert the edit. A test that stays green is a critical finding. Run again each mutation that the test-writer report names in `concerns`.
 A mutation proof is keyed to its test and its production line: a later round repeats it only when that line changed.
 In `mutations`, give for each proof the test as `<locked file>::<test name>`, the production file and line, and one failure line copied exactly from the output you printed.
-Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `code`, `test`, or `fixture` when a locked test encodes a stale path, format or setup detail.
+Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `fixture` when a locked test encodes a stale path, format or setup detail; `test` when a test is weak or missing, as a locked test that stays green when you break the line it protects; `code` for anything else. The test-writer corrects each `fixture` finding and each critical or important `test` finding on a locked file, and the fixer gets the rest.
 Do not commit and do not dispatch subagents. Leave the tree as you found it.
 
 Write one JSON report at {report}. When your sandbox is read-only, give the JSON as your whole final message and the driver saves it there. The report matches this schema:

@@ -76,10 +76,13 @@ def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
     return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
 
 
-def route(findings: list[dict]) -> tuple[list[dict], list[dict]]:
-    """(the fixture findings, whatever their severity; the other findings that are severe enough for a fix round)."""
-    fixture = [finding for finding in findings if finding["kind"] == "fixture"]
-    return fixture, [finding for finding in findings if finding["kind"] != "fixture" and finding["severity"] in OPEN]
+def route(findings: list[dict], locked: list[str]) -> tuple[list[dict], list[dict]]:
+    """(the findings for a test-writer correction; the other findings that are severe enough for a fix round).
+    A correction gets each fixture finding, whatever its severity, and each severe test finding on a `locked` file:
+    the fixer may not edit a locked file, so a fix round cannot close it."""
+    correct = [finding for finding in findings if finding["kind"] == "fixture"
+               or (finding["kind"] == "test" and finding["file"] in locked and finding["severity"] in OPEN)]
+    return correct, [finding for finding in findings if finding not in correct and finding["severity"] in OPEN]
 
 
 def _hunks(slot: str, old: str, new: str, file: str) -> list[tuple[int, int, int, int]]:
