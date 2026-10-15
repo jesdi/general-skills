@@ -90,7 +90,10 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
         3, "correctness: codex is not on PATH (model entry openai/gpt-sol@low)\n")
 
 
-@pytest.mark.parametrize("entry", ["claude-opus-5-5@turbo", "openai/gpt-sol", "openai/@low"])
+# Each entry is invalid on purpose: `turbo` is no effort of the anthropic provider, the second entry has no
+# effort, and the third has no model.
+@pytest.mark.parametrize("entry", ["claude-opus-5-5@turbo", "openai/gpt-sol", "openai/@low"],
+                         ids=["unknown-effort", "no-effort", "no-model"])
 def test_an_entry_needs_a_model_and_an_effort_of_its_provider(repo, capsys, tmp_path, entry):
     repo(t01=ticket("01"))
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
