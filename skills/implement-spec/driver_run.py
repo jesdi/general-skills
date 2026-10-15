@@ -129,8 +129,13 @@ class Run:
 
     def gate(self, number: str, slot: str, commit: str) -> None:
         """Gate `commit` in the slot, unless a green record names it already."""
+        if record := self.red_gate(number, slot, commit):
+            raise Blocked(f"the gate is red on {commit[:7]}, record {record}")
+
+    def red_gate(self, number: str, slot: str, commit: str) -> str:
+        """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green."""
         if commit in _gate_record(self.state.read(), number)["green_gates"]:
-            return
+            return ""
         at = driver_slots.head(slot)
         if at != commit:
             raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the gate did not run")
@@ -143,8 +148,9 @@ class Run:
 
         self.state.update(count)
         if not green:
-            raise Blocked(f"the gate is red on {commit[:7]}, record {record}")
+            return str(record)
         ledger(f"{_owner(number)}: the gate is green on {commit[:7]}, record {record}.")
+        return ""
 
     def restore_locked_files(self, number: str, slot: str) -> list[str]:
         """Before a test-writer correction: put each locked file the implementer changed back to its locked

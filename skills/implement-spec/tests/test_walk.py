@@ -102,7 +102,8 @@ def git(*a):
 conf = json.loads((rig / "gate.json").read_text())
 (rig / "gates").mkdir(exist_ok=True)
 branch = git("rev-parse", "--abbrev-ref", "HEAD")
-code = 1 if conf.get("all") or branch in conf.get("red", []) else 0
+subject = git("log", "-1", "--format=%s")
+code = 1 if conf.get("all") or branch in conf.get("red", []) or subject in conf.get("subjects", []) else 0
 rec = dict(t0=time.time(), cwd=os.path.realpath(os.getcwd()), commit=git("rev-parse", "HEAD"), branch=branch,
            status=git("status", "--short"), base=os.environ.get("IMPLEMENT_SPEC_BASE"),
            pycache=os.environ.get("PYTHONPYCACHEPREFIX"), exit=code)

@@ -10,6 +10,7 @@ Findings of the review: {findings}
 Fix each finding of severity critical or important in the findings file. Leave the minor findings: the final review gets them. Leave each finding of kind `fixture`: the test-writer corrects those.
 Never edit a locked file. The one exception is a finding `locked file changed`: make that file equal to its content at {test_writer_sha}.
 Use targeted tests while you work. The driver runs the gate on your final commit, and a re-review reads the lines you changed.
+A finding from the `gate` is a red gate: its file is the gate record. Read the output there and make the gate green.
 Commit your work on the checked-out ticket branch. Do not dispatch subagents.
 In `ticket`, give the number of the ticket that owns your commits. In `green`, give the summary lines of the passing test output.
 
