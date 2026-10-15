@@ -100,6 +100,11 @@ def _locked_errors(report: dict, context: dict) -> list[str]:
             if not any(test.startswith(path) for test in tests)]
 
 
+def locked_files(listed: list[str]) -> list[str]:
+    """The files of a `locked` list: a test node id `<file>::<test>` names its file. In order, each file once."""
+    return list(dict.fromkeys(entry.partition("::")[0] for entry in listed))
+
+
 def validate(role: str, path: str, context: dict) -> list[str]:
     try:
         report = json.loads(Path(path).read_text())
@@ -111,5 +116,7 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         return [f"{'.'.join(map(str, e.path)) or 'report'}: {e.message}" for e in found]
     # The schema types only the role's own fields: any other field of the report is dropped.
     report = {name: value for name, value in report.items() if name in rules["properties"]}
+    if "locked" in report:
+        report["locked"] = locked_files(report["locked"])
     return (_commit_errors(report, context) + _owner_errors(report, context) + _correction_errors(report, context)
             + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context))

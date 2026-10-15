@@ -100,6 +100,8 @@ class Run:
             merged = driver_merge.protected(self.state.read()["tickets"], number)
             options["check"] = {**(options.get("check") or {}), "merged": merged, "pr": self.tip()}
         report = _attempts(self, role, number, slot, values, **options)
+        if role == "test-writer":
+            report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
         if subject := driver_decisions.contradicted(role, report):
             # The implementer's commits stay: after the ruling the ticket goes on from them.
             evidence = OUT / number / f"{role}-{options.get('fix_round', 0)}.json"
