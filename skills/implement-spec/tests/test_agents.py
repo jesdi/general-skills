@@ -22,6 +22,7 @@ import pytest
 from test_cli import GIT, ROLES, RUN, SKILL, TOOLS, drive, git, make_repo, models_file, ticket
 
 RED = "FAILED tests/test_export.py::test_rows - AttributeError"
+REFUSED = "ERROR: The 'gpt-astra' model is not supported when using Codex with a ChatGPT account."
 RUNNER = f"""#!{sys.executable}
 import json, os, subprocess, sys, time
 from pathlib import Path
@@ -69,7 +70,8 @@ sys.exit(step.get("exit", 0))
 
 @pytest.fixture
 def env(tmp_path):
-    """A restricted PATH whose fake claude and codex append their argv (NUL-separated) and exit 1."""
+    """A restricted PATH whose fake claude and codex append their argv (NUL-separated) and exit 1. They answer the
+    preflight prompt with exit 0 and log nothing, except for the model gpt-astra, which the account cannot use."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name in TOOLS:
@@ -77,7 +79,15 @@ def env(tmp_path):
             (bin_dir / name).symlink_to(shutil.which(name))
     for cli in ("claude", "codex"):
         log = f'"{tmp_path}/argv-{cli}"'
-        (bin_dir / cli).write_text(f"#!/bin/sh\nprintf '%s\\0' \"$@\" >> {log}\nprintf '\\036' >> {log}\nexit 1\n")
+        (bin_dir / cli).write_text(f"""#!/bin/sh
+case "$(cat)" in *'implement-spec preflight'*)
+    case " $* " in *' gpt-astra '*) echo "{REFUSED}"; exit 1;; esac
+    exit 0;;
+esac
+printf '%s\\0' "$@" >> {log}
+printf '\\036' >> {log}
+exit 1
+""")
         (bin_dir / cli).chmod(0o755)
     return dict(os.environ, PATH=str(bin_dir)), tmp_path
 
@@ -265,6 +275,29 @@ def test_no_report_is_a_violation_with_one_rerun_then_blocked(env):
     assert "report" in second["prompt"][len(first["prompt"].rstrip()):].lower()
     assert len(w.calls("implementer")) == 2
     assert any("01" in l and "BLOCKED" in l for l in w.ledger().splitlines()), w.ledger()
+
+
+def test_a_model_the_account_cannot_use_fails_the_preflight_with_exit_3_before_any_agent(env):
+    w = World(env, reviewer=["openai/gpt-astra@medium"])
+    proc = w.run({"test-writer": [tw()]}, runner=False)
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert f"model entry openai/gpt-astra@medium: the codex CLI failed the preflight (exit 1): {REFUSED}" \
+        in proc.stdout.splitlines(), proc.stdout
+    assert not launches(w.tmp, "claude") and not launches(w.tmp, "codex")
+    assert "ticket/01" not in git(w.repo, "branch", "--list") and not w.ledger()
+
+
+def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
+    w = World(env, refactor=True)
+    plan = {"implementer": [{"stderr": REFUSED + "\n", "exit": 1}] * 2 + [impl()]}
+    proc = w.run(plan)
+    assert proc.returncode == 4, proc.stdout + proc.stderr
+    assert f"implement-spec: the run stopped: the implementer on anthropic/claude-opus-5@medium exited 1 with no " \
+        f"report: {REFUSED}" in proc.stdout.splitlines(), proc.stdout
+    assert "BLOCKED" not in w.ledger() and "Ticket 01: the run stops and the phase stays for the next run: the implementer" in w.ledger()
+    assert json.loads((w.repo / ".agent/implement/state.json").read_text())["tickets"]["01"]["phase"] == "implement"
+    ok(w.run(plan))
+    assert len(w.calls("implementer")) == 3
 
 
 def test_finished_status_reruns_the_implementer_once_with_the_error_appended(env):

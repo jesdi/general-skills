@@ -19,6 +19,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
 - The `review-diff` skill is installed next to this one: the final review of every run reads it, and so does the correctness pass.
 - With `--push` or `--unattended`, the repository has an `origin` remote.
+- Each model that the run can use answers one short test prompt (the preflight). A model that fails gives one line with its error. `--dry-run` skips the preflight.
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
@@ -56,6 +57,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
 | 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
 | 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
+| 4 | Stopped: the CLI of an agent failed two times and wrote no report (for example, the account cannot use the model). The driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI or the model entry, then run the same command again to resume. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
 
 With `--unattended`, the `--stage-json` file holds `{"stage": "implement", "status": …}`:
@@ -158,7 +160,7 @@ A repository with no `origin` remote skips only step 2 and step 6. The tidied co
 
 The driver uses the first entry of a role. The fixer of a ticket runs on the `implementer` list; the `fixer` list is only for the fix batch of the final review. The driver uses a later entry in two cases only: fix rounds 3 and 4 (the implementer list), and the correctness pass, which takes the first correctness entry of another provider than the first implementer entry. The reviewer never does the correctness pass: when the list has no such entry, or the CLI of that entry is not on PATH, the run ends with exit 3 before any agent. The `explorer` list is read and checked, but the driver starts no explorer.
 
-The defaults need both `claude` and `codex` on PATH. Read "Known limits" before you use them as they are.
+The defaults need both `claude` and `codex` on PATH. The `openai` defaults name the full Codex model names (`gpt-6-astra`, `gpt-6.1-sol`), because a Codex CLI that is signed in with a ChatGPT account does not accept the short aliases. Read "Known limits" before you use them as they are.
 
 ## Report schema per role
 

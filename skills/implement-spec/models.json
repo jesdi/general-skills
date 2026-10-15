@@ -1,11 +1,11 @@
 {
   "explorer": ["claude-sonnet-5@medium"],
-  "test-writer": ["claude-sonnet-5@medium", "openai/gpt-sol@medium"],
-  "implementer": ["claude-sonnet-5@medium", "openai/gpt-sol@medium"],
-  "reviewer": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
-  "correctness": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
+  "test-writer": ["claude-sonnet-5@medium", "openai/gpt-6.1-sol@medium"],
+  "implementer": ["claude-sonnet-5@medium", "openai/gpt-6.1-sol@medium"],
+  "reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5@medium"],
+  "correctness": ["openai/gpt-6-astra@medium", "claude-opus-5@medium"],
   "fixer": ["claude-opus-5@medium"],
-  "final-reviewer": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
+  "final-reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5@medium"],
   "conflict": ["claude-opus-5@medium"],
   "pr-writer": ["claude-opus-5@medium"]
 }

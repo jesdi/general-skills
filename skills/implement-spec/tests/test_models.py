@@ -8,10 +8,10 @@ import pytest
 from test_cli import RUN, SKILL, drive, env, make_repo, three  # noqa: F401  (env is a fixture)
 
 STANDARD = {
-    "implementer": ["claude-sonnet-5@medium", "openai/gpt-sol@medium"],
-    "test-writer": ["claude-sonnet-5@medium", "openai/gpt-sol@medium"],
-    "reviewer": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
-    "final-reviewer": ["openai/gpt-astra@medium", "claude-opus-5@medium"],
+    "implementer": ["claude-sonnet-5@medium", "openai/gpt-6.1-sol@medium"],
+    "test-writer": ["claude-sonnet-5@medium", "openai/gpt-6.1-sol@medium"],
+    "reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5@medium"],
+    "final-reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5@medium"],
 }
 ENTRY = re.compile(r"^(?:(?:anthropic|openai)/)?[\w.-]+@(?:minimal|low|medium|high|xhigh|max)$")
 

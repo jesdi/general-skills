@@ -15,6 +15,8 @@ import { loadGlobalState, saveGlobalState } from './state.js';
  */
 const SESSION_UPDATE_SCRIPT = `#!/bin/sh
 # Written by @jesdi/skills-cli; \`skills-cli hook\` writes it again, \`skills-cli hook --off\` removes it.
+# Read the hook input to its end: a runner that writes it to a closed pipe gets EPIPE.
+cat >/dev/null
 dir="$HOME/.my-skills"
 cd "$dir" || exit 0
 (npx -y @jesdi/skills-cli@latest session-update </dev/null >>"$dir/.session-update.log" 2>&1 &)

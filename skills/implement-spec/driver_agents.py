@@ -11,8 +11,10 @@ import re
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
@@ -22,6 +24,9 @@ TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 READ_ONLY = ("reviewer", "correctness", "final-reviewer", "pr-writer")
+PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
+# The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
+PREFLIGHT_MINUTES = 5
 # A process group is here only while its leader is not reaped: then no other process can have its id.
 LIVE: set[int] = set()
 STOPPED = False
@@ -67,6 +72,45 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
     except (OSError, ValueError, AttributeError, LookupError, TypeError) as exc:
         return {}, [f"--models {path}: {exc!r}"]
     return models, [error for error in found if error]
+
+
+def used_entries(models: dict[str, list[str]]) -> list[str]:
+    """Each entry the driver can start an agent on: the first of each role but the explorer, the correctness entry
+    and the second implementer entry (fix rounds 3 and 4)."""
+    entries = [entries[0] for role, entries in models.items() if role not in ("explorer", "correctness")]
+    entries += [correctness_entry(models), *models["implementer"][1:2]]
+    return sorted(set(entries))
+
+
+def preflight(models: dict[str, list[str]]) -> list[str]:
+    """Give one short prompt to each used entry, all at the same time. Returns one error per entry whose CLI fails:
+    a model that the account cannot use, a CLI that is not signed in."""
+    with tempfile.TemporaryDirectory(prefix="implement-spec-preflight-") as folder:
+        def check(index: int, entry: str) -> str:
+            prompt, log = (Path(folder) / f"{index}{suffix}" for suffix in (".prompt.md", ".log"))
+            prompt.write_text(PREFLIGHT)
+            # A read-only command: the agent can change nothing, and codex writes its answer to the -o file.
+            code = launch(command("reviewer", entry, str(Path(folder) / f"{index}.json")), prompt, log,
+                          PREFLIGHT_MINUTES * 60)
+            if code == 0:
+                return ""
+            why = f"no answer in {PREFLIGHT_MINUTES} minutes" if code is None else f"exit {code}"
+            cli = PROVIDERS[split(entry)[0]][0]
+            return f"model entry {entry}: the {cli} CLI failed the preflight ({why}): {last_words(log)}"
+
+        entries = used_entries(models)
+        with ThreadPoolExecutor(len(entries)) as pool:
+            return [error for error in pool.map(check, range(len(entries)), entries) if error]
+
+
+def last_words(log: Path) -> str:
+    """The last line of an agent log, or the `result` of the last stream-json line: the error a failed CLI gave."""
+    lines = [line for line in log.read_text(errors="replace").splitlines() if line.strip()] if log.exists() else []
+    if not lines:
+        return "no output"
+    with contextlib.suppress(ValueError, AttributeError):
+        return str(json.loads(lines[-1]).get("result") or lines[-1])[-500:]
+    return lines[-1][-500:]
 
 
 def command(role: str, entry: str, report: str) -> list[str]:

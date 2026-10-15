@@ -6,7 +6,7 @@
               [--dry-run]
 
 Run it in the PR worktree. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of
-run is BLOCKED, 2 = parked on a question, 3 = usage or validation error. README.md has the method and the files of
+run is BLOCKED, 2 = parked on a question, 3 = usage or validation error, 4 = stopped by a CLI failure. README.md has the method and the files of
 a run; ARCHITECTURE.md has the map of the modules and the rules the code keeps.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ import driver_slots
 import driver_state
 import driver_summary
 import driver_tickets
-from driver_run import FINAL, OUT, Blocked, Run, during, ledger
+from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
 from driver_slots import git
 from driver_tickets import Ticket
 
@@ -133,7 +133,7 @@ def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list
             changed = driver_review.locked_changes(slot, tip, run.state.read()["tickets"][number]["locked"])
             if changed:
                 raise Blocked("; ".join(finding["title"] for finding in changed))
-    except Blocked:
+    except (Blocked, Halted):
         driver_merge.abort(slot)  # closes the merge when the agent did not commit it
         raise
     resolved = driver_slots.head(slot)
@@ -234,6 +234,12 @@ def _block(number: str, run: Run, ledger_line: int) -> None:
         ledger(f"Ticket {number}: {driver_decisions.decides(ask.kind, len(ask.subjects))} in {DECISIONS}.")
 
 
+def _halt(run: Run, owner: str, why: str) -> None:
+    """Start no other agent: the run ends with exit 4, and `owner` keeps its phase for the next run."""
+    run.halted.append(why)
+    ledger(f"{owner}: the run stops and the phase stays for the next run: {why}.")
+
+
 def _run_ticket(ticket: Ticket, slot_number: int, run: Run) -> bool:
     """Take one ticket from its recorded phase to merged or blocked. True: the slot is free again."""
     number, slot = ticket.number, driver_slots.path(slot_number)
@@ -247,11 +253,15 @@ def _run_ticket(ticket: Ticket, slot_number: int, run: Run) -> bool:
     except Blocked as blocked:
         _block(number, run, ledger(f"Ticket {number}: BLOCKED at {blocked}."))
         print(f"{ticket.file}: BLOCKED at {blocked}")
+    except Halted as halted:
+        _halt(run, f"Ticket {number}", str(halted))
     return driver_slots.release(slot)  # False: the slot keeps the uncommitted work of the blocked ticket
 
 
 def _next_ticket(tickets: list[Ticket], running: dict, told: set, run: Run, kept: dict) -> Ticket | None:
     """The first ticket that may start now. A ticket whose slot is kept for it goes first: it needs no free slot."""
+    if run.halted:
+        return None
     phases = {number: entry["phase"] for number, entry in run.state.read()["tickets"].items()}
     ready, holds = driver_graph.frontier(tickets, phases, {number for number, _ in running.values()})
     for hold in sorted(set(holds.items()) - told):
@@ -319,7 +329,13 @@ def _work(tickets: list[Ticket], slots: int, run: Run) -> tuple[bool, list[str]]
         if driver_slots.release("."):  # slot 1 is clean, so it goes back to the PR branch
             git(".", "checkout", "-q", run.pr)
     # Every ticket thread has ended, so every slot is idle: only now may the end of run rewrite the PR branch.
-    return (False, []) if only else driver_final.run(run, tickets)
+    if only:
+        return False, []
+    try:
+        return driver_final.run(run, tickets)
+    except Halted as halted:
+        _halt(run, "End of run", str(halted))
+        return False, []
 
 
 # ---------------------------------------------------------------- before the first agent: resume and answers
@@ -425,6 +441,17 @@ def _tell(args, code: int, open_questions: list[dict], blocked: list[str], pushe
         _write_stage(args.stage_json, code, len(open_questions), blocked)
 
 
+def _halted_exit(halted: list[str], final: dict) -> int:
+    """Exit 4 after a CLI failure: no ticket is BLOCKED by it, and the same command resumes the run."""
+    for why in halted:
+        print(f"implement-spec: the run stopped: {why}")
+    print("implement-spec: fix the CLI or the model entry (--models FILE), then run the same command again to "
+          "resume; no ticket is BLOCKED by this.")
+    if error := _publish_questions(final["run"]):
+        print(error)
+    return 4
+
+
 def _exit_code(final: dict, args, end_blocked: bool) -> int:
     """Publish the open questions, tell the operator or the dispatcher, and return the exit code."""
     if error := _publish_questions(final["run"]):
@@ -456,6 +483,8 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[s
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)
     print(summary + "".join(line + "\n" for line in lines), end="")
+    if run.halted:
+        return _halted_exit(run.halted, final)
     return _exit_code(final, args, end_blocked)
 
 
@@ -572,6 +601,10 @@ def main(argv: list[str] | None = None) -> int:
         if not (valid := _validated(args)):
             return 3
         tickets, models, kept = valid
+        # The CLIs answer before the first agent, so a model that the account cannot use stops no ticket.
+        if not args.runner and (errors := driver_agents.preflight(models)):
+            print("".join(error + "\n" for error in errors), end="")
+            return 3
         _print_width(tickets)
         return _run(tickets, models, args, kept)
 
