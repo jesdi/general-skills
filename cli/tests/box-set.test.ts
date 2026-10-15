@@ -1,5 +1,5 @@
 import { cp, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as tar from 'tar';
@@ -8,8 +8,10 @@ import { generateManifest } from '../../lib/manifest.js';
 import { opSync } from '../src/ops.js';
 
 const root = new URL('../..', import.meta.url).pathname;
-const external = JSON.parse(readFileSync(join(root, 'external-skills.json'), 'utf8'));
-const box: string[] = external.sets.box.own;
+// Every own skill, so any of them can be in the box set, which agent-ops-infra lists (provision/my-skills.json).
+const own: string[] = readdirSync(join(root, 'skills')).filter((name) =>
+  existsSync(join(root, 'skills', name, 'SKILL.md')),
+);
 
 /** Package this repo's real skills/ as @jesdi/skills@9.9.9 and serve it from memory. */
 async function packageRealSkills() {
@@ -31,16 +33,16 @@ async function packageRealSkills() {
   return { manifest, fetchImpl };
 }
 
-describe('box skill set at the packaging seam', () => {
-  it('every own box skill and backlog appear in the generated manifest with a version', async () => {
+describe('own skills at the packaging seam', () => {
+  it('every own skill appears in the generated manifest with a version', async () => {
     const manifest = await generateManifest(join(root, 'skills'), null);
-    for (const name of [...box, 'backlog']) {
+    for (const name of own) {
       const skill = manifest.skills.find((s) => s.name === name);
       expect(skill?.version, name).toMatch(/^\d+\.\d+\.\d+$/);
     }
   });
 
-  it('sync materializes the own box set at the agent paths', async () => {
+  it('sync materializes every own skill at the agent paths', async () => {
     const { manifest, fetchImpl } = await packageRealSkills();
     const ctx = {
       home: await mkdtemp(join(tmpdir(), 'box-home-')),
@@ -48,7 +50,7 @@ describe('box skill set at the packaging seam', () => {
       fetchImpl,
     };
     const skills = Object.fromEntries(
-      box.map((name) => [
+      own.map((name) => [
         name,
         { version: manifest.skills.find((s) => s.name === name)!.version, package: '9.9.9' },
       ]),
@@ -58,8 +60,8 @@ describe('box skill set at the packaging seam', () => {
       JSON.stringify({ schemaVersion: 1, agents: ['claude'], skills }),
     );
     const result = await opSync(ctx);
-    expect(result.map((r) => r.name).sort()).toEqual([...box].sort());
-    for (const name of box) {
+    expect(result.map((r) => r.name).sort()).toEqual([...own].sort());
+    for (const name of own) {
       expect(existsSync(join(ctx.project, '.claude', 'skills', name, 'SKILL.md')), name).toBe(true);
     }
   });

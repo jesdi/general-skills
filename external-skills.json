@@ -27,8 +27,7 @@
   },
   "sets": {
     "box": {
-      "comment": "The skill set the agent-ops box receives, vendored into its claude-home seed by agent-ops's refresh command. `own` come from @jesdi/skills (this repo), `external` from the pinned upstream at the path in skills[]. crap-gate is deliberately absent: it is a repository skill invoked through the target repo's gate command. The implement-spec fork is deliberately absent too: box stages never run it, it is for operator sessions. review-diff is the review stage's entry point; its correctness reviewer falls back to Claude while the box has no codex CLI.",
-      "own": ["deep-quality-review", "prototype", "review-diff", "to-spec", "to-tickets", "wizard"],
+      "comment": "The third-party skills the agent-ops box receives: agent-ops-infra fetches each one from the pinned upstream at the path in skills[]. The own skills of the box are listed in agent-ops-infra (provision/my-skills.json), not here.",
       "external": ["code-review", "codebase-design", "diagnosing-bugs", "pr", "resolving-merge-conflicts", "tdd", "to-questionnaire"]
     }
   },

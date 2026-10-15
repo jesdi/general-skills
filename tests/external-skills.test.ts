@@ -6,7 +6,6 @@ import { parseCatalogue } from '../cli/src/external-catalogue.js';
 const root = new URL('..', import.meta.url).pathname;
 const file = JSON.parse(readFileSync(join(root, 'external-skills.json'), 'utf8'));
 const FORKS = ['implement-spec', 'prototype', 'to-spec', 'to-tickets', 'wizard'];
-const OPERATOR_ONLY_FORKS = ['implement-spec'];
 
 describe('external-skills.json', () => {
   it('gives every external skill a safe path and immutable source ref', () => {
@@ -37,20 +36,11 @@ describe('external-skills.json', () => {
 
   it('resolves pr from upstream for the box instead of the content package', () => {
     expect(file.sets.box.external).toContain('pr');
-    expect(file.sets.box.own).not.toContain('pr');
     expect(file.forks.skills).not.toContain('pr');
     expect(file.skills.find((s: { name: string }) => s.name === 'pr')).toMatchObject({
       source: 'mattpocock/skills',
       path: 'skills/in-progress/pr',
     });
     expect(existsSync(join(root, 'skills', 'pr', 'SKILL.md'))).toBe(false);
-  });
-
-  it('box own set is the box forks plus the review skills, all present in skills/', () => {
-    const boxForks = FORKS.filter((f) => !OPERATOR_ONLY_FORKS.includes(f));
-    expect([...file.sets.box.own].sort()).toEqual([...boxForks, 'deep-quality-review', 'review-diff'].sort());
-    for (const name of file.sets.box.own) {
-      expect(existsSync(join(root, 'skills', name, 'SKILL.md')), name).toBe(true);
-    }
   });
 });
