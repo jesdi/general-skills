@@ -26,7 +26,7 @@ const OUT = process.env.PR_SHOT_DIR;
 const LABEL = process.env.PR_SHOT_LABEL ?? 'after';
 if (!OUT) throw new Error('PR_SHOT_DIR must be set to an absolute output directory');
 
-// Selector for this app's loading indicator. From config: <spinnerSelector>.
+// Every loading indicator of this app, spinners and skeletons. From config: <spinnerSelector>.
 const SPINNER = '__PVD_SPINNER_SELECTOR__';
 
 // Pin device-pixel-ratio to 1 for every project. Device descriptors (iPhone 14,

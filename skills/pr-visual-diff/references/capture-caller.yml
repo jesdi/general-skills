@@ -1,0 +1,56 @@
+# pr-visual-diff remote capture of this repo. Template of the pr-visual-diff
+# skill (references/capture-caller.yml): copy it to
+# .github/workflows/pr-visual-diff.yml, replace every __PVD_*__ marker with the
+# value of the discovery cache, and merge it to the default branch:
+# workflow_dispatch runs only from there. The steps live in jesdi/general-skills
+# (.github/workflows/pr-visual-diff.yml) and follow its main branch, like every
+# jesdi skill follows its latest release.
+
+name: pr-visual-diff
+run-name: pr-visual-diff ${{ inputs.capture }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      capture:
+        description: 'Unique id of this capture; the last part of the hidden ref'
+        required: true
+      slug:
+        description: 'The PR branch with / as -'
+        required: true
+      head:
+        description: 'Commit captured as After'
+        required: true
+      base:
+        description: 'Commit captured as Before (the merge base)'
+        required: true
+      after_spec:
+        description: 'The filled capture spec, base64'
+        required: true
+      before_spec:
+        description: 'The filled capture spec of the views that exist at base, base64; empty: no Before'
+        required: false
+        default: ''
+      projects:
+        description: 'Playwright projects, separated by commas'
+        required: true
+
+jobs:
+  capture:
+    permissions:
+      contents: write  # only its publish job uses it, to push the hidden ref
+    uses: jesdi/general-skills/.github/workflows/pr-visual-diff.yml@main
+    with:
+      capture: ${{ inputs.capture }}
+      slug: ${{ inputs.slug }}
+      head: ${{ inputs.head }}
+      base: ${{ inputs.base }}
+      after_spec: ${{ inputs.after_spec }}
+      before_spec: ${{ inputs.before_spec }}
+      projects: ${{ inputs.projects }}
+      runner: __PVD_RUNNER__
+      frontend_dir: __PVD_FRONTEND_DIR__
+      specs_dir: __PVD_SPECS_DIR__
+      browsers: __PVD_BROWSERS__
+      node_version: '__PVD_NODE_VERSION__'
+      pnpm_version: '__PVD_PNPM_VERSION__'

@@ -1,0 +1,190 @@
+# Remote capture of the pr-visual-diff skill, shared by every target repo.
+# A target repo calls it from its own .github/workflows/pr-visual-diff.yml
+# (template: skills/pr-visual-diff/references/capture-caller.yml), at the main
+# branch of this repo: GitHub starts workflow_dispatch only in the target repo.
+# A change here reaches every target repo at once.
+#
+# It captures After on `head` and Before on `base` with the capture spec the
+# session filled, then pushes the PNGs as one orphan commit to the hidden ref
+# refs/pr-screenshots/<slug>/<capture>, never to a branch.
+#
+# The specs are code from the session; only users who can dispatch a workflow
+# (write access) can send them. Inputs reach the shell through env only. The
+# capture job runs project code (install scripts, the app, the spec), so it has
+# a read-only token and keeps no credentials; only the publish job, which runs
+# no project code, can write the hidden ref. The caller grants contents: write.
+
+name: pr-visual-diff
+
+on:
+  workflow_call:
+    inputs:
+      capture:
+        description: 'Unique id of this capture; the last part of the hidden ref'
+        type: string
+        required: true
+      slug:
+        description: 'The PR branch with / as -'
+        type: string
+        required: true
+      head:
+        description: 'Commit captured as After'
+        type: string
+        required: true
+      base:
+        description: 'Commit captured as Before (the merge base)'
+        type: string
+        required: true
+      after_spec:
+        description: 'The filled capture spec, base64'
+        type: string
+        required: true
+      before_spec:
+        description: 'The filled capture spec of the views that exist at base, base64; empty: no Before'
+        type: string
+        default: ''
+      projects:
+        description: 'Playwright projects, separated by commas'
+        type: string
+        required: true
+      runner:
+        description: 'The runs-on label of the target repo'
+        type: string
+        default: ubuntu-latest
+      frontend_dir:
+        description: 'The folder of the app and its package.json, from the repo root'
+        type: string
+        default: '.'
+      specs_dir:
+        description: 'The Playwright specs folder, from frontend_dir'
+        type: string
+        required: true
+      browsers:
+        description: 'The browsers of `playwright install`, separated by spaces'
+        type: string
+        default: chromium
+      node_version:
+        type: string
+        default: '24'
+      pnpm_version:
+        # ponytail: pnpm only; add the other package managers when a target uses one.
+        type: string
+        default: '10'
+
+permissions: {}
+
+jobs:
+  capture:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CAPTURE: ${{ inputs.capture }}
+      SLUG: ${{ inputs.slug }}
+      AFTER_SPEC: ${{ inputs.after_spec }}
+      BEFORE_SPEC: ${{ inputs.before_spec }}
+      PROJECTS: ${{ inputs.projects }}
+      FRONTEND_DIR: ${{ inputs.frontend_dir }}
+      SPECS_DIR: ${{ inputs.specs_dir }}
+      BROWSERS: ${{ inputs.browsers }}
+    steps:
+      - name: Check the names
+        run: |
+          set -euo pipefail
+          for value in "$CAPTURE" "$SLUG"; do
+            [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::'$value' is not a ref-safe name"; exit 1; }
+          done
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head }}
+          path: head
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        if: inputs.before_spec != ''
+        with:
+          ref: ${{ inputs.base }}
+          path: base
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm_version }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Capture
+        run: |
+          set -euo pipefail
+          shots="$RUNNER_TEMP/shots"
+          mkdir -p "$shots"
+          args=()
+          IFS=, read -ra names <<< "$PROJECTS"
+          for name in "${names[@]}"; do args+=("--project=$name"); done
+          read -ra browsers <<< "$BROWSERS"
+          capture() {  # <checkout> <label> <base64 spec>
+            cd "$GITHUB_WORKSPACE/$1/$FRONTEND_DIR"
+            pnpm install --frozen-lockfile
+            pnpm exec playwright install "${browsers[@]}"
+            printf '%s' "$3" | base64 -d > "$SPECS_DIR/__pr-capture__.spec.ts"
+            PR_SHOT_DIR="$shots" PR_SHOT_LABEL="$2" \
+              pnpm exec playwright test "$SPECS_DIR/__pr-capture__.spec.ts" "${args[@]}"
+          }
+          capture head after "$AFTER_SPEC"
+          if [ -n "$BEFORE_SPEC" ]; then capture base before "$BEFORE_SPEC"; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-visual-diff-shots
+          path: ${{ runner.temp }}/shots/*.png
+          retention-days: 1
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: pr-visual-diff-report
+          path: |
+            head/${{ inputs.frontend_dir }}/playwright-report/
+            head/${{ inputs.frontend_dir }}/test-results/
+            base/${{ inputs.frontend_dir }}/playwright-report/
+            base/${{ inputs.frontend_dir }}/test-results/
+          retention-days: 3
+          if-no-files-found: ignore
+
+  publish:
+    needs: capture
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      CAPTURE: ${{ inputs.capture }}
+      SLUG: ${{ inputs.slug }}
+    steps:
+      # Only the git directory: this job runs no project code.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head }}
+          sparse-checkout: .github
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-visual-diff-shots
+          path: ${{ runner.temp }}/shots
+
+      - name: Push the screenshots to the hidden ref
+        run: |
+          set -euo pipefail
+          tree=$(for f in "$RUNNER_TEMP"/shots/*.png; do
+            printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
+          done | git mktree)
+          sha=$(git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit-tree "$tree" -m "pr-screenshots: ${SLUG} ${CAPTURE}")
+          git push origin "${sha}:refs/pr-screenshots/${SLUG}/${CAPTURE}"
+          echo "Screenshots: \`refs/pr-screenshots/${SLUG}/${CAPTURE}\` at ${sha}" >> "$GITHUB_STEP_SUMMARY"
