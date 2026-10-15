@@ -30,8 +30,9 @@ class Job:
     tip: str
     previous: str = ""  # the tip before the last fix; "" makes the next review a full one
     proofs: set[tuple[str, int]] = field(default_factory=set)  # mutation proofs so far, at `tip`
-    again: list[str] = field(default_factory=list)  # `file:line` of each proof the last fix made due again
+    again: set[tuple[str, int]] = field(default_factory=set)  # each proof at `tip` that a fix made due again
     corrected: bool = False  # the last step was a fixture correction
+    red: bool = False  # the gate of `tip` is red, so no review saw it
 
     def pointers(self, review: int) -> dict[str, str]:
         """The values of a prompt; `review` is the round whose findings the agent reads."""
@@ -39,7 +40,7 @@ class Job:
         findings = os.path.relpath(OUT / self.ticket.number / f"findings-{review}.json", self.slot)
         return {**self.values, "start_sha": self.tip, "from_sha": self.previous, "round": str(self.round),
                 "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
-                "findings": findings, "proofs": " ".join(self.again)}
+                "findings": findings, "proofs": " ".join(f"{file}:{line}" for file, line in sorted(self.again))}
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
@@ -129,12 +130,16 @@ def _fix(job: Job) -> None:
     with during(f"fix round {job.round}"):
         run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round)
     before, job.tip = job.tip, driver_slots.head(job.slot)
-    # No review has seen a fixture correction, so the review after a fix on a corrected tip is a full one.
-    job.previous, job.corrected = "" if job.corrected else before, False
     run.state.ticket(number, tip=job.tip)
     followed = driver_review.follow(job.slot, before, job.tip, job.proofs)
-    job.proofs = set(followed)
-    job.again = [f"{file}:{line}" for (file, line), changed in sorted(followed.items()) if changed]
+    due = {proof for proof, changed in followed.items() if changed}
+    if job.red:
+        # No review saw `before`: the next review covers the fix before it too, and its due proofs stay due.
+        due |= set(driver_review.follow(job.slot, before, job.tip, job.again))
+    else:
+        # No review has seen a fixture correction, so the review after a fix on a corrected tip is a full one.
+        job.previous = "" if job.corrected else before
+    job.corrected, job.proofs, job.again = False, set(followed), due
 
 
 def _act_on(job: Job, found: list[dict]) -> bool:
@@ -157,14 +162,33 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     return False
 
 
+def _gate(job: Job) -> list[dict]:
+    """Gate the tip. A red gate on a fixer's commit before round 4 is a finding for the next round; any other red
+    gate blocks. Returns the findings: the red gate, or none."""
+    run, number = job.run, job.ticket.number
+    job.red = False
+    with during("the gate"):
+        if not 0 < job.round < ROUNDS or job.corrected:
+            run.gate(number, job.slot, job.tip)
+            return []
+        record = run.red_gate(number, job.slot, job.tip)
+    if not record:
+        return []
+    job.red, path = True, os.path.relpath(record, job.slot)
+    found = [{"severity": "critical", "file": path, "line": 0, "title": f"the gate is red on {job.tip[:7]}",
+              "evidence": f"the output of the gate in {path}", "kind": "code", "source": "gate"}]
+    (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
+    return _log_findings(job, found)
+
+
 def run(ticket: Ticket, slot: str, run: Run, values: dict[str, str]) -> None:
     """Gate, review and fix the ticket tip until a review leaves no finding open."""
     state = run.state.read()["tickets"][ticket.number]
     job = Job(ticket, slot, run, values, state["round"], state["tip"])
     while True:
-        with during("the gate"):
-            run.gate(ticket.number, slot, job.tip)
-        with during("the review"):
-            found = _review(job)
+        found = _gate(job)
+        if not found:
+            with during("the review"):
+                found = _review(job)
         if _act_on(job, found):
             return

@@ -311,6 +311,34 @@ def test_four_rounds_then_blocked_with_the_escalation_at_round_3(tmp_path):
     assert rig.state()["tickets"]["03"]["phase"] == "merged"
 
 
+def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_evidence(tmp_path):
+    """Issue 64: the gate of a fix round is red. That is a finding for the next round, not a BLOCKED ticket."""
+    rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 1"]})
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK], lines=(2,)), review("01", lines=(2,))],
+                    "01/fixer": [fix("01", 1), fix("01", 2, files={"demo/other.py": "x = 1\n"})]}))
+    assert rig.code == 0, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer", "fixer", "fixer",
+                                                         "reviewer"]
+    first, second = (call["sha"] for call in rig.calls("01", "fixer"))
+    record = f".agent/implement/01/gate-{first[:7]}.log"
+    (gate,) = json.loads((rig.folder() / "findings-1.json").read_text())
+    assert (gate["source"], gate["severity"], gate["kind"]) == ("gate", "critical", "code")
+    assert gate["title"] == f"the gate is red on {first[:7]}" and record in gate["evidence"]
+    assert rig.led(f"Ticket 01: critical finding of kind code from the gate at {record}:0: the gate is red on {first[:7]}.")
+    assert "findings-1.json" in rig.prompt("fixer-2") and rig.state()["tickets"]["01"]["round"] == 2
+    # No review saw the red tip: the re-review covers both fixes, and the proof that round 1 made due stays due.
+    again = rig.prompt("reviewer-2")
+    assert f"The fix is {rig.sha('01', 'implementer')}..{second}" in again and "demo/export.py:2" in again
+
+
+def test_a_red_gate_on_the_fixer_commit_of_round_4_blocks_the_ticket(tmp_path):
+    rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 4"]})
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 4, "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))
+    last = rig.calls("01", "fixer")[-1]["sha"]
+    assert f"BLOCKED at the gate: the gate is red on {last[:7]}" in blocked(rig)
+    assert len(rig.calls("01", "reviewer")) == 4 and not (rig.folder() / "findings-4.json").exists()
+
+
 def test_round_3_stays_on_its_entry_when_the_implementer_has_no_next_entry(tmp_path):
     rig = Inside(tmp_path, ONE, {"implementer": [OPUS]})
     rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3 + [review("01")], "01/fixer": [fix("01", n) for n in (1, 2, 3)]}))

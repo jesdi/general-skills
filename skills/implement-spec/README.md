@@ -82,7 +82,7 @@ Everything is under `.agent/`, which is never committed.
 | `.agent/implement/<NN>/` | One folder for each ticket. |
 | `.agent/implement/<NN>/<role>-<K>.json`, `.log`, `.prompt.md` | The report, the log and the prompt of one agent. K is the fix round. |
 | `.agent/implement/<NN>/gate-<sha7>.log` | One gate record: start, commit, status, command, output, exit, the state after the command, end. |
-| `.agent/implement/<NN>/findings-<K>.json` | The merged findings of the review after fix round K. |
+| `.agent/implement/<NN>/findings-<K>.json` | The merged findings of the review after fix round K, or the red gate of round K. |
 | `.agent/implement/final/` | The same files for the end of run, and `pr-body.md`: the pr-writer's body, then the facts of the run. |
 | `.agent/implement/pycache/` | Compiled Python of the gate, kept out of the slots. |
 | `.agent/implement-review.html` | The page with the open questions. |
@@ -118,6 +118,8 @@ Rules for each agent:
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
 A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
+
+A red gate on the commit of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts. The re-review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of the implementer or of a fixture correction.
 
 - Rounds 1 and 2 run on the first entry of the implementer list.
 - Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.
