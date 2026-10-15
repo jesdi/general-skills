@@ -110,11 +110,11 @@ describe('session-update.sh', () => {
     const calls = join(ctx.home, 'npx-calls');
     await writeFile(join(bin, 'npx'), `#!/bin/sh\necho "$PWD: $@" >> '${calls}'\n`);
     await chmod(join(bin, 'npx'), 0o755);
-    const run = () => {
+    const run = (input = '{}') => {
       execFileSync('sh', [join(ctx.home, '.my-skills', '.session-update.sh')], {
         cwd: ctx.project,
         env: { HOME: ctx.home, PATH: `${bin}:/usr/bin:/bin` },
-        input: '{}',
+        input,
       });
     };
     const callCount = async () => {
@@ -132,6 +132,13 @@ describe('session-update.sh', () => {
     const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
     expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
     expect(args).toBe('-y @jesdi/skills-cli@latest session-update');
+  });
+
+  it('reads its hook input to the end, so the runner never writes to a closed pipe', async () => {
+    const { run, callCount } = await setup();
+    // More than a pipe buffer: a script that exits before it reads makes this write fail with EPIPE.
+    run(JSON.stringify({ transcript: 'x'.repeat(1 << 20) }));
+    expect(await callCount()).toBe(1);
   });
 
   it('checks on every session, even when the daily update stamp is recent', async () => {
