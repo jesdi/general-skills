@@ -45,7 +45,7 @@ file as JSON:
 | `deviceProjects` | the config's `projects` (default to a desktop + a mobile project) |
 | `baseBranch` | the repo's default branch (`main`/`master`; `git symbolic-ref refs/remotes/origin/HEAD`) |
 | `packageManager` | infer from lockfile: `pnpm-lock.yaml`→pnpm, `package-lock.json`→npm, `yarn.lock`→yarn, `bun.lockb`→bun |
-| `spinnerSelector` | the app's loading-indicator selector (search for a spinner/`role="status"`/`aria-busy` component) |
+| `spinnerSelector` | every loading indicator of the app, as one selector list: spinners and skeletons (search for a spinner, `role="status"`, `aria-busy`, a skeleton component, `animate-pulse`), e.g. `.animate-spin, .animate-pulse`. A skeleton left out lets a half-loaded view pass as a good shot |
 
 ### Preconditions gate
 
@@ -77,6 +77,14 @@ compact report: the screenshot file names + pinned URLs, the PR-body
 markdown, and any views it flagged. The main context creates/edits the PR from
 that report — it never reads a PNG.
 
+## Where the capture runs
+
+- **Local** (the default): steps 3–5 below, on this machine.
+- **Remote**: when the session instructions say so (the agent-ops box does),
+  or when this machine cannot start a Playwright browser. A GitHub workflow of
+  the target repo captures both sides and pushes the hidden ref; see "Remote
+  capture". Steps 1, 2 and 6 stay the same.
+
 ## Workflow
 
 ### 1. Map the diff to views, then get the user's go-ahead
@@ -95,6 +103,10 @@ before/after capture at all, and (b) that it will push the screenshots to a
 hidden ref on the remote and embed them in the PR. Include the proposed plan: which routes/states, and which
 device projects — default to the config's `deviceProjects`; add more only when
 the change is layout-sensitive. If they decline, create the PR normally and stop.
+
+In an unattended session (nobody answers questions, as on the agent-ops box),
+do not ask: run the capture with the plan above and name the plan in the PR
+body.
 
 ### 2. Write the capture spec
 
@@ -133,7 +145,10 @@ That assertion is a backstop, not a substitute for looking: the subagent still
 Reads each PNG after capture — an empty state, error toast, or wrong content
 passes the spinner check but is still wrong. On a genuine failure, fix the spec
 (add mock stubs, a wait for a stable element, or correct the spinner selector)
-rather than shipping a bad screenshot.
+rather than shipping a bad screenshot. A fixed element (a mobile bottom nav, a
+sticky header) is drawn where the viewport was, so in a full-page shot it can
+float over the middle of the page: give such a view `fullPage: false`, or one
+shot per scroll position.
 
 ### 4. Capture "before" (merge base, temp worktree)
 
@@ -238,6 +253,69 @@ cell instead of an image:
 | **Desktop** | _New view_ | ![](<blob-url>?raw=true) |
 | **Mobile** | _New view_ | ![](<blob-url>?raw=true) |
 ```
+
+## Remote capture
+
+Replaces steps 3–5. The subagent rule above still holds.
+
+**Precondition.** The default branch of the target repo has
+`.github/workflows/pr-visual-diff.yml`:
+
+```bash
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+gh api "repos/$REPO/contents/.github/workflows/pr-visual-diff.yml" --silent
+```
+
+If it does not, take no screenshots. Say in the PR body that the repo has no
+pr-visual-diff workflow, and that `references/capture-workflow.yml` of this
+skill, filled from the discovery cache and merged to the default branch, adds
+it. Do not add it in this PR: `workflow_dispatch` runs only from the default
+branch.
+
+**Dispatch.** Push the PR branch first: the workflow checks out commits of
+origin. Write the filled spec of step 2 to a file, and a second copy whose
+`VIEWS` holds only the views that exist at the merge base (none: no Before).
+Then:
+
+```bash
+HEAD_SHA=$(git rev-parse HEAD)
+BASE=$(git merge-base origin/<baseBranch> HEAD)
+SLUG=$(git branch --show-current | tr / -)
+CAPTURE="${HEAD_SHA:0:12}-$(date +%s)"
+gh workflow run pr-visual-diff.yml --ref <baseBranch> \
+  -f capture="$CAPTURE" -f slug="$SLUG" -f head="$HEAD_SHA" -f base="$BASE" \
+  -f after_spec="$(base64 < <after-spec> | tr -d '\n')" \
+  -f before_spec="$(base64 < <before-spec> | tr -d '\n')" \
+  -f projects="<deviceProject>,<deviceProject>"
+```
+
+Leave `before_spec` empty when every view is new. `gh workflow run` prints no
+run id: find the run by its name `pr-visual-diff $CAPTURE` (try for up to a
+minute), then wait for it:
+
+```bash
+RUN=$(gh run list --workflow pr-visual-diff.yml --limit 20 --json databaseId,displayTitle \
+  --jq ".[] | select(.displayTitle == \"pr-visual-diff $CAPTURE\") | .databaseId")
+gh run watch "$RUN" --exit-status
+```
+
+**A failed run.** Read `gh run view "$RUN" --log-failed | tail -80`. Fix the
+spec as in step 3 (a mock stub, a wait, the spinner selector) and dispatch
+once more with a new `CAPTURE`. When the second run fails too, take no
+screenshots and say why in the PR body.
+
+**Read the shots back.** Fetch the hidden ref and look at every PNG, as in
+step 3:
+
+```bash
+git fetch origin "refs/pr-screenshots/$SLUG/$CAPTURE"
+SHA=$(git rev-parse FETCH_HEAD)
+mkdir -p <scratchpad>/shots && git archive "$SHA" | tar -x -C <scratchpad>/shots
+```
+
+A wrong shot is a failed run: fix the spec and dispatch again, under the same
+limit. Then embed with step 6, with `$SHA` in the URLs. The ref stays: it keeps
+the images alive.
 
 ## Adding shots to an existing PR
 
