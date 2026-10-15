@@ -258,7 +258,12 @@ cell instead of an image:
 
 Replaces steps 3–5. The subagent rule above still holds.
 
-**Precondition.** The default branch of the target repo has
+The steps run in one shared workflow, `.github/workflows/pr-visual-diff.yml` of
+jesdi/general-skills. Each target repo has a short caller of it, made from
+`references/capture-caller.yml` of this skill and pinned to one commit of
+general-skills: GitHub starts `workflow_dispatch` only in the target repo.
+
+**Precondition.** The default branch of the target repo has the caller,
 `.github/workflows/pr-visual-diff.yml`:
 
 ```bash
@@ -267,7 +272,7 @@ gh api "repos/$REPO/contents/.github/workflows/pr-visual-diff.yml" --silent
 ```
 
 If it does not, take no screenshots. Say in the PR body that the repo has no
-pr-visual-diff workflow, and that `references/capture-workflow.yml` of this
+pr-visual-diff workflow, and that `references/capture-caller.yml` of this
 skill, filled from the discovery cache and merged to the default branch, adds
 it. Do not add it in this PR: `workflow_dispatch` runs only from the default
 branch.
