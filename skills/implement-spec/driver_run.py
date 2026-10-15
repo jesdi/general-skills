@@ -1,6 +1,7 @@
 """What the ticket threads and the end of run share: the Run, one agent with its one rerun, the gate, the ledger.
 
 A step that cannot go on raises Blocked. The message says why, and `during` adds the step it happened in.
+A CLI that fails with no report raises Halted: that is the setup of the run, not the ticket.
 """
 from __future__ import annotations
 
@@ -32,6 +33,11 @@ T = TypeVar("T")
 
 class Blocked(Exception):
     """A ticket, or the end of run, cannot go on. The message says why."""
+
+
+class Halted(Exception):
+    """The CLI of an agent failed with no report, two times: a model the account cannot use, a CLI that is not
+    signed in. The run starts no other agent and ends with exit 3; the ticket keeps its phase for the next run."""
 
 
 @contextmanager
@@ -79,6 +85,7 @@ class Run:
     kept: dict[str, int]  # ticket number -> the slot that holds its uncommitted work from an earlier run
     merging: threading.Lock = field(default_factory=threading.Lock)  # held for one landing: merges are serial
     asks: dict[str, Ask] = field(default_factory=dict)  # ticket number -> its pending stop
+    halted: list[str] = field(default_factory=list)  # why the run starts no other agent; [] while it goes on
 
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
@@ -110,6 +117,9 @@ class Run:
                 result = review()
             except Blocked as blocked:
                 error = str(blocked)
+            except Halted:
+                _restore_if_changed(number, slot, branch, tip, runs_again=False)
+                raise
             left = _restore_if_changed(number, slot, branch, tip, runs_again=not (error or last))
             if error or not left:
                 break
@@ -244,7 +254,7 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
                "template": template or role, **(check or {})}
     argv = _command(run, role, entry, os.path.relpath(prompt, slot), report_in_slot)
     text = _first_prompt(context["template"], values, notes, report_in_slot)
-    minutes, error = run.args.timeout[role], ""
+    minutes, error, failed = run.args.timeout[role], "", ""
     for _ in range(2):
         prompt.write_text(text)
         report.unlink(missing_ok=True)
@@ -255,8 +265,13 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:
             return json.loads(report.read_text())
+        # A CLI that exits with an error and no report did not do the role: the run setup is wrong, not the ticket.
+        failed = "" if code in (None, 0) or report.exists() else (
+            f"the {role} on {entry} exited {code} with no report: {driver_agents.last_words(log)}")
         # The rerun prompt is the first prompt, the rejection, then the same ending again.
         text += rerun_lines + driver_agents.tail(text, report_in_slot)
         if code is None:
             minutes *= 2
+    if failed:
+        raise Halted(failed)
     raise Blocked(error)

@@ -19,6 +19,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
 - The `review-diff` skill is installed next to this one: the final review of every run reads it, and so does the correctness pass.
 - With `--push` or `--unattended`, the repository has an `origin` remote.
+- The preflight: each model entry that the driver can start an agent on answers one short prompt, all at the same time. These entries are the first entry of each role (not the explorer), the correctness entry and the second implementer entry. A model that the account cannot use, or a CLI that is not signed in, gives one line with the entry and the last line of the CLI output. `--dry-run` and `--runner` skip the preflight.
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
@@ -55,7 +56,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
 | 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
-| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
+| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository, a model entry that fails the preflight. No agent starts. There are two exceptions, after agents ran. A review page that cannot be written gives exit 3 at the end of a run. A CLI that exits with an error and writes no report, two times for one agent, stops the run: the driver starts no other agent, lets the running agents end, and gives exit 3. That ticket keeps its phase and is not BLOCKED, so the same command resumes it after you fix the CLI or the model entry. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
 
 With `--unattended`, the `--stage-json` file holds `{"stage": "implement", "status": …}`:
@@ -158,7 +159,7 @@ A repository with no `origin` remote skips only step 2 and step 6. The tidied co
 
 The driver uses the first entry of a role. The fixer of a ticket runs on the `implementer` list; the `fixer` list is only for the fix batch of the final review. The driver uses a later entry in two cases only: fix rounds 3 and 4 (the implementer list), and the correctness pass, which takes the first correctness entry of another provider than the first implementer entry. The reviewer never does the correctness pass: when the list has no such entry, or the CLI of that entry is not on PATH, the run ends with exit 3 before any agent. The `explorer` list is read and checked, but the driver starts no explorer.
 
-The defaults need both `claude` and `codex` on PATH. Read "Known limits" before you use them as they are.
+The defaults need both `claude` and `codex` on PATH. The `openai` defaults name the full Codex model names (`gpt-6-astra`, `gpt-6.1-sol`), because a Codex CLI that is signed in with a ChatGPT account does not accept the short aliases. Read "Known limits" before you use them as they are.
 
 ## Report schema per role
 

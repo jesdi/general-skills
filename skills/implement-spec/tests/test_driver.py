@@ -175,7 +175,7 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
     assert [line.partition(" for ")[0] for line in ledger] == [
         "Ticket 01: test-writer ran on claude-sonnet-5@medium", "Ticket 01: implementer ran on claude-sonnet-5@medium",
         f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
-        "Ticket 01: reviewer ran on openai/gpt-astra@medium",
+        "Ticket 01: reviewer ran on openai/gpt-6-astra@medium",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
     assert ledger[1].endswith(", cost 0.25 USD: report accepted.")
     assert branches() == ["feat/x"] and "nothing to commit" in subprocess.run(
@@ -198,7 +198,7 @@ def prompt_of(tmp_path, role="implementer"):
 
 def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path, capsys):
     repo()
-    code, ledger = agents(tmp_path, capsys, "exit 7\n", "--only", "reviewer")
+    code, ledger = agents(tmp_path, capsys, "exit 0\n", "--only", "reviewer")
     assert code == 1 and len(ledger) == 3
     assert ledger[2].startswith("Ticket 01: BLOCKED at the reviewer: report .agent/implement/01/reviewer-0.json is not")
 
@@ -422,7 +422,7 @@ def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gate
 
 def test_a_conflict_agent_that_does_not_resolve_blocks_the_ticket_and_keeps_its_branch(repo, tmp_path, capsys):
     two(repo)
-    stuck = '[ $role != conflict ] || exit 7\n'
+    stuck = '[ $role != conflict ] || exit 0\n'
     code, ledger, out = walk(tmp_path, capsys, stuck + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
     assert code == 1, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
@@ -432,6 +432,19 @@ def test_a_conflict_agent_that_does_not_resolve_blocks_the_ticket_and_keeps_its_
     assert state_of(tmp_path)["tickets"][number]["phase"] == "blocked"
     assert f"ticket/{number}" in branches() and f"Ticket {number} is not merged: its phase is blocked." in out
     for slot in (".", ".agent/worktrees/slot-2"):  # the driver's open merge is gone
+        assert out_of("git", "-C", slot, "status", "--porcelain") == ""
+        assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
+
+
+def test_a_conflict_cli_that_fails_stops_the_run_and_leaves_no_open_merge(repo, tmp_path, capsys):
+    two(repo)
+    failing = '[ $role != conflict ] || { echo "ERROR: not signed in"; exit 7; }\n'
+    code, ledger, out = walk(tmp_path, capsys, failing + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
+    assert code == 3 and "with no report: ERROR: not signed in" in out, out
+    assert not [line for line in ledger if "BLOCKED" in line]
+    (number,) = [n for n, entry in state_of(tmp_path)["tickets"].items() if entry["phase"] == "merge"]
+    assert f"ticket/{number}" in branches()
+    for slot in (".", ".agent/worktrees/slot-2"):
         assert out_of("git", "-C", slot, "status", "--porcelain") == ""
         assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
 
@@ -765,3 +778,36 @@ def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_r
     assert out_of("git", "show", "feat/x:wip-01.txt") == "half" and out_of("git", "show", "feat/x:wip-02.txt") == "half"
     assert [line for line in ledger if "Ticket 02: resumed in slot 2 with the work the interrupted implementer left" in line]
     assert out_of("git", "status", "--porcelain") == "" and branches() == ["feat/x"]
+
+
+def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(tmp_path, monkeypatch):
+    """claude answers; codex refuses gpt-astra, and the gpt-6.1-sol call never ends."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").write_text('#!/bin/sh\ncat > /dev/null\necho "$*" >> "$(dirname "$0")/asked"\n')
+    (bin_dir / "codex").write_text('#!/bin/sh\ncat > /dev/null\necho "$*" >> "$(dirname "$0")/asked"\n'
+                                   'case "$*" in *gpt-astra*) echo "ERROR: not supported"; exit 1;; '
+                                   '*gpt-6.1-sol*) sleep 30;; esac\n')
+    for cli in ("claude", "codex"):
+        (bin_dir / cli).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(driver_agents, "PREFLIGHT_MINUTES", 0.02)
+    models, _ = driver_agents.load_models(None)
+    models["reviewer"] = ["openai/gpt-astra@medium"]
+    assert driver_agents.used_entries(models) == ["claude-opus-5@medium", "claude-sonnet-5@medium",
+                                                  "openai/gpt-6-astra@medium", "openai/gpt-6.1-sol@medium",
+                                                  "openai/gpt-astra@medium"]
+    assert driver_agents.preflight(models) == [
+        "model entry openai/gpt-6.1-sol@medium: the codex CLI failed the preflight (no answer in 0.02 minutes): "
+        "no output",
+        "model entry openai/gpt-astra@medium: the codex CLI failed the preflight (exit 1): ERROR: not supported"]
+    assert len((bin_dir / "asked").read_text().splitlines()) == 5
+
+
+def test_last_words_takes_the_result_of_a_stream_json_line(tmp_path):
+    log = tmp_path / "agent.log"
+    log.write_text('{"type": "system"}\n{"type": "result", "is_error": true, "result": "There is an issue"}\n\n')
+    assert driver_agents.last_words(log) == "There is an issue"
+    log.write_text("ERROR: plain\n")
+    assert driver_agents.last_words(log) == "ERROR: plain"
+    assert driver_agents.last_words(tmp_path / "none.log") == "no output"

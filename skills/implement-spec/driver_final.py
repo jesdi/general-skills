@@ -29,7 +29,7 @@ import driver_decisions
 import driver_merge
 import driver_review
 import driver_tidy
-from driver_run import FINAL, OUT, Blocked, Run, during, ledger
+from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
@@ -158,6 +158,9 @@ def _resolve_rebase_conflict(run: Run, env: dict, base: str, onto: str) -> None:
         run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
     except Blocked as blocked:
         error = str(blocked)
+    except Halted:
+        git(".", "rebase", "--abort")
+        raise
     if not error and _rebase_is_open():  # the agent resolved the files and did not go on
         subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
     if _rebase_is_open():
@@ -368,6 +371,8 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str) -> dict:
                          check={"owners": [ticket.number for ticket in tickets]})
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
+    except Halted as halted:
+        raise Halted(f"{halted}{_undo_rejected_batch(run, tip)}") from None
 
 
 def _fix_batch(run: Run, tickets: list[Ticket], final: dict, tip: str) -> None:
