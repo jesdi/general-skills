@@ -11,7 +11,10 @@
 # runs only when this file is on the default branch.
 #
 # The specs are code from the session; only users who can dispatch a workflow
-# (write access) can send them. Inputs reach the shell through env only.
+# (write access) can send them. Inputs reach the shell through env only. The
+# capture job runs project code (install scripts, the app, the spec), so it has
+# a read-only token and keeps no credentials; only the publish job, which runs
+# no project code, can write the hidden ref.
 
 name: pr-visual-diff
 run-name: pr-visual-diff ${{ inputs.capture }}
@@ -43,7 +46,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   capture:
@@ -67,6 +70,7 @@ jobs:
         with:
           ref: ${{ inputs.head }}
           path: head
+          persist-credentials: false
 
       - uses: actions/checkout@v4
         if: inputs.before_spec != ''
@@ -102,17 +106,12 @@ jobs:
           capture head after "$AFTER_SPEC"
           if [ -n "$BEFORE_SPEC" ]; then capture base before "$BEFORE_SPEC"; fi
 
-      - name: Push the screenshots to the hidden ref
-        working-directory: head
-        run: |
-          set -euo pipefail
-          tree=$(for f in "$RUNNER_TEMP"/shots/*.png; do
-            printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
-          done | git mktree)
-          sha=$(git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
-            commit-tree "$tree" -m "pr-screenshots: ${SLUG} ${CAPTURE}")
-          git push origin "${sha}:refs/pr-screenshots/${SLUG}/${CAPTURE}"
-          echo "Screenshots: \`refs/pr-screenshots/${SLUG}/${CAPTURE}\` at ${sha}" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr-visual-diff-shots
+          path: ${{ runner.temp }}/shots/*.png
+          retention-days: 1
+          if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -125,3 +124,36 @@ jobs:
             base/__PVD_FRONTEND_DIR__/test-results/
           retention-days: 3
           if-no-files-found: ignore
+
+  publish:
+    needs: capture
+    runs-on: __PVD_RUNNER__
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      CAPTURE: ${{ inputs.capture }}
+      SLUG: ${{ inputs.slug }}
+    steps:
+      # Only the git directory: this job runs no project code.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.head }}
+          sparse-checkout: .github
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr-visual-diff-shots
+          path: ${{ runner.temp }}/shots
+
+      - name: Push the screenshots to the hidden ref
+        run: |
+          set -euo pipefail
+          tree=$(for f in "$RUNNER_TEMP"/shots/*.png; do
+            printf '100644 blob %s\t%s\n' "$(git hash-object -w "$f")" "$(basename "$f")"
+          done | git mktree)
+          sha=$(git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit-tree "$tree" -m "pr-screenshots: ${SLUG} ${CAPTURE}")
+          git push origin "${sha}:refs/pr-screenshots/${SLUG}/${CAPTURE}"
+          echo "Screenshots: \`refs/pr-screenshots/${SLUG}/${CAPTURE}\` at ${sha}" >> "$GITHUB_STEP_SUMMARY"
