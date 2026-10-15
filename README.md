@@ -144,11 +144,12 @@ them afterwards). `external-skills.json` lists them under `forks`.
 
 ### The box set
 
-`external-skills.json` → `sets.box` names the skills the agent-ops box
-receives: `own` from this package, `external` from the pinned upstream.
-`pr` is in the external set and is installed directly from mattpocock/skills.
-agent-ops vendors that set into its claude-home seed with its own refresh
-command; this repo's job is to publish the set and keep the pins resolvable.
+`external-skills.json` → `sets.box.external` names the third-party skills the
+agent-ops box receives from the pinned upstream. `pr` is in this set and is
+installed directly from mattpocock/skills. agent-ops-infra lists the own skills
+of the box (`provision/my-skills.json`) and pins the commit of this file it
+reads (`provision/external-skills.pin`); this repo's job is to publish the set
+and keep the pins resolvable.
 
 ## Authoring skills
 
