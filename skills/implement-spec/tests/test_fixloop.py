@@ -177,6 +177,19 @@ def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_f
     assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"]) == ([vacuous], [elsewhere])
 
 
+def test_a_test_writer_that_lists_test_node_ids_in_locked_locks_their_files(tmp_path):
+    # Issue #71: a node id `<file>::<test>` in `locked` names its file, for the first run and for a correction.
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    ids = ["tests/test_01.py::test_x", "tests/test_01.py::test_y"]
+    first = {**tw("01"), "report": {**tw("01")["report"], "locked": ids}}
+    correction = {**first, "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first, correction],
+                                       "01/reviewer": [review("01", [vacuous]), review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")].count("test-writer") == 2  # no rerun
+    assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py"]
+
+
 CONTRA = "locked test contradicts spec: tests/test_01.py::test_x"
 OVERRULED = {**tw("01"), "files": {"tests/test_01.py": "def test_x():\n    assert '01' == '01'\n"},
              "commit": "test: 01 overruled"}

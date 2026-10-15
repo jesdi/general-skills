@@ -10,7 +10,7 @@ Write one black-box acceptance test for each criterion of the ticket, through th
 Run each test and confirm that it fails because the behavior is missing, not because of an import error or a syntax error. Print that failing output.
 A test that is green before any implementation is not a proof. Rewrite it until it fails, or name in `concerns` the production-code mutation that turns it red.
 Commit the tests red on the checked-out branch. Do not write implementation code and do not dispatch subagents.
-In `locked`, list each test file of your commit. In `red`, give for each test one failure line, copied exactly from the output you printed.
+In `locked`, list each test file of your commit: test file paths only, not test node ids (`tests/x.py`, not `tests/x.py::test_a`). In `red`, give for each test one failure line, copied exactly from the output you printed.
 
 Write one JSON report at {report} that matches this schema:
 
