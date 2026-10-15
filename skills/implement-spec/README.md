@@ -172,7 +172,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 
 | Role | Template | More fields | Checks after the schema |
 |---|---|---|---|
-| test-writer | `prompts/test-writer.md` | `locked` (test file paths), `red` (`test`, `line`) | The driver reads a test node id `<file>::<test>` in `locked` as its file. With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. |
+| test-writer | `prompts/test-writer.md` | `locked` (test file paths), `red` (`test`, `line`) | The driver reads a test node id `<file>::<test>` in `locked` as its file. With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. A correction (after `overrule-test`, or for a review finding) changes only the files that it lists in `locked` and the files that the driver restored before it. |
 | implementer | `prompts/implementer.md` | `green` | With DONE: one commit or more. |
 | reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`); `commits` is empty | In the first review of a tip: `mutations` is required, with a proof for each locked test file (`test` is `<locked file>::<test name>`). Each `red` is in the log. |
 | correctness | `prompts/correctness.md` | the same as the reviewer; `commits` is empty | `mutations` is optional. |
