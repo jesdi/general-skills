@@ -19,7 +19,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
 - The `review-diff` skill is installed next to this one: the final review of every run reads it, and so does the correctness pass.
 - With `--push` or `--unattended`, the repository has an `origin` remote.
-- The preflight: each model entry that the driver can start an agent on answers one short prompt, all at the same time. These entries are the first entry of each role (not the explorer), the correctness entry and the second implementer entry. A model that the account cannot use, or a CLI that is not signed in, gives one line with the entry and the last line of the CLI output. `--dry-run` and `--runner` skip the preflight.
+- Each model that the run can use answers one short test prompt (the preflight). A model that fails gives one line with its error. `--dry-run` skips the preflight.
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
@@ -56,7 +56,8 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
 | 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
-| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository, a model entry that fails the preflight. No agent starts. There are two exceptions, after agents ran. A review page that cannot be written gives exit 3 at the end of a run. A CLI that exits with an error and writes no report, two times for one agent, stops the run: the driver starts no other agent, lets the running agents end, and gives exit 3. That ticket keeps its phase and is not BLOCKED, so the same command resumes it after you fix the CLI or the model entry. |
+| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
+| 4 | Stopped: the CLI of an agent failed two times and wrote no report (for example, the account cannot use the model). The driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI or the model entry, then run the same command again to resume. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
 
 With `--unattended`, the `--stage-json` file holds `{"stage": "implement", "status": …}`:

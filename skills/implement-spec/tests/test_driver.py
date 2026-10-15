@@ -440,7 +440,7 @@ def test_a_conflict_cli_that_fails_stops_the_run_and_leaves_no_open_merge(repo, 
     two(repo)
     failing = '[ $role != conflict ] || { echo "ERROR: not signed in"; exit 7; }\n'
     code, ledger, out = walk(tmp_path, capsys, failing + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
-    assert code == 3 and "with no report: ERROR: not signed in" in out, out
+    assert code == 4 and "with no report: ERROR: not signed in" in out, out
     assert not [line for line in ledger if "BLOCKED" in line]
     (number,) = [n for n, entry in state_of(tmp_path)["tickets"].items() if entry["phase"] == "merge"]
     assert f"ticket/{number}" in branches()

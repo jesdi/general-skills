@@ -287,11 +287,11 @@ def test_a_model_the_account_cannot_use_fails_the_preflight_with_exit_3_before_a
     assert "ticket/01" not in git(w.repo, "branch", "--list") and not w.ledger()
 
 
-def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_3_and_the_same_command_resumes(env):
+def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
     w = World(env, refactor=True)
     plan = {"implementer": [{"stderr": REFUSED + "\n", "exit": 1}] * 2 + [impl()]}
     proc = w.run(plan)
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 4, proc.stdout + proc.stderr
     assert f"implement-spec: the run stopped: the implementer on anthropic/claude-opus-5@medium exited 1 with no " \
         f"report: {REFUSED}" in proc.stdout.splitlines(), proc.stdout
     assert "BLOCKED" not in w.ledger() and "Ticket 01: the run stops and the phase stays for the next run: the implementer" in w.ledger()

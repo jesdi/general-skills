@@ -37,7 +37,7 @@ class Blocked(Exception):
 
 class Halted(Exception):
     """The CLI of an agent failed with no report, two times: a model the account cannot use, a CLI that is not
-    signed in. The run starts no other agent and ends with exit 3; the ticket keeps its phase for the next run."""
+    signed in. The run starts no other agent and ends with exit 4; the ticket keeps its phase for the next run."""
 
 
 @contextmanager

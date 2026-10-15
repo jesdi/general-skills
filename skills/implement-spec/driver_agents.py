@@ -25,6 +25,7 @@ PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 READ_ONLY = ("reviewer", "correctness", "final-reviewer", "pr-writer")
 PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
+# The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
 PREFLIGHT_MINUTES = 5
 # A process group is here only while its leader is not reaped: then no other process can have its id.
 LIVE: set[int] = set()

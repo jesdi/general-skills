@@ -6,7 +6,7 @@
               [--dry-run]
 
 Run it in the PR worktree. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of
-run is BLOCKED, 2 = parked on a question, 3 = usage or validation error. README.md has the method and the files of
+run is BLOCKED, 2 = parked on a question, 3 = usage or validation error, 4 = stopped by a CLI failure. README.md has the method and the files of
 a run; ARCHITECTURE.md has the map of the modules and the rules the code keeps.
 """
 from __future__ import annotations
@@ -235,7 +235,7 @@ def _block(number: str, run: Run, ledger_line: int) -> None:
 
 
 def _halt(run: Run, owner: str, why: str) -> None:
-    """Start no other agent: the run ends with exit 3, and `owner` keeps its phase for the next run."""
+    """Start no other agent: the run ends with exit 4, and `owner` keeps its phase for the next run."""
     run.halted.append(why)
     ledger(f"{owner}: the run stops and the phase stays for the next run: {why}.")
 
@@ -442,14 +442,14 @@ def _tell(args, code: int, open_questions: list[dict], blocked: list[str], pushe
 
 
 def _halted_exit(halted: list[str], final: dict) -> int:
-    """Exit 3 after a CLI failure: no ticket is BLOCKED by it, and the same command resumes the run."""
+    """Exit 4 after a CLI failure: no ticket is BLOCKED by it, and the same command resumes the run."""
     for why in halted:
         print(f"implement-spec: the run stopped: {why}")
     print("implement-spec: fix the CLI or the model entry (--models FILE), then run the same command again to "
           "resume; no ticket is BLOCKED by this.")
     if error := _publish_questions(final["run"]):
         print(error)
-    return 3
+    return 4
 
 
 def _exit_code(final: dict, args, end_blocked: bool) -> int:

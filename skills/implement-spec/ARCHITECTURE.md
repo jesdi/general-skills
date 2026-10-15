@@ -34,7 +34,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   in front. Only two places catch it for good: `driver._run_ticket` (the ticket becomes BLOCKED) and
   `driver_final.run` (the end of run becomes BLOCKED). Another `except Blocked` only cleans up and raises again.
 - **A CLI that fails with no report raises `Halted`**, not `Blocked`: the setup of the run is wrong, not the
-  ticket. `driver._run_ticket` and `driver._work` catch it: the run starts no other agent and ends with exit 3,
+  ticket. `driver._run_ticket` and `driver._work` catch it: the run starts no other agent and ends with exit 4,
   and the ticket keeps its phase for the next run. A cleanup of an `except Blocked` that leaves git as it was (an
   open merge, an open rebase, a rejected fix batch) also runs for `Halted`.
 - **A check before the first agent returns a list of errors**, so the operator sees all of them at one time
