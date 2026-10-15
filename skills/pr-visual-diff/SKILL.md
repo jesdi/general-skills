@@ -260,8 +260,8 @@ Replaces steps 3–5. The subagent rule above still holds.
 
 The steps run in one shared workflow, `.github/workflows/pr-visual-diff.yml` of
 jesdi/general-skills. Each target repo has a short caller of it, made from
-`references/capture-caller.yml` of this skill and pinned to one commit of
-general-skills: GitHub starts `workflow_dispatch` only in the target repo.
+`references/capture-caller.yml` of this skill, which follows the main branch
+of general-skills: GitHub starts `workflow_dispatch` only in the target repo.
 
 **Precondition.** The default branch of the target repo has the caller,
 `.github/workflows/pr-visual-diff.yml`:

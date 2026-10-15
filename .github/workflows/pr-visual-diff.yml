@@ -1,7 +1,8 @@
 # Remote capture of the pr-visual-diff skill, shared by every target repo.
 # A target repo calls it from its own .github/workflows/pr-visual-diff.yml
-# (template: skills/pr-visual-diff/references/capture-caller.yml), pinned to a
-# commit of this repo: GitHub starts workflow_dispatch only in the target repo.
+# (template: skills/pr-visual-diff/references/capture-caller.yml), at the main
+# branch of this repo: GitHub starts workflow_dispatch only in the target repo.
+# A change here reaches every target repo at once.
 #
 # It captures After on `head` and Before on `base` with the capture spec the
 # session filled, then pushes the PNGs as one orphan commit to the hidden ref
