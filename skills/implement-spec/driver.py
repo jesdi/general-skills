@@ -81,7 +81,7 @@ def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
     folder = OUT / ticket.number
     return {"spec": os.path.relpath(run.args.spec, slot), "seam": ticket.seam, "pr_branch": run.pr,
             "branch": f"ticket/{ticket.number}", "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
-            "correctness": str(driver_review.CORRECTNESS),
+            "correctness": str(driver_review.CORRECTNESS), "gate": run.args.gate,
             "blocked_report": os.path.relpath(_blocked_report(ticket.number, run), slot),
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
 

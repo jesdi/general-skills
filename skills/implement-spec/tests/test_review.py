@@ -194,6 +194,21 @@ def test_each_round_ends_with_one_gate_record_and_a_re_review_scoped_to_the_fix(
         assert tips[k - 1][:7] in reviews[k]["prompt"] and tips[k][:7] in reviews[k]["prompt"], k
 
 
+def gate_rule(prompt, gate):
+    """The line of `prompt` that gives the gate command; it must say to run it before the report."""
+    (line,) = [l for l in prompt.splitlines() if f"`{gate}`" in l]
+    assert "IMPLEMENT_SPEC_BASE=feat/csv" in line and "Before you report DONE" in line, line
+    return line
+
+
+def test_the_implementer_and_each_fixer_get_the_gate_command_and_run_it_before_they_report(escalated):
+    gate = str(escalated.rig / "gate")
+    agents = escalated.calls("01", "implementer") + escalated.calls("01", "fixer")
+    assert len(agents) == 4, "the implementer and the fixers of rounds 1, 2 and 3 (the next model)"
+    for call in agents:
+        gate_rule(call["prompt"], gate)
+
+
 def test_reports_are_named_by_role_and_round(escalated):
     for name in ("reviewer-0", "reviewer-1", "reviewer-2", "reviewer-3", "fixer-1", "fixer-2", "fixer-3"):
         assert (escalated.folder() / f"{name}.json").exists(), name

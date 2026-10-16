@@ -229,6 +229,7 @@ def test_a_rerun_prompt_holds_only_template_lines_and_keeps_its_ending(repo, tmp
     prompt = prompt_of(tmp_path)
     first = driver_agents.render("implementer", {
         "spec": "spec.md", "ticket": ".agent/tickets/01-t.md", "seam": "none — refactor", "locked": "",
+        "gate": "true", "pr_branch": "feat/x",
         "start_sha": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
         "report": ".agent/implement/01/implementer-0.json"})
     ending = first[first.index("\nWrite one JSON report"):]

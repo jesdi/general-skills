@@ -95,7 +95,7 @@ Everything is under `.agent/`, which is never committed.
 A ticket is ready when each ticket in its **Blocked by** line is merged and no running ticket touches the same place. The places are the backticked entries of the **Touches** lines: `file` or `file: function`. Two entries are the same place when they name the same file and the same function, or when one of them names the whole file. Each ready ticket takes the lowest free slot.
 
 1. **test-writer** (`prompts/test-writer.md`). It writes one black-box test for each criterion through the Seam and commits them red. Those files are locked. A ticket with Seam `none — refactor` has no test-writer.
-2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green.
+2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green. Its prompt gives the `--gate` command: it runs the gate on its final commit and makes it green before it reports DONE or DONE_WITH_CONCERNS.
 3. **Gate.** The driver runs `--gate` on the ticket tip.
 4. **Review.** The driver compares each locked file of the ticket with the test-writer commit. A file that differs is a critical finding `locked file changed: <path>`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
 5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file of the ticket. A second conflict blocks the ticket.
@@ -117,7 +117,7 @@ Rules for each agent:
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
-A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
+A fix round is one **fixer** (`prompts/fixer.md`), which runs the gate on its final commit before it reports, as the implementer does, then the gate of the driver on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
 
 A red gate on the commit of the implementer or of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts: a red gate on the commit of the implementer starts round 1. The review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of a test-writer correction: the correction is outside the fix rounds, and a fixer may not edit the locked files.
 

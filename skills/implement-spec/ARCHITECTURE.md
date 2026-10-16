@@ -112,6 +112,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   provider of the implementer.
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks only after round 4. A red gate on a test-writer correction blocks.
+- The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
+  stays the source of truth: an agent's run of the gate counts for nothing.
 
 ### Questions
 

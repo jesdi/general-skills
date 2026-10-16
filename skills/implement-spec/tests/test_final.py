@@ -31,7 +31,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_cli import git, ticket
-from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, review
+from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, review
 from test_stops import UNATTENDED, decisions, stage
 from test_walk import impl, plan, tw
 
@@ -294,6 +294,11 @@ def test_two_findings_make_one_fixer_batch_of_fix_commits_on_top_of_the_unchange
     assert [r["subject"] for r in fixed.commits(reviewed)] == ["fix(02): quote embedded commas", "fix(02): escape quotes"]
     assert len(fixed.commits(fixed.start, reviewed)) == 3
     assert ref(fixed.repo, "feat/csv~2") == reviewed
+
+
+def test_the_fixer_of_the_final_review_gets_the_gate_command_and_runs_it_before_it_reports(fixed):
+    (batch,) = fixed.final_calls("fixer")
+    gate_rule(batch["prompt"], str(fixed.rig / "gate"))
 
 
 def test_a_scoped_review_covers_the_range_after_the_reviewed_tip_and_one_gate_runs_on_the_new_tip(fixed):

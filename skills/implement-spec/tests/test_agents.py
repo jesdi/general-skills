@@ -247,7 +247,7 @@ def test_implementer_prompt_carries_pointers_and_only_template_sentences(env):
     for prefix in (str(w.repo.resolve()) + "/", str(w.repo) + "/"):
         prompt = prompt.replace(prefix, "")
     for value in (report, "specs/csv/spec.md", ".agent/tickets/01-export-rows.md", "`export_csv()`", sha,
-                  "tests/test_export.py"):
+                  "tests/test_export.py", "feat/csv", "true"):
         prompt = prompt.replace(value, "")
     lines = lambda text: {" ".join(l.split()) for l in text.splitlines() if l.strip()}
     assert lines(prompt) <= lines(re.sub(r"\{[a-z_]+\}", "", template))
