@@ -31,7 +31,7 @@ import time
 import pytest
 
 from test_cli import RUN, git, models_file, snapshot, three, ticket
-from test_final import Final, ref
+from test_final import Final
 from test_review import HOOKED, Review, cli
 from test_stops import UNATTENDED, blocked as contradicted
 from test_walk import GATE, Rig, impl, make_env, plan, tw
@@ -74,6 +74,13 @@ def refused(rig, nn, path):
     assert rig.led(nn, f"locked file changed: {path}"), rig.ledger()
 
 
+def restored(rig, nn, path):
+    """The review of ticket `nn` found its change to the locked file `path` of a merged ticket, and the restore
+    closed it."""
+    return (rig.led(f"Ticket {nn}: critical finding of kind fixture from the driver at {path}:1")
+            and rig.led(f"Ticket {nn}:", "the restore closes it"))
+
+
 def writer(nn, path, text, listed=True):
     """The test-writer of `nn` that also writes `path`, and lists it as locked or not."""
     step = tw(nn)
@@ -92,13 +99,13 @@ def seeded(rig):
 
 # ---------------------------------------------------------------- the implementer of a later ticket
 
-def test_an_implementer_that_weakens_the_locked_test_of_a_merged_ticket_does_not_land_and_nothing_is_pushed(tmp_path):
+def test_an_implementer_that_weakens_the_locked_test_of_a_merged_ticket_lands_only_with_the_test_put_back(tmp_path):
+    """The review finds the change and the driver restores the file; the gate stays green, so no correction runs."""
     rig = Final(tmp_path, three())
     weak = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", T01: WEAK})
     rig.run(plan(**{"02/implementer": [weak], "02/fixer": NO_REPORT}), *UNATTENDED)
-    refused(rig, "02", T01)
-    assert phase(rig, "01") == "merged" and on_pr(rig, T01) == LOCKED_01
-    assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")
+    assert rig.code == 0 and restored(rig, "02", T01), rig.output()
+    assert len(rig.calls("02", "test-writer")) == 1 and on_pr(rig, T01) == LOCKED_01
 
 
 # ---------------------------------------------------------------- a ticket branch that takes the PR branch in
@@ -117,12 +124,12 @@ def test_a_ticket_that_merged_the_pr_branch_into_itself_lands_with_the_tests_of_
     assert phase(rig, "03") == "merged" and on_pr(rig, T01) == LOCKED_01 and on_pr(rig, T03) == LOCKED_03
 
 
-def test_a_ticket_that_merged_the_pr_branch_and_deleted_a_locked_test_of_the_merged_ticket_does_not_land(tmp_path):
+def test_a_ticket_that_merged_the_pr_branch_and_deleted_a_locked_test_of_the_merged_ticket_lands_with_it_put_back(tmp_path):
     rig = Review(tmp_path, three())
     rig.run(plan(**{"03/implementer": [takes_in(["rm", "-q", T01])], "03/fixer": NO_REPORT}))
     (call,) = rig.calls("03", "implementer")
     assert holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/03"
-    refused(rig, "03", T01)
+    assert rig.code == 0 and restored(rig, "03", T01), rig.output()
     assert phase(rig, "01") == "merged" and on_pr(rig, T01) == LOCKED_01
 
 
