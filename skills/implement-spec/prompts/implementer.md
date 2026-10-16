@@ -9,7 +9,8 @@ Locked files: {locked}
 Make the locked tests green and meet each criterion of the ticket. For internal code, work in vertical test-first slices: one failing test, the smallest code that passes it, then the next slice.
 Never edit a locked file. If a locked test contradicts the spec or the ticket, stop and report BLOCKED with a concern that starts with `locked test contradicts spec:`, then the test and the evidence.
 Commit your work on the checked-out ticket branch. Do not dispatch subagents.
-Run targeted tests while you work. The driver runs the gate on your final commit.
+Run targeted tests while you work.
+Before you report DONE or DONE_WITH_CONCERNS, run the gate on your final commit, with IMPLEMENT_SPEC_BASE={pr_branch} in the environment: `{gate}`. Fix each failure, commit, and run it again until it is green. The driver runs the gate again on your final commit.
 In `green`, give the summary lines of the passing test output.
 
 Write one JSON report at {report} that matches this schema:
