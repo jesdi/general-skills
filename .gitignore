@@ -16,3 +16,7 @@ __pycache__/
 
 # Agent working state (tickets, ledgers, driver notes) — never committed
 .agent/
+
+# Spec proposal and design are local working notes; only spec.md is committed
+specs/*/proposal.md
+specs/*/design.md
