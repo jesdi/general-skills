@@ -330,6 +330,22 @@ def test_round_4_findings_wait_for_every_answer_before_the_ticket_merges(tmp_pat
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged" and len(rig.calls("01", "fixer")) == 4
 
 
+def test_a_test_finding_after_round_4_is_a_question_and_accepting_every_question_merges(tmp_path):
+    """Issue 84: after round 4 no test-writer correction runs. Its red locked tests would make `accept` a lie."""
+    locks = {**tw("01"), "files": {"tests/test_01.py": "# red lock\n"}, "commit": "test: 01 lock"}
+    rig = Inside(tmp_path, ONE, gate={"subjects": ["test: 01 lock"]})
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py", line=1)
+    last = review("01", [finding("STUCK"), vacuous])
+    rig.run(plan(**{"01/test-writer": [tw("01"), locks], "01/reviewer": [review("01", [finding("STUCK")])] * 4 + [last],
+                    "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))
+    assert rig.code == 1 and len(rig.calls("01", "test-writer")) == 1
+    assert [q["subject"] for q in rig.state()["run"]["questions"]] == ["STUCK (demo/export.py:99)",
+                                                                       "VACUOUS (tests/test_01.py:1)"]
+    rig.run({}, "--answer", "01-finding-1=accept", "--answer", "01-finding-2=accept")
+    assert rig.code == 0, rig.ledger()
+    assert rig.state()["tickets"]["01"]["phase"] == "merged"
+
+
 def test_one_answer_that_keeps_the_ticket_blocked_wins_over_an_accept():
     one = asked("finding", subject="A")
     two = asked("finding", subject="B", before=[one])

@@ -113,7 +113,7 @@ Rules for each agent:
 
 | Finding | What the driver does |
 |---|---|
-| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. |
+| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. After round 4 there is no correction: the finding is an open finding of round 4. |
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
@@ -125,6 +125,7 @@ A red gate on the commit of the implementer or of a fixer is a critical finding 
 - Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.
 - There is no ruling at round 2.
 - Findings that are open after round 4 make the ticket BLOCKED. The run ends with exit 1, and the driver writes one question of kind `finding` for each.
+- After round 4, no test-writer correction runs. A correction adds locked tests, and no fix round follows to make them green, so the merge gate would be red. A finding that a correction would get is an open finding of round 4 too, so `accept` on each question merges the reviewed tip.
 
 ### End of run
 
