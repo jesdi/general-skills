@@ -399,6 +399,21 @@ def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_e
     assert f"The fix is {rig.sha('01', 'implementer')}..{second}" in again and "demo/export.py:2" in again
 
 
+def test_a_red_gate_on_the_implementer_commit_starts_fix_round_1_with_the_record_as_evidence(tmp_path):
+    """Issue 80: the gate of the implementer commit is red. That is a finding for round 1, not a BLOCKED ticket."""
+    rig = Inside(tmp_path, gate={"subjects": ["feat: 01 rows"]})
+    rig.run(plan(**{"01/reviewer": [review("01")], "01/fixer": [fix("01", 1)]}))
+    assert rig.code == 0, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
+    tip = rig.sha("01", "implementer")
+    record = f".agent/implement/01/gate-{tip[:7]}.log"
+    (gate,) = json.loads((rig.folder() / "findings-0.json").read_text())
+    assert (gate["source"], gate["severity"], gate["kind"]) == ("gate", "critical", "code")
+    assert gate["title"] == f"the gate is red on {tip[:7]}" and record in gate["evidence"]
+    assert "findings-0.json" in rig.prompt("fixer-1") and rig.state()["tickets"]["01"]["phase"] == "merged"
+    assert "The fix is" not in rig.prompt("reviewer-1")  # no review saw the implementer commit: a full review
+
+
 def test_a_red_gate_on_the_fixer_commit_of_round_4_blocks_the_ticket(tmp_path):
     rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 4"]})
     rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 4, "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))

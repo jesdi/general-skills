@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from test_cli import SKILL, ticket, three, git, models_file
-from test_walk import RUNNER, Rig, impl, plan, tw
+from test_walk import RUNNER, Rig, fix, impl, plan, tw
 
 # The fake runner of test_walk plus two hooks: `git` runs before the step's files, `git_after` right after them.
 HOOKED = RUNNER.replace(
@@ -74,13 +74,6 @@ def review(nn="01", findings=(), lines=(1,), **extra):
 def correct(findings=(), **extra):
     report = dict(status="DONE", commits=[], files=[], concerns=[], findings=list(findings))
     return {"report": report, **extra}
-
-
-def fix(nn, n, text=None, **changes):
-    """A fixer step: one commit on the ticket branch."""
-    step = impl(nn, text=text or f"def fn_{nn}():\n    return 'fix{n}'\n", commit=f"fix: {nn} round {n}", **changes)
-    step["report"]["ticket"] = nn
-    return step
 
 
 def edit(text, **new):

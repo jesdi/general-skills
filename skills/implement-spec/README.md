@@ -119,7 +119,7 @@ Rules for each agent:
 
 A fix round is one **fixer** (`prompts/fixer.md`), then the gate on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
 
-A red gate on the commit of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts. The re-review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of the implementer or of a test-writer correction.
+A red gate on the commit of the implementer or of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts: a red gate on the commit of the implementer starts round 1. The review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of a test-writer correction: the correction is outside the fix rounds, and a fixer may not edit the locked files.
 
 - Rounds 1 and 2 run on the first entry of the implementer list.
 - Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.

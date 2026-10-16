@@ -130,6 +130,13 @@ def impl(nn, path="demo/export.py", text=None, **changes):
     return {**step, **changes}
 
 
+def fix(nn, n, text=None, **changes):
+    """A fixer step: one commit on the ticket branch."""
+    step = impl(nn, text=text or f"def fn_{nn}():\n    return 'fix{n}'\n", commit=f"fix: {nn} round {n}", **changes)
+    step["report"]["ticket"] = nn
+    return step
+
+
 PATHS = {"01": "demo/export.py", "02": "demo/export.py", "03": "demo/cli.py"}
 
 
@@ -264,8 +271,9 @@ def std(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def blocked(tmp_path_factory):
-    """The default scenario with a red gate on ticket/01."""
-    return Rig(tmp_path_factory.mktemp("blocked"), gate={"red": ["ticket/01"]}).run(plan())
+    """The default scenario with a red gate on ticket/01 that four fix rounds do not make green."""
+    fixes = [fix("01", n) for n in (1, 2, 3, 4)]
+    return Rig(tmp_path_factory.mktemp("blocked"), gate={"red": ["ticket/01"]}).run(plan(**{"01/fixer": fixes}))
 
 
 def test_01_starts_in_slot_1_03_in_slot_2_and_02_after_the_merge_of_01(std):
@@ -331,12 +339,15 @@ def test_gate_environment_names_the_pr_branch_and_a_pycache_prefix_under_agent_i
     assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
 
 
-def test_red_gate_blocks_the_ticket_names_the_record_and_launches_no_later_role(blocked):
+def test_red_gate_blocks_the_ticket_after_round_4_names_the_record_and_launches_no_review(blocked):
     assert blocked.code == 1, blocked.output()
     a1 = blocked.sha("01", "implementer")
-    assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-{a1[:7]}.log" in l], blocked.ledger()
+    finding = f"Ticket 01: critical finding of kind code from the gate at .agent/implement/01/gate-{a1[:7]}.log:0: "
+    assert [l for l in blocked.ledger() if l.startswith(finding)], blocked.ledger()
     assert re.search(r"exit\D*1", (blocked.repo / f".agent/implement/01/gate-{a1[:7]}.log").read_text())
-    assert {c["role"] for c in blocked.calls("01")} == {"test-writer", "implementer"}
+    last = blocked.calls("01", "fixer")[-1]["sha"]
+    assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-{last[:7]}.log" in l], blocked.ledger()
+    assert [c["role"] for c in blocked.calls("01")] == ["test-writer", "implementer"] + ["fixer"] * 4
     assert blocked.state()["tickets"]["01"]["phase"] == "blocked"
     assert "ticket/01" in blocked.branches() and "feat: 01 rows" not in blocked.pr_subjects()
 
