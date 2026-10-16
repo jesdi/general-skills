@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import threading
 import time
 from contextlib import contextmanager
@@ -23,7 +24,7 @@ import driver_report
 import driver_review
 import driver_slots
 import driver_state
-from driver_slots import git
+from driver_slots import git, names
 
 OUT = Path(".agent/implement")
 FINAL = "final"  # the end of run has its reports and gate records under this name, as a ticket has under its number
@@ -156,13 +157,23 @@ class Run:
 
     def restore_locked_files(self, number: str, slot: str) -> list[str]:
         """Before a test-writer correction: put each locked file the implementer changed back to its locked
-        version in the tree, so the correction's commit carries no change of the implementer. Returns the paths."""
+        version in one commit of the driver, so the correction starts from the locked versions on a clean index and
+        its commit carries no change of the implementer. Other work in the tree stays. Returns the paths."""
         tickets = self.state.read()["tickets"]
         paths = (driver_review.restore_locked(slot, tickets[number])
                  + driver_merge.restore(slot, self.tip(), driver_merge.protected(tickets, number)))
+        # A path whose change was never committed is back at HEAD already, and `git commit -- <path>` refuses it.
+        changed = names(git(slot, "diff", "--name-only", "-z", "HEAD", "--", *paths).stdout) if paths else []
+        if changed:
+            words = "implement-spec: restore the locked files before the correction"
+            made = subprocess.run(["git", "-C", slot, "commit", "-q", "--no-verify", "-m", words, "--", *changed],
+                                  capture_output=True, text=True, env={**os.environ, **driver_merge.identity("HEAD", slot)})
+            if made.returncode:
+                raise Blocked(f"the driver cannot commit the restored locked files: {made.stderr.strip()}")
+            self.state.ticket(number, tip=driver_slots.head(slot))
         for path in paths:
             ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
-                   "the tree, so the correction starts from the locked version.")
+                   "a commit, so the correction starts from the locked version.")
         return paths
 
 

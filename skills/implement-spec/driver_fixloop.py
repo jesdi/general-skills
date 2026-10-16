@@ -105,10 +105,13 @@ def _correct(job: Job, findings: list[dict]) -> None:
     if job.corrected:
         titles = "; ".join(finding["title"] for finding in findings)
         raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {titles}")
-    check = {"correction": True, "restored": run.restore_locked_files(number, job.slot)}
+    restored = run.restore_locked_files(number, job.slot)
+    job.tip = driver_slots.head(job.slot)  # the restore is a commit of the driver
+    values = {**job.pointers(job.round), "restored": " ".join(restored)}
+    notes = ["correction"] + ["restored"] * bool(restored)
     with during("the test-writer correction"):
-        report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
-                           fix_round=job.round + 1, check=check)
+        report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
+                           check={"correction": True, "restored": restored})
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
     run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))

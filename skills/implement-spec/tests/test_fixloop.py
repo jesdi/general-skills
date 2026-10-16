@@ -296,15 +296,17 @@ def test_a_refactor_ticket_may_not_change_a_locked_test_of_a_merged_ticket(tmp_p
 
 
 # A correction is a test-writer: a file that it lists is its ticket's own. It must start from the locked version.
-APPEND = "--- a/tests/test_01.py\n+++ b/tests/test_01.py\n@@ -1,2 +1,3 @@\n def test_x():\n     assert True\n+# corrected\n"
-RESTORED_01 = ("Ticket 02: tests/test_01.py was not the locked version at the correction: the driver restored it in "
-               "the tree, so the correction starts from the locked version.")
+# The edit has no context lines, so it applies to the file whatever version the tree holds.
+APPEND = "--- a/tests/test_01.py\n+++ b/tests/test_01.py\n@@ -2,0 +3 @@\n+# corrected\n"
+CORRECTED_01 = LOCKED_01 + "# corrected\n"
+RESTORED_01 = ("Ticket 02: tests/test_01.py was not the locked version at the correction: the driver restored it in a "
+               "commit, so the correction starts from the locked version.")
 
 
 def appending(tmp_path, **changes):
-    """A correction of 02 that appends a line to tests/test_01.py as the implementer of 02 left it, and lists it."""
+    """A correction of 02 that appends a line to tests/test_01.py as the tree holds it, and lists it."""
     (tmp_path / "append.patch").write_text(APPEND)
-    step = {**tw("02"), "git": [["apply", str(tmp_path / "append.patch")]], "commit": "test: 02 corrected", **changes}
+    step = {**tw("02"), "git": [["apply", "--unidiff-zero", str(tmp_path / "append.patch")]], "commit": "test: 02 corrected", **changes}
     step["report"] = {**step["report"], "locked": ["tests/test_02.py", "tests/test_01.py"]}
     return step
 
@@ -325,7 +327,7 @@ def test_an_overrule_correction_starts_from_the_locked_file_of_the_merged_ticket
     rig = Inside(tmp_path, three()).run(steps)
     assert rig.code == 2, rig.ledger()
     rig.run(steps, "--answer", "02-locked-test-1=overrule-test")
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01, rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == CORRECTED_01, rig.ledger()
     assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
 
 
@@ -335,8 +337,29 @@ def test_a_fixture_correction_starts_from_the_locked_file_of_the_merged_ticket(t
     correction = appending(tmp_path, files={"tests/test_02.py": "def test_x():\n    assert '02' == 'x'  # corrected\n"})
     rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
                                                 "02/reviewer": [review("02", [stale]), proves("02", "tests/test_01.py")]}))
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01, rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == CORRECTED_01, rig.ledger()
     assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
+
+
+def test_the_restore_before_a_correction_is_committed_so_the_next_fixer_and_its_gate_find_a_clean_tree(tmp_path):
+    """Issue #86: the correction and the fixer each commit only their own files. The restore of the merged ticket's
+    file must not stay in the tree, where the gate of the fixer's commit is `not clean` and burns a round."""
+    weak = finding("WEAK", kind="test", file="tests/test_02.py")
+    stronger = "def test_x():\n    assert '02' == 'x'  # stronger\n"
+    correction = {**tw("02"), "files": {"tests/test_02.py": stronger}, "commit": "test: 02 stronger",
+                  "only": ["tests/test_02.py"]}
+    rig = Inside(tmp_path, three()).run(plan(**{
+        "02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
+        "02/reviewer": [review("02", [weak, STUCK]), review("02")], "02/fixer": [fix("02", 1, only=["demo/export.py"])]}))
+    assert rig.code == 0, rig.ledger()
+    assert rig.led("Ticket 02:", "restored") == [RESTORED_01]
+    (fixer,) = rig.calls("02", "fixer")
+    assert fixer["status"] == "" and fixer["head"] == rig.calls("02", "test-writer")[1]["sha"]
+    assert not [gate for gate in rig.folder("02").glob("gate-*.log") if "not clean" in gate.read_text()]
+    assert rig.state()["tickets"]["02"]["round"] == 1 and on_pr(rig, "tests/test_01.py") == LOCKED_01
+    # The correction is told which files the driver put back, so it may update one compatibly when it lists it.
+    prompt = rig.prompt("test-writer-1", "02")
+    assert "The driver put back these files at their locked versions" in prompt and "tests/test_01.py" in prompt
 
 
 ACCENT = "tests/tést.py"
