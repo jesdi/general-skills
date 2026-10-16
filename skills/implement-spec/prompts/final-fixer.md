@@ -12,7 +12,7 @@ Fix each finding in the list as one batch, in one commit or in several. Leave th
 Each commit belongs to one ticket: the ticket whose criterion or code the commit changes. A fix for two tickets is two commits.
 Never edit a locked file: each one stays as it is at {start_sha}, and a locked file that differs is a critical finding of the next review.
 Use targeted tests while you work.
-Before you report DONE or DONE_WITH_CONCERNS, run the gate on your final commit, with IMPLEMENT_SPEC_BASE={pr_branch} in the environment: `{gate}`. Fix each failure, commit, and run it again until it is green. The driver runs the gate again on your final commit, and a scoped review reads your commits.
+Before you report DONE or DONE_WITH_CONCERNS, make the gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} in the environment, then fix, commit, and run it again until it passes. The driver runs the gate again on that commit, and a scoped review reads your commits.
 Commit your work on the checked-out PR branch and change no commit that is on it now. Do not dispatch subagents.
 In `commits`, give every commit you made with the number of its ticket: the driver names each commit `fix(NN): <your subject>` from it, and a commit with no ticket is a violation. In `green`, give the summary lines of the passing test output.
 

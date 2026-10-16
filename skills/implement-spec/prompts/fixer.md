@@ -11,7 +11,7 @@ Fix each finding of severity critical or important in the findings file. Leave t
 Never edit a locked file. The one exception is a finding `locked file changed`: make that file equal to its content at {test_writer_sha}.
 If a locked test contradicts the spec or the ticket, so that no fix can make it green, stop and report BLOCKED with a concern that starts with `locked test contradicts spec:`, then the test and the evidence.
 Use targeted tests while you work.
-Before you report DONE or DONE_WITH_CONCERNS, run the gate on your final commit, with IMPLEMENT_SPEC_BASE={pr_branch} in the environment: `{gate}`. Fix each failure, commit, and run it again until it is green. The driver runs the gate again on your final commit, and a re-review reads the lines you changed.
+Before you report DONE or DONE_WITH_CONCERNS, make the gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} in the environment, then fix, commit, and run it again until it passes. The driver runs the gate again on that commit, and a re-review reads the lines you changed.
 A finding from the `gate` is a red gate: its file is the gate record. Read the output there and make the gate green.
 Commit your work on the checked-out ticket branch. Do not dispatch subagents.
 In `ticket`, give the number of the ticket that owns your commits. In `green`, give the summary lines of the passing test output.

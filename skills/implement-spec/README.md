@@ -95,7 +95,7 @@ Everything is under `.agent/`, which is never committed.
 A ticket is ready when each ticket in its **Blocked by** line is merged and no running ticket touches the same place. The places are the backticked entries of the **Touches** lines: `file` or `file: function`. Two entries are the same place when they name the same file and the same function, or when one of them names the whole file. Each ready ticket takes the lowest free slot.
 
 1. **test-writer** (`prompts/test-writer.md`). It writes one black-box test for each criterion through the Seam and commits them red. Those files are locked. A ticket with Seam `none — refactor` has no test-writer.
-2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green. Its prompt gives the `--gate` command: it runs the gate on its final commit and makes it green before it reports DONE or DONE_WITH_CONCERNS.
+2. **implementer** (`prompts/implementer.md`). It starts from that commit and makes the locked tests green. It makes the gate (`--gate`) green on its final commit before it reports DONE or DONE_WITH_CONCERNS.
 3. **Gate.** The driver runs `--gate` on the ticket tip.
 4. **Review.** The driver compares each locked file of the ticket with the test-writer commit. A file that differs is a critical finding `locked file changed: <path>`. Then the **reviewer** (`prompts/reviewer.md`) runs, and for a ticket with a **Risk** line the **correctness** pass (`prompts/correctness.md`) runs at the same time in the same slot.
 5. **Merge.** The driver merges the reviewed tip into the PR branch with git plumbing, then deletes the ticket branch. A conflict goes to the **conflict** agent (`prompts/conflict.md`) once. Its resolution may change no locked file of the ticket. A second conflict blocks the ticket.
@@ -113,19 +113,18 @@ Rules for each agent:
 
 | Finding | What the driver does |
 |---|---|
-| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. After round 4 there is no correction: the finding is an open finding of round 4. |
+| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. No correction runs after round 4. |
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
-A fix round is one **fixer** (`prompts/fixer.md`), which runs the gate on its final commit before it reports, as the implementer does, then the gate of the driver on the new tip, then a re-review of the range of the fix. A mutation proof is repeated only when the fix changed its production line.
+A fix round has three steps: the **fixer** (`prompts/fixer.md`) makes the gate green on its final commit, as the implementer does; the driver runs the gate on the new tip; a re-review reads the range of the fix. A mutation proof is repeated only when the fix changed its production line.
 
-A red gate on the commit of the implementer or of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts: a red gate on the commit of the implementer starts round 1. The review after that round covers each fix since the last review and repeats each proof that one of them made due. A red gate after round 4 blocks the ticket, as does a red gate on the commit of a test-writer correction: the correction is outside the fix rounds, and a fixer may not edit the locked files.
+A red gate on the commit of the implementer or of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts: a red gate on the commit of the implementer starts round 1. The review after that round covers each fix since the last review and repeats each proof that one of them made due. Two red gates block the ticket: one after round 4, and one on the commit of a test-writer correction, because the correction is outside the fix rounds and a fixer may not edit the locked files.
 
 - Rounds 1 and 2 run on the first entry of the implementer list.
 - Rounds 3 and 4 run on the second entry of the implementer list. When the list has one entry, they stay on it and the ledger says so.
 - There is no ruling at round 2.
-- Findings that are open after round 4 make the ticket BLOCKED. The run ends with exit 1, and the driver writes one question of kind `finding` for each.
-- After round 4, no test-writer correction runs. A correction adds locked tests, and no fix round follows to make them green, so the merge gate would be red. A finding that a correction would get is an open finding of round 4 too, so `accept` on each question merges the reviewed tip.
+- Findings that are open after round 4 make the ticket BLOCKED. The run ends with exit 1, and the driver writes one question of kind `finding` for each. A finding that would get a test-writer correction is one of them: no correction runs after round 4, because its new locked tests would have no fix round to make them green and the merge gate would be red. So `accept` on each question merges the reviewed tip.
 
 ### End of run
 
