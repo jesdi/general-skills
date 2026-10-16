@@ -107,8 +107,9 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         values["start_sha"] = start
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
-        if check["correction"]:
-            check["restored"] = run.restore_locked_files(number, slot)
+        if check["correction"] and (restored := run.restore_locked_files(number, slot)):
+            values.update(start_sha=driver_slots.head(slot), restored=" ".join(restored))
+            notes, check["restored"] = [*notes, "restored"], restored
         with during(f"the {role}"):
             report = run.agent(role, number, slot, values, notes=notes, check=check)
         facts = {"tip": driver_slots.head(slot)}

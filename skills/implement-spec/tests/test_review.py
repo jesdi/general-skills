@@ -24,13 +24,16 @@ import pytest
 from test_cli import SKILL, ticket, three, git, models_file
 from test_walk import RUNNER, Rig, fix, impl, plan, tw
 
-# The fake runner of test_walk plus two hooks: `git` runs before the step's files, `git_after` right after them.
+# The fake runner of test_walk plus three hooks: `git` runs before the step's files, `git_after` right after them,
+# and `only` names the paths the commit takes, as an agent that commits its own files only.
 HOOKED = RUNNER.replace(
     'for path, text in step.get("files", {}).items():',
     'for cmd in step.get("git", []):\n    git(*cmd)\nfor path, text in step.get("files", {}).items():', 1).replace(
     'sys.stdout.write(step.get("stdout", ""))',
-    'for cmd in step.get("git_after", []):\n    git(*cmd)\nsys.stdout.write(step.get("stdout", ""))', 1)
-assert HOOKED.count("git_after") == 1 and HOOKED.count('step.get("git", [])') == 1
+    'for cmd in step.get("git_after", []):\n    git(*cmd)\nsys.stdout.write(step.get("stdout", ""))', 1).replace(
+    'git("commit", "-q", "-m", step["commit"])',
+    'git("commit", "-q", "-m", step["commit"], *(["--", *step["only"]] if "only" in step else []))', 1)
+assert HOOKED.count("git_after") == 1 and HOOKED.count('step.get("git", [])') == 1 and HOOKED.count('step["only"]') == 1
 
 ONE = {"01-export-rows.md": ticket("01", "Export rows")}
 RISKY = {"02-quote-fields.md": ticket("02", "Quote fields", risk="persistence")}

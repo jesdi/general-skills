@@ -165,7 +165,7 @@ def two_locked():
 
 
 def restored(path):
-    return f"Ticket 01: {path} was not the locked version at the correction: the driver restored it in the tree"
+    return f"Ticket 01: {path} was not the locked version at the correction: the driver restored it in a commit"
 
 
 TWO_TESTS = "def test_x():\n    assert 01 == 'x'\n\n\ndef test_y():\n    assert 1 == 'y'\n"

@@ -60,10 +60,14 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - The commit of the test-writer is the reference of the ticket's locked files. Before each review, a locked file
   that differs from its reference is a critical finding (`driver_review.locked_findings`).
 - A correction of the test-writer is a new reference. For that reason the driver first puts each locked file back
-  to its locked version (`Run.restore_locked_files`), and a correction may change only the files it lists, after
-  `overrule-test` and in the fix loop. Its commit becomes the reference of each file it lists. A locked file that it
-  does not list and that differs from the old reference keeps the old reference in the ticket's `held`, so a
-  change of the implementer stays a finding (`driver_review.written`).
+  to its locked version and commits that (`Run.restore_locked_files`), and a correction may change only the files it
+  lists, after `overrule-test` and in the fix loop. Its commit becomes the reference of each file it lists. A locked
+  file that it does not list and that differs from the old reference keeps the old reference in the ticket's `held`,
+  so a change of the implementer stays a finding (`driver_review.written`).
+- The restore is a commit, not a tree change: an agent commits only its own files, and a gate refuses a tree that
+  is not clean, so a restore left in the tree would turn the next gate red and use a fix round. The correction's
+  prompt names the restored files (`prompts/restored.md`): this is the one path for a change of an earlier ticket's
+  locked test that a later ticket's interface needs.
 - The locked files of merged tickets are checked when a ticket lands (`driver_merge.refused`): the tree that lands
   must have each of them as the PR tip has it. A ticket's test-writer may change one only when it lists it.
 - A conflict resolution, of a merge or of the rebase, may not change a locked file.
