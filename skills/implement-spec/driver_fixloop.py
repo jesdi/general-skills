@@ -149,6 +149,9 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
     locked = job.run.state.read()["tickets"][job.ticket.number]["locked"]
     to_correct, to_fix = driver_review.route(found, locked)
+    if job.round == ROUNDS:
+        # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
+        to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]
     # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
     locked_file_changed = any(finding["source"] == "driver" for finding in found)
     if to_correct and not locked_file_changed:
