@@ -358,6 +358,9 @@ echo "$nn $PWD" >> "$0.calls"
 # Ticket 01 waits until ticket 02 has its branch, so both start from the same PR tip.
 TOGETHER = """[ "$nn" != 01 ] || until git rev-parse -q --verify refs/heads/ticket/02 > /dev/null; do sleep 0.02; done\n"""
 REFACTOR = {"seam": "none — refactor"}
+# A fixer that cannot make the red gate green: the ticket blocks at fix round 1.
+GIVE_UP = """[ $role != fixer ] || { printf '{"status": "BLOCKED", "commits": [], "files": [], "concerns": ["the gate stays red"], "green": [], "ticket": "01"}' > "$report"; exit 0; }\n"""
+GAVE_UP = "Ticket 01: BLOCKED at fix round 1: the fixer reported BLOCKED: the gate stays red."
 
 
 def walk(tmp_path, capsys, body, *args, gate="true"):
@@ -452,13 +455,13 @@ def test_a_conflict_cli_that_fails_stops_the_run_and_leaves_no_open_merge(repo, 
         assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
 
 
-def test_a_red_gate_blocks_the_ticket_and_the_ticket_it_blocks_never_starts(repo, tmp_path, capsys):
+def test_a_red_gate_is_a_finding_and_the_ticket_it_blocks_never_starts(repo, tmp_path, capsys):
     two(repo, second="01")
-    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT, gate="echo CHECK-OUTPUT; exit 1")
+    code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT, gate="echo CHECK-OUTPUT; exit 1")
     tip = out_of("git", "rev-parse", "--short=7", "ticket/01")
-    assert code == 1 and len(ledger) == 2, out
-    assert ledger[1] == (f"Ticket 01: BLOCKED at the gate: the gate is red on {tip}, "
-                         f"record .agent/implement/01/gate-{tip}.log.")
+    assert code == 1 and ledger[-1] == GAVE_UP, out
+    assert ledger[1] == (f"Ticket 01: critical finding of kind code from the gate at "
+                         f".agent/implement/01/gate-{tip}.log:0: the gate is red on {tip}.")
     record = (tmp_path / f".agent/implement/01/gate-{tip}.log").read_text()
     assert "status: clean\n" in record and "CHECK-OUTPUT\n\nexit: 1\nafter: clean\nend: " in record
     assert "Ticket 02 is not merged: its phase is pending." in out and "| gates run | 1 |" in out
@@ -479,8 +482,8 @@ def test_a_red_merge_gate_blocks_the_ticket_and_the_pr_branch_does_not_move(repo
 
 def test_a_tree_that_is_not_clean_is_a_red_gate_and_the_slot_keeps_the_work(repo, tmp_path, capsys):
     repo(t01=ticket("01", **REFACTOR))
-    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT + "echo left > junk.txt\n", gate="echo NEVER")
-    assert code == 1 and "BLOCKED at the gate" in ledger[-1], out
+    code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT + "echo left > junk.txt\n", gate="echo NEVER")
+    assert code == 1 and "from the gate at .agent/implement/01/gate-" in ledger[-3] and ledger[-1] == GAVE_UP, out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "status: not clean\n    ?? junk.txt\n" in record and "exit: not run" in record and "\nNEVER\n" not in record
     assert out_of("git", "symbolic-ref", "--short", "HEAD") == "ticket/01" and (tmp_path / "junk.txt").exists()
@@ -729,8 +732,8 @@ def test_a_merge_commit_the_slot_cannot_check_out_is_not_gated_and_does_not_land
 ])
 def test_a_gate_that_changes_the_tree_or_moves_head_is_red(repo, tmp_path, capsys, gate, after):
     repo(t01=ticket("01", **REFACTOR))
-    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT, gate=gate)
-    assert code == 1 and "BLOCKED at the gate: the gate is red on " in ledger[-1], out
+    code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT, gate=gate)
+    assert code == 1 and "from the gate at .agent/implement/01/gate-" in ledger[-3] and ledger[-1] == GAVE_UP, out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "\nexit: 0\n" in record and after in record
     assert state_of(tmp_path)["tickets"]["01"]["green_gates"] == []

@@ -110,8 +110,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   A timeout doubles the time of the rerun.
 - Fix rounds stop at 4, and round 3 goes to the next implementer entry. The correctness pass never runs on the
   provider of the implementer.
-- A red gate on a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so it blocks only after
-  round 4.
+- A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
+  it blocks only after round 4. A red gate on a test-writer correction blocks.
 
 ### Questions
 

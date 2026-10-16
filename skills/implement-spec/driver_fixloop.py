@@ -164,12 +164,13 @@ def _act_on(job: Job, found: list[dict]) -> bool:
 
 
 def _gate(job: Job) -> list[dict]:
-    """Gate the tip. A red gate on a fixer's commit before round 4 is a finding for the next round; any other red
-    gate blocks. Returns the findings: the red gate, or none."""
+    """Gate the tip. A red gate on the implementer's commit or a fixer's commit before round 4 is a finding for the
+    next round; a red gate after round 4 or on a test-writer correction blocks. Returns the findings: the red gate,
+    or none."""
     run, number = job.run, job.ticket.number
     job.red = False
     with during("the gate"):
-        if not 0 < job.round < ROUNDS or job.corrected:
+        if job.round == ROUNDS or job.corrected:
             run.gate(number, job.slot, job.tip)
             return []
         record = run.red_gate(number, job.slot, job.tip)
