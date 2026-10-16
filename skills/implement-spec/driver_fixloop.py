@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import driver_agents
+import driver_merge
 import driver_review
 import driver_slots
 from driver_run import OUT, Blocked, Run, during, ledger
@@ -86,7 +87,8 @@ def _review(job: Job) -> list[dict]:
     """Review `job.tip`. Returns the findings of the driver and of each reviewer."""
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
-    found = _log_findings(job, driver_review.locked_findings(job.slot, state))
+    merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
+    found = _log_findings(job, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
     cast = [("reviewer", "")]
     if job.ticket.risk:
         cast.append(("correctness", driver_agents.correctness_entry(run.models)))
@@ -107,11 +109,21 @@ def _correct(job: Job, findings: list[dict]) -> None:
         raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {titles}")
     restored = run.restore_locked_files(number, job.slot)
     job.tip = driver_slots.head(job.slot)  # the restore is a commit of the driver
-    values = {**job.pointers(job.round), "restored": " ".join(restored)}
-    notes = ["correction"] + ["restored"] * bool(restored)
+    # The gate was green on the tip before the restore, so a red gate here is a restored file that fails with the
+    # ticket's code. The driver decides that, not the correction (issue #90).
+    with during("the gate of the restore"):
+        record = run.red_gate(number, job.slot, job.tip) if restored else ""
+    if not record and all(finding["source"] == "driver" for finding in findings):
+        job.previous = ""  # no review has seen the restore commit
+        ledger(f"Ticket {number}: the code does not need the change to {', '.join(restored)}: the restore closes it, "
+               "with no correction.")
+        return
+    values = {**job.pointers(job.round), "restored": " ".join(restored),
+              "record": record and os.path.relpath(record, job.slot)}
+    notes = ["correction"] + ["restored"] * bool(restored) + ["restored-red"] * bool(record)
     with during("the test-writer correction"):
         report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
-                           check={"correction": True, "restored": restored})
+                           check={"correction": True, "restored": restored, "restore_red": bool(record)})
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
     run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
@@ -153,7 +165,7 @@ def _act_on(job: Job, found: list[dict]) -> bool:
         # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
         to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]
     # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
-    locked_file_changed = any(finding["source"] == "driver" for finding in found)
+    locked_file_changed = any(finding["source"] == "driver" for finding in to_fix)
     if to_correct and not locked_file_changed:
         _correct(job, to_correct)
         if not to_fix:

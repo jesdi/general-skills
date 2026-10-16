@@ -2,6 +2,7 @@
 
 context: repo (slot path), branch, start (HEAD when the role started), log, round (1 = first review), locked,
   correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
+  restore_red (the gate is red on the commit of that restore),
   owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip)."""
 from __future__ import annotations
 
@@ -66,8 +67,14 @@ def _correction_errors(report: dict, context: dict) -> list[str]:
         return []
     changed = _git(context["repo"], "diff", "--name-only", "-z", context["start"], context["branch"], end="\0")
     more = [path for path in changed if path not in report.get("locked", []) + context.get("restored", [])]
-    return [f"a correction may change only the files it lists in `locked`: its commits also change {', '.join(more)}"
-            ] if more else []
+    errors = [f"a correction may change only the files it lists in `locked`: its commits also change {', '.join(more)}"
+              ] if more else []
+    if context.get("restore_red") and report["status"] in ("DONE", "DONE_WITH_CONCERNS") and not (
+            set(report["locked"]) & set(context["restored"])):
+        errors.append("the gate is red on the restore commit, so a restored file fails with the code of this ticket: "
+                      "update that file and list it in `locked`, or report BLOCKED with a concern that starts with "
+                      "`locked test contradicts spec:`")
+    return errors
 
 
 def _merged_errors(report: dict, context: dict) -> list[str]:

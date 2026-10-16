@@ -238,7 +238,6 @@ def test_a_fixture_correction_that_is_rejected_blocks_the_ticket(tmp_path):
 
 WEAK = "def test_x():\n    assert True\n"
 LOCKED_01 = tw("01")["files"]["tests/test_01.py"]
-REFUSED_01 = "Ticket 02: BLOCKED at the merge: locked file changed: tests/test_01.py."
 CHEAT = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": WEAK})
 
 
@@ -246,14 +245,15 @@ def on_pr(rig, path):
     return subprocess.run(["git", "-C", str(rig.repo), "show", f"feat/csv:{path}"], capture_output=True, text=True).stdout
 
 
-def test_a_later_ticket_that_weakens_a_locked_test_of_a_merged_ticket_does_not_land(tmp_path):
+def test_a_later_ticket_that_weakens_a_locked_test_of_a_merged_ticket_lands_only_with_the_test_put_back(tmp_path):
     """Final review, correctness 3: ticket 02 replaced the locked assertion of ticket 01, merged and was pushed.
-    Ticket 09: the check is at the landing, on the tree that is about to land, so the review has no such finding."""
+    Issue #90: the review finds the change; the restore keeps the gate green, so it closes the finding alone."""
     rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [CHEAT]}))
-    assert blocked(rig, "02") == REFUSED_01 and rig.led("locked file changed") == [REFUSED_01], rig.ledger()
-    assert json.loads((rig.folder("02") / "findings-0.json").read_text()) == [] and not rig.calls("02", "fixer")
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and "feat: 02 rows" not in rig.pr_subjects()
-    assert [rig.state()["tickets"][nn]["phase"] for nn in ("01", "03")] == ["merged", "merged"]
+    assert rig.code == 0, rig.ledger()
+    assert rig.led("Ticket 02: critical finding of kind fixture from the driver at tests/test_01.py:1")
+    assert rig.led("Ticket 02:", "the restore closes it") and not rig.led("locked file changed")
+    assert len(rig.calls("02", "test-writer")) == 1 and not rig.calls("02", "fixer")
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and "feat: 02 rows" in rig.pr_subjects()
 
 
 def extends(text, listed):
@@ -286,11 +286,11 @@ def test_the_test_writer_of_a_later_ticket_may_extend_the_locked_file_of_a_merge
 
 
 def test_a_refactor_ticket_may_not_change_a_locked_test_of_a_merged_ticket(tmp_path):
-    """It has no test-writer and no locked file of its own: the landing check is the one that protects ticket 01."""
+    """It has no test-writer and no locked file of its own: the review finds the change, and the restore closes it."""
     files = three(**{"02-quote-fields.md": test_review.ticket("02", "Quote fields", "01", seam="none — refactor", criteria=())})
     rig = Inside(tmp_path, files).run(plan(**{"02/implementer": [CHEAT]}))
-    assert blocked(rig, "02") == REFUSED_01 and not rig.calls("02", "test-writer"), rig.ledger()
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01
+    assert rig.code == 0 and not rig.calls("02", "test-writer"), rig.ledger()
+    assert rig.led("Ticket 02:", "the restore closes it") and on_pr(rig, "tests/test_01.py") == LOCKED_01
     clean = Inside(under(tmp_path, "clean"), files).run(plan())
     assert clean.code == 0 and not clean.led("locked file changed"), clean.ledger()
 
@@ -362,6 +362,35 @@ def test_the_restore_before_a_correction_is_committed_so_the_next_fixer_and_its_
     assert "The driver put back these files at their locked versions" in prompt and "tests/test_01.py" in prompt
 
 
+ADAPTED_01 = LOCKED_01 + "# adapted to the interface of 02\n"
+ADAPTS = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": ADAPTED_01})
+RESTORE = "implement-spec: restore the locked files before the correction"
+
+
+def writes(nn, text, subject):
+    """A test-writer correction that writes tests/test_<nn>.py and lists it."""
+    return {**tw(nn), "files": {f"tests/test_{nn}.py": text}, "commit": subject}
+
+
+def test_a_restored_locked_file_of_a_merged_ticket_that_fails_with_the_new_code_must_be_updated_by_the_correction(tmp_path):
+    """Issue #90: ticket 02 changes an interface that the locked file of merged ticket 01 uses, and its implementer
+    adapts that file. The review finds the change, the driver puts the file back in a commit and gates it: red. The
+    correction gets that gate record, and a correction that leaves the file as it is is rejected."""
+    leaves = writes("02", "def test_x():\n    assert '02' == 'x'  # stronger\n", "test: 02 stronger")
+    updates = writes("01", ADAPTED_01, "test: 01 adapted to 02")
+    updates["report"] = {**updates["report"], "locked": ["tests/test_01.py", "tests/test_02.py"]}  # both attempts' files
+    rig = Inside(tmp_path, three(), gate={"subjects": [RESTORE]}).run(
+        plan(**{"02/implementer": [ADAPTS], "02/test-writer": [tw("02"), leaves, updates]}))
+    assert rig.code == 0, rig.ledger()
+    assert rig.led("Ticket 02: critical finding of kind fixture from the driver at tests/test_01.py:1")
+    assert not rig.calls("02", "fixer")
+    (restore,) = [gate["commit"] for gate in rig.gates() if gate["exit"]]
+    first, second = rig.calls("02", "test-writer")[1:]
+    assert f".agent/implement/02/gate-{restore[:7]}.log" in first["prompt"] and first["head"] == restore
+    assert "the gate is red on the restore commit" in second["prompt"]  # the rejection of the first attempt
+    assert on_pr(rig, "tests/test_01.py") == ADAPTED_01 and "tests/test_01.py" in rig.state()["tickets"]["02"]["locked"]
+
+
 ACCENT = "tests/tést.py"
 
 
@@ -374,7 +403,7 @@ def accented(tmp_path, name, **steps):
     return Inside(under(tmp_path, name), three()).run(plan(**{"01/test-writer": [writer], "01/reviewer": proofs, **steps}))
 
 
-def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_and_at_the_landing(tmp_path):
+def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_for_its_ticket_and_a_later_one(tmp_path):
     """Review round 1, I2: the quoted form of the path matched nothing, so no check saw the file."""
     own = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", ACCENT: WEAK})
     rig = accented(tmp_path, "review", **{"01/implementer": [own], "01/fixer": [{}, {}]})
@@ -383,7 +412,7 @@ def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_and_at
     later = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", ACCENT: WEAK})
     rig = accented(tmp_path, "landing", **{"02/implementer": [later]})
     assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py", ACCENT], rig.ledger()
-    assert blocked(rig, "02") == f"Ticket 02: BLOCKED at the merge: locked file changed: {ACCENT}."
+    assert rig.code == 0 and rig.led(f"Ticket 02: critical finding of kind fixture from the driver at {ACCENT}:1")
     assert "assert 1 == 'y'" in on_pr(rig, ACCENT)
 
 

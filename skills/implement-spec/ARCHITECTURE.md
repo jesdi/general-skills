@@ -68,8 +68,15 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   is not clean, so a restore left in the tree would turn the next gate red and use a fix round. The correction's
   prompt names the restored files (`prompts/restored.md`): this is the one path for a change of an earlier ticket's
   locked test that a later ticket's interface needs.
-- The locked files of merged tickets are checked when a ticket lands (`driver_merge.refused`): the tree that lands
-  must have each of them as the PR tip has it. A ticket's test-writer may change one only when it lists it.
+- The driver, not the correction, decides whether a restored file fails with the ticket's code: in the fix loop it
+  gates the restore commit, whose parent has a green gate. A red gate goes to the correction as evidence
+  (`prompts/restored-red.md`), and a DONE correction must then list a restored file. An agent's judgement of
+  "this test does not fail" missed a red file and led to a refused merge (issue #90). After `overrule-test` the
+  parent has no green gate, so a red gate proves nothing there: the next review catches the file instead.
+- The locked files of merged tickets are checked before each review (`driver_review.merged_changes`): a change is a
+  `fixture` finding, so it goes to a correction, where the restore and its gate decide. They are checked again when
+  a ticket lands (`driver_merge.refused`): the tree that lands must have each of them as the PR tip has it. A
+  ticket's test-writer may change one only when it lists it.
 - A conflict resolution, of a merge or of the rebase, may not change a locked file.
 
 ### The PR branch

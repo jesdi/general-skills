@@ -82,16 +82,21 @@ def refused(tickets: dict, number: str, old: str, new: str) -> str:
                                         if before.get(path) != after.get(path))
 
 
+def changed(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
+    """Each of `paths` that the ticket changed in the tree of `slot`."""
+    # Against the merge base: a file that only the PR branch changed since then is not the ticket's change.
+    base = git(slot, "merge-base", "HEAD", pr_tip).stdout.strip() or pr_tip
+    return names(git(slot, "diff", "--name-only", "-z", base, "--", *paths).stdout) if paths else []
+
+
 def restore(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
     """Put each of `paths` that the ticket changed back to the version of the PR tip, in the tree of `slot` only; a
     file the PR tip does not have is removed. Returns those paths."""
-    # Against the merge base: a file that only the PR branch changed since then is not the ticket's change.
-    base = git(slot, "merge-base", "HEAD", pr_tip).stdout.strip() or pr_tip
-    changed = names(git(slot, "diff", "--name-only", "-z", base, "--", *paths).stdout) if paths else []
-    for path in changed:
+    restored = changed(slot, pr_tip, paths)
+    for path in restored:
         if git(slot, "checkout", "-q", pr_tip, "--", path).returncode:
             git(slot, "rm", "-q", "-f", "--", path)
-    return changed
+    return restored
 
 
 def land(pr_branch: str, new: str, old: str) -> str:
