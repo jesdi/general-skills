@@ -112,11 +112,11 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   provider of the implementer.
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks only after round 4. A red gate on a test-writer correction blocks.
+- The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
+  stays the source of truth: an agent's run of the gate counts for nothing.
 - No test-writer correction runs after round 4 (`driver_fixloop._act_on`): its findings become `finding` questions
   with the others. A correction there would add red locked tests that no fix round makes green, and `accept` could
   not merge the ticket.
-- The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
-  stays the source of truth: an agent's run of the gate counts for nothing.
 
 ### Questions
 
