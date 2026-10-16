@@ -21,7 +21,9 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_merge.py` | Merges by git plumbing, the locked-file check of a landing, the move of the PR ref |
 | `driver_gate.py` | One run of the gate command and its record |
 | `driver_slots.py` | The worktrees that tickets run in, and the `git` helper |
-| `driver_state.py` | `state.json` (the resume contract) and the lock of one driver per repository |
+| `driver_state.py` | `state.json` (the resume contract) and the kernel lock |
+| `driver_names.py` | The names of one run: its ticket branches, its recovery ref and its lock file |
+| `driver_legacy.py` | The take-over of a run that an older driver started; delete it when no such run is left |
 | `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them |
 | `driver_tidy.py`, `driver_summary.py` | The history with one commit per ticket; `summary.md` |
 
@@ -89,7 +91,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - The gate runs only on a commit the driver is about to trust, and one green record settles that commit.
   A gate on a dirty tree, or one that leaves the tree changed or HEAD moved, is red.
 - The end of run rewrites the branch one time, before the first final review, and never after a review. A history
-  that origin has is never rewritten. `refs/implement/recovery` holds the tip before the rewrite.
+  that origin has is never rewritten. `refs/implement-spec/<key>/recovery` holds the tip before the rewrite.
 - A rewrite never changes a file: the driver compares trees (`driver_tidy.same_tree`) before it moves the branch.
 - The push sends the reviewed commit, not the branch name, with no force.
 
@@ -110,8 +112,11 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   `finish_interrupted_move` completes it at the next start.
 - At a resume, git must confirm each recorded tip (`driver_state.verified`). A ticket that git contradicts goes
   back to `implement` from its test-writer commit.
-- The lock of one driver per repository is a kernel lock on a file in the git common directory. The kernel frees
-  it when the process ends, so it is never stale.
+- The lock of one driver per PR branch is a kernel lock on a file in the git common directory. The kernel frees
+  it when the process ends, so it is never stale. Every ref that a run writes has the PR branch in its name
+  as one escaped name component. `driver_names.Names` (`Run.names`) makes every name of a run, so runs on
+  different PR branches share no ref. `driver_legacy.resume` takes over a run that an older driver started, once,
+  after the lock and before any check reads a ref.
 
 ### Agents
 

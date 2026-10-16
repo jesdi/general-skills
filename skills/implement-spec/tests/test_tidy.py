@@ -78,7 +78,7 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     assert [(r["subject"], r["body"].strip()) for r in rows] == [
         (f"feat({nn}): {TITLES[nn]}", f"Ticket: {FILES[nn]}") for nn in order] and order[2] == "02"
     assert len(rig.commits(rig.start, rig.recovery())) == 6
-    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement/recovery^{tree}")
+    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement-spec/feat%2Fcsv/recovery^{tree}")
     assert rig.led("Recovery point: feat/csv was at " + rig.recovery(), ref(rig.repo, "feat/csv^{tree}"))
     assert rig.led("End of run: final-reviewer ran on", FABLE) and rig.led("End of run: the gate is green on " + tip[:7])
     assert {nn: e["tip"] for nn, e in rig.state()["tickets"].items()} == {nn: r["sha"] for nn, r in zip(order, rows)}
@@ -111,7 +111,7 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
 
 
 def test_the_final_review_does_not_start_while_a_ticket_is_not_merged_and_the_ledger_says_so_once(tmp_path):
-    rig = Inside(tmp_path, THREE, gate={"red": ["ticket/01"]})
+    rig = Inside(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan())
     rig.run(plan(), *UNATTENDED)
     assert rig.code == 1 and not rig.final_calls("final-reviewer") and not rig.recovery()

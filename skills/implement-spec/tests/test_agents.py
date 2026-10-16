@@ -1,13 +1,13 @@
 """Agent launch acceptance tests, through `sh run.sh` with a fake runner script or fake claude/codex on PATH.
 
 Interface choices (ticket 02): `--runner <script>` is called as `<script> <role> <prompt> <report>` in the slot
-directory. A plain run (no --dry-run) branches ticket/NN from the PR tip in slot 1, runs the test-writer (unless the
+directory. A plain run (no --dry-run) branches ticket/feat%2Fcsv/NN from the PR tip in slot 1, runs the test-writer (unless the
 Seam is `none — refactor`) then the implementer; from ticket 03 on an accepted ticket goes on to the driver's gate (`true` here) and a
-merge into the PR branch, which deletes `ticket/NN`. Exit 0 when the ticket merges, 1 on BLOCKED.
+merge into the PR branch, which deletes `ticket/feat%2Fcsv/NN`. Exit 0 when the ticket merges, 1 on BLOCKED.
 `--only <role>` runs that one role on the first ticket and stops. `--spec <path>` names the spec for the prompts.
 `--timeout <role>=<minutes>` (repeatable, fractions allowed) overrides a role timeout.
 Ticket 08: the fixture has no `origin`, and a run that merges its ticket ends with the tidy and the final review, so
-`ticket_commits()` reads the ticket's commits from `refs/implement/recovery`, the PR tip from before the tidy.
+`ticket_commits()` reads the ticket's commits from `refs/implement-spec/feat%2Fcsv/recovery`, the PR tip from before the tidy.
 """
 import json
 import os
@@ -134,7 +134,7 @@ class World:
         return path.read_text() if path.exists() else ""
 
     def ticket_commits(self):
-        made = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement/recovery"], cwd=self.repo,
+        made = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement-spec/feat%2Fcsv/recovery"], cwd=self.repo,
                               capture_output=True, text=True).stdout.strip() or "feat/csv"
         return git(self.repo, "rev-list", "--reverse", "--no-merges", f"{self.base}..{made}").split()
 
@@ -175,7 +175,7 @@ def test_runner_is_called_with_role_prompt_report_in_the_slot_directory(env):
     assert role == "implementer" and call["prompt"].strip()
     assert Path(call["cwd"], report).resolve().as_posix().endswith(".agent/implement/01/implementer-0.json")
     assert Path(call["cwd"], report).exists()
-    assert call["cwd"] == str(w.repo.resolve()) and call["branch"] == "ticket/01"
+    assert call["cwd"] == str(w.repo.resolve()) and call["branch"] == "ticket/feat%2Fcsv/01"
 
 
 def test_default_models_file_names_every_role():
@@ -231,7 +231,7 @@ def test_unknown_provider_or_effort_exits_3_naming_role_and_entry_before_any_age
     proc = w.run({"test-writer": [tw()]})
     assert proc.returncode == 3 and not w.calls("test-writer")
     assert not launches(w.tmp, "claude") and not launches(w.tmp, "codex")
-    assert "ticket/01" not in git(w.repo, "branch", "--list")
+    assert "ticket/feat%2Fcsv/01" not in git(w.repo, "branch", "--list")
 
 
 def test_implementer_prompt_carries_pointers_and_only_template_sentences(env):
@@ -284,7 +284,7 @@ def test_a_model_the_account_cannot_use_fails_the_preflight_with_exit_3_before_a
     assert f"model entry openai/gpt-astra@medium: the codex CLI failed the preflight (exit 1): {REFUSED}" \
         in proc.stdout.splitlines(), proc.stdout
     assert not launches(w.tmp, "claude") and not launches(w.tmp, "codex")
-    assert "ticket/01" not in git(w.repo, "branch", "--list") and not w.ledger()
+    assert "ticket/feat%2Fcsv/01" not in git(w.repo, "branch", "--list") and not w.ledger()
 
 
 def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
@@ -368,16 +368,16 @@ def test_head_moved_to_the_pr_branch_resets_the_slot_and_reruns_once(env):
     ok(w.run({"test-writer": [tw()], "implementer": [{"git": [["checkout", "feat/csv"]]}, impl()]}))
     first, second = w.calls("implementer")
     tests_sha = w.ticket_commits()[0]
-    assert (second["branch"], second["head"]) == ("ticket/01", tests_sha)
+    assert (second["branch"], second["head"]) == ("ticket/feat%2Fcsv/01", tests_sha)
     assert any("implementer" in l and "feat/csv" in l for l in w.ledger().splitlines()), w.ledger()
 
 
 def test_a_missing_ticket_branch_is_a_violation_named_in_the_ledger(env):
     w = World(env)
-    gone = {"git": [["checkout", "--detach"], ["branch", "-D", "ticket/01"]]}
+    gone = {"git": [["checkout", "--detach"], ["branch", "-D", "ticket/feat%2Fcsv/01"]]}
     proc = w.run({"test-writer": [tw()], "implementer": [gone, impl()]})
     assert "Traceback" not in proc.stderr
-    assert any("ticket/01" in l and "branch" in l for l in w.ledger().splitlines()), w.ledger()
+    assert any("ticket/feat%2Fcsv/01" in l and "branch" in l for l in w.ledger().splitlines()), w.ledger()
 
 
 def test_log_next_to_report_and_ledger_records_role_entry_duration_and_cost(env):

@@ -1,7 +1,7 @@
-"""Ticket 09 acceptance tests: locked tests are checked on the merge result; one driver per repository.
+"""Ticket 09 acceptance tests: locked tests are checked on the merge result; one driver per PR branch.
 
 All through `sh run.sh --runner <script> --parallel 2` on the three-ticket fixture repository (the rigs of test_review
-and test_final), and through two worktrees of one fixture repository for the run lock. Tickets are ordered with signal
+and test_final), and through two worktrees of one fixture repository, on two PR branches, for the run lock. Tickets are ordered with signal
 files and with `wait_pr_moves`, never with a sleep.
 
 Interface choices (ticket 09):
@@ -17,9 +17,8 @@ Interface choices (ticket 09):
   commit stays open until the reviewer of the other ticket ended, plus a bounded time for that ticket to reach its
   landing. Either order of the two landings is correct, and so is a driver that gives the stale merge commit up;
   a landing after the lock with the weakened file is not, and a landing that is lost is not.
-- the lock sentence is the whole stdout of the second driver, one line, and it names the lock by a path that exists
-  when it is resolved in the second worktree (an absolute path, or a path relative to that worktree).
-- "the second one starts" and "the lock is released": a driver in the other worktree runs its one ticket to exit 0.
+- a driver on another PR branch in another worktree runs its one ticket to exit 0 while the first driver runs, and
+  changes no file and no ref of the first run. The lock of the same PR branch is in test_driver.
 - "never reported as an uncommitted change": no line of `git status --short` in either worktree has `lock` in it.
 """
 import json
@@ -29,6 +28,8 @@ import subprocess
 import time
 
 import pytest
+
+from driver_names import Names
 
 from test_cli import RUN, git, models_file, snapshot, three, ticket
 from test_final import Final
@@ -111,14 +112,14 @@ def test_an_implementer_that_weakens_the_locked_test_of_a_merged_ticket_lands_on
 # ---------------------------------------------------------------- a ticket branch that takes the PR branch in
 
 def takes_in(*more):
-    """03's implementer in slot 2: it waits until the PR branch moved, merges it into ticket/03, then commits."""
+    """03's implementer in slot 2: it waits until the PR branch moved, merges it into ticket/feat%2Fcsv/03, then commits."""
     return {**impl("03", "demo/cli.py"), "wait_pr_moves": True, "git": [["merge", "-q", "--no-edit", "feat/csv"], *more]}
 
 
 def test_a_ticket_that_merged_the_pr_branch_into_itself_lands_with_the_tests_of_the_merged_ticket(tmp_path):
     rig = Review(tmp_path, three()).run(plan(**{"03/implementer": [takes_in()], "03/fixer": NO_REPORT}))
     (call,) = rig.calls("03", "implementer")
-    assert call["cwd"] == str(rig.slot2) and holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/03"
+    assert call["cwd"] == str(rig.slot2) and holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/feat%2Fcsv/03"
     assert not rig.led("locked file changed"), rig.ledger()
     assert rig.code == 0, rig.output()
     assert phase(rig, "03") == "merged" and on_pr(rig, T01) == LOCKED_01 and on_pr(rig, T03) == LOCKED_03
@@ -128,7 +129,7 @@ def test_a_ticket_that_merged_the_pr_branch_and_deleted_a_locked_test_of_the_mer
     rig = Review(tmp_path, three())
     rig.run(plan(**{"03/implementer": [takes_in(["rm", "-q", T01])], "03/fixer": NO_REPORT}))
     (call,) = rig.calls("03", "implementer")
-    assert holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/03"
+    assert holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/feat%2Fcsv/03"
     assert rig.code == 0 and restored(rig, "03", T01), rig.output()
     assert phase(rig, "01") == "merged" and on_pr(rig, T01) == LOCKED_01
 
@@ -297,44 +298,46 @@ def until(done, seconds=30):
         time.sleep(0.02)
 
 
-def world(*rigs):
-    """Every file of each worktree, and every ref and worktree HEAD of the one repository."""
-    return ([snapshot(r.repo) for r in rigs], git(rigs[0].repo, "for-each-ref"), git(rigs[0].repo, "worktree", "list"))
-
-
 def no_lock_is_dirty(*rigs):
     for rig in rigs:
         status = git(rig.repo, "status", "--short")
         assert "lock" not in status, status
 
 
-def test_a_second_driver_in_another_worktree_exits_3_naming_the_lock_and_starts_when_the_first_ended(tmp_path):
+def first_run_refs(rig):
+    """The refs of the run on feat/csv: its PR branch, its ticket branches and its recovery ref."""
+    names = Names("feat/csv")
+    refs = git(rig.repo, "for-each-ref", "--format=%(refname) %(objectname)").splitlines()
+    return [ref for ref in refs if ref.split()[0] in ("refs/heads/feat/csv", names.recovery)
+            or ref.startswith(f"refs/heads/{names.ticket('')}")]
+
+
+def test_a_driver_on_another_pr_branch_in_another_worktree_runs_while_the_first_runs(tmp_path):
+    """Runs on different PR branches share no state.json, no slot and no ref: the second one ends while the first
+    holds both its slots, and leaves each file and each ref of the first as it was."""
     first, second = pair(tmp_path)
     held = {f"{nn}/test-writer": [{**tw(nn), "wait": ["go"]}] for nn in ("01", "03")}
     proc = start(first, plan(**held))
     try:
         until(lambda: len(first.calls(role="test-writer")) == 2)  # the first driver holds both its slots in a role
-        before = world(first, second)
+        before = (snapshot(first.repo), first_run_refs(first))
+        assert [ref for ref in before[1] if "/ticket/" in ref], before[1]  # the first run has its ticket branches
         second.run(OTHER)
-        assert second.code == 3, second.output()
-        (sentence,) = second.out.splitlines()
-        named = [word.rstrip(".,;:") for word in sentence.split() if "/" in word or word.rstrip(".,;:").endswith("lock")]
-        assert "lock" in sentence and any((second.repo / word).is_file() for word in named), sentence
-        assert world(first, second) == before and not second.calls()
+        assert second.code == 0 and second.calls("04", "implementer"), second.output()
+        assert (snapshot(first.repo), first_run_refs(first)) == before
+        assert not git(second.repo, "branch", "--list", "ticket/feat%2Fother/*")  # the merge deleted ticket 04's branch
         no_lock_is_dirty(first, second)
         (first.rig / "sig/go").touch()
         out, _ = proc.communicate(timeout=120)
     finally:
         ended(proc)
     assert proc.returncode == 0, out
-    second.run(OTHER)
-    assert second.code == 0 and second.calls("04", "implementer"), second.output()
     no_lock_is_dirty(first, second)
 
 
 ENDS = {
     0: (plan(), {}, ()),
-    1: (plan(), {"red": ["ticket/01"]}, ()),
+    1: (plan(), {"red": ["ticket/feat%2Fcsv/01"]}, ()),
     2: (plan(**{"01/implementer": [contradicted()]}), {}, ()),
     3: (plan(), {}, ("--prepare", "false")),  # slot 2 cannot be made: the run has started and holds the lock
     130: (plan(**{"01/test-writer": [{**tw("01"), "wait": ["never"]}]}), {}, ()),

@@ -10,7 +10,7 @@ Interface choices (ticket 06):
   the rebase and the push (ticket 08): test_amendments.py holds those tests.
 - its agents report into `.agent/implement/final/`, so the fake runner keys them `final/final-reviewer`,
   `final/fixer` and `final/conflict`; gate records there are `gate-<first 7 hex>.log`.
-- recovery point: before the rebase the driver sets `refs/implement/recovery` to the PR tip and writes the ledger
+- recovery point: before the rebase the driver sets `refs/implement-spec/feat%2Fcsv/recovery` to the PR tip and writes the ledger
   sentence "Recovery point: ... <sha>". An ended run leaves the ref in place.
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
 - the final fixer's `commits` hold `{"sha", "ticket"}` objects, and the driver renames each fixer commit to
@@ -44,7 +44,7 @@ if step.get("hold"):
     before = git("rev-parse", "feat/csv")
     time.sleep(step["hold"])
     rec["held"] = dict(before=before, after=git("rev-parse", "feat/csv"),
-                       recovery=git("rev-parse", "--verify", "-q", "refs/implement/recovery"))
+                       recovery=git("rev-parse", "--verify", "-q", "refs/implement-spec/feat%2Fcsv/recovery"))
 for cmd in step.get("git", []):''', 1).replace(
     'sha = ""\nif "commit" in step:',
     '''sha = ""
@@ -142,7 +142,7 @@ class Final(Review):
         return ref(self.repo, "feat/csv")
 
     def recovery(self):
-        return ref(self.repo, "refs/implement/recovery")
+        return ref(self.repo, "refs/implement-spec/feat%2Fcsv/recovery")
 
     def commits(self, base, tip="feat/csv"):
         raw = git(self.repo, "log", "--reverse", "--no-merges", "--format=%H%x1f%s%x1f%b%x1e", f"{base}..{tip}")
@@ -223,7 +223,7 @@ def test_seven_commits_in_merge_order_are_tidied_into_three_ticket_commits_with_
     rows = rig.commits(rig.start)
     assert [r["subject"] for r in rows] == [f"feat({nn}): {TITLES[nn]}" for nn in ("01", "03", "02")]
     assert all(f"Ticket: {FILES[nn]}" in r["body"] for nn, r in zip(("01", "03", "02"), rows))
-    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement/recovery^{tree}")
+    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement-spec/feat%2Fcsv/recovery^{tree}")
 
 
 def test_one_gate_record_exists_for_the_tidied_tip_and_the_final_reviewer_is_pointed_at_it(story):
@@ -440,7 +440,7 @@ def test_unattended_with_everything_validated_pushes_once_opens_the_pr_and_write
 
 
 def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
-    rig = Final(tmp_path, THREE, gate={"red": ["ticket/01"]})
+    rig = Final(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan(), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")

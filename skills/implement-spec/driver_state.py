@@ -1,6 +1,6 @@
 """state.json, the resume contract: one lock, every write a read-modify-write, published by rename.
 
-    {"run": {revision, pr_branch, gates, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
+    {"run": {revision, pr_branch, schema, gates, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held}}}"""
 from __future__ import annotations
@@ -13,8 +13,10 @@ import uuid
 from pathlib import Path
 from typing import IO
 
-from driver_slots import git, path
+from driver_names import Names
+from driver_slots import ancestor, git, on_branch, path
 
+SCHEMA = 2  # the version of this contract; 2: the names of driver_names. A run of an older driver has none.
 PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge", "merged", "blocked")
 
 
@@ -42,7 +44,7 @@ class State:
         """Create the file for a new run, or add the tickets a resumed run does not know yet."""
         def change(state: dict) -> None:
             state.setdefault("run", {
-                "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "gates": 0, "stops": 0, "agents": [],
+                "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "schema": SCHEMA, "gates": 0, "stops": 0, "agents": [],
                 "questions": [], "start": git(".", "rev-parse", f"refs/heads/{pr_branch}").stdout.strip(),
                 "landed": [], "final": _final()})
             for key, value in _final().items():  # a run of an older driver lacks the newer keys
@@ -67,20 +69,17 @@ class State:
         return self.update(lambda state: state["tickets"][number].update(fields))["tickets"][number]
 
 
-def lock(path: Path) -> IO | None:
-    """The exclusive kernel lock on `path`, held while the returned file is open; None when another process has it."""
+def lock(path: Path, shared: bool = False) -> IO | None:
+    """The kernel lock on `path`, exclusive or `shared`, held while the returned file is open; None when another
+    process has it in a way that excludes this one."""
     path.parent.mkdir(parents=True, exist_ok=True)
     held = path.open("a")
     try:
-        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(held, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
     except BlockingIOError:
         held.close()
         return None
     return held
-
-
-def _ancestor(commit: str, of: str) -> bool:
-    return git(".", "merge-base", "--is-ancestor", commit, of).returncode == 0
 
 
 def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
@@ -90,7 +89,7 @@ def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
         return {}, ""
     # The branch of a merged ticket is deleted, so its commits are trusted only while the PR branch has them.
     where, word = (pr_branch, "in") if phase == "merged" else (branch, "on")
-    if _ancestor(tip, where):
+    if ancestor(tip, where):
         return {}, ""
     return {"phase": "implement", "tip": entry["test_writer_sha"]}, f"the recorded tip {tip[:7]} is not {word} {where}"
 
@@ -102,7 +101,7 @@ def kept(state: dict) -> dict[str, int]:
     for number, entry in state.get("tickets", {}).items():
         if (entry["phase"] in ("test-writer", "implement") or number in asking) and entry["slot"]:
             slot = path(entry["slot"])
-            on = git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
-            if on == f"ticket/{number}" and git(slot, "status", "--porcelain").stdout.strip():
+            on = on_branch(slot)
+            if on == Names(state["run"]["pr_branch"]).ticket(number) and git(slot, "status", "--porcelain").stdout.strip():
                 found[number] = entry["slot"]
     return found

@@ -24,6 +24,7 @@ import driver_report
 import driver_review
 import driver_slots
 import driver_state
+from driver_names import Names
 from driver_slots import git, names
 
 OUT = Path(".agent/implement")
@@ -87,6 +88,10 @@ class Run:
     merging: threading.Lock = field(default_factory=threading.Lock)  # held for one landing: merges are serial
     asks: dict[str, Ask] = field(default_factory=dict)  # ticket number -> its pending stop
     halted: list[str] = field(default_factory=list)  # why the run starts no other agent; [] while it goes on
+
+    @property
+    def names(self) -> Names:
+        return Names(self.pr)
 
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
@@ -191,8 +196,8 @@ def _restore_if_changed(number: str, slot: str, branch: str, tip: str, runs_agai
 
 def _reset_if_moved(slot: str, branch: str, tip: str) -> str:
     """After an agent: "" when the slot is on `branch` and still holds `tip`; else reset it and say what was wrong."""
-    head = git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
-    if git(slot, "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode:
+    head = driver_slots.on_branch(slot)
+    if not driver_slots.branch_exists(branch):
         problem = f"branch {branch} is missing"
     elif head != branch:
         problem = f"HEAD is on {head or 'a detached commit'} instead of {branch}"

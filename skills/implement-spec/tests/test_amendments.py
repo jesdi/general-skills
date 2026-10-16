@@ -5,7 +5,7 @@ with and without its bare `origin`, and the rig of test_review with and without 
 
 Interface choices (ticket 08):
 - with no `origin`, the tidied commits sit on the commit the PR branch had when the run started (nothing to rebase
-  onto), and `refs/implement/recovery` holds the PR tip from before the tidy, as with an `origin`.
+  onto), and `refs/implement-spec/feat%2Fcsv/recovery` holds the PR tip from before the tidy, as with an `origin`.
 - the one ledger sentence about the missing remote names `origin` and says that the rebase and the push were skipped.
 - a refused start (exit 3) prints its reason on stdout or stderr: `origin` for a push that has no remote; for the
   correctness role one line that names `correctness` and `codex`, or `correctness` and each entry of its list.
@@ -39,7 +39,7 @@ def test_with_no_origin_the_branch_is_tidied_gated_and_reviewed_with_no_rebase_a
     rows = rig.commits(rig.start)
     assert [r["subject"] for r in rows] == ["feat(01): Export rows", "feat(02): Quote fields"]
     assert ref(rig.repo, f"{rows[0]['sha']}~1") == rig.start, "no rebase: the ticket commits sit on the branch's start"
-    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement/recovery^{tree}")
+    assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement-spec/feat%2Fcsv/recovery^{tree}")
     records = sorted(p.name for p in (rig.repo / ".agent/implement/final").glob("gate-*.log"))
     assert records == [f"gate-{tip[:7]}.log"], records
     (gate,) = [g for g in rig.gates() if g["commit"] == tip]

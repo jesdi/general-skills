@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import driver_agents
-from driver_slots import git, head, names
+from driver_slots import git, head, names, on_branch
 from driver_tickets import Ticket
 
 # The correctness pass reads this file of the review-diff skill, which is installed next to this one.
@@ -131,7 +131,7 @@ def restore(slot: str, branch: str, tip: str) -> None:
 
 def disturbed(slot: str, branch: str, tip: str) -> str:
     """"" when the slot is still on `branch` at `tip` with a clean tree, else what the read-only agents left."""
-    if git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip() != branch or head(slot) != tip:
+    if on_branch(slot) != branch or head(slot) != tip:
         return f"the slot is no longer on {branch} at {tip[:7]}"
     left = [line[3:] for line in git(slot, "status", "--porcelain").stdout.splitlines()]
     return f"the tree is not as the review found it: {', '.join(left)}" if left else ""

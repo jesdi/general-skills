@@ -14,8 +14,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +27,7 @@ import driver_decisions
 import driver_final
 import driver_fixloop
 import driver_graph
+import driver_legacy
 import driver_merge
 import driver_review
 import driver_review_page
@@ -32,6 +35,7 @@ import driver_slots
 import driver_state
 import driver_summary
 import driver_tickets
+from driver_names import Names
 from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
 from driver_slots import git
 from driver_tickets import Ticket
@@ -59,7 +63,7 @@ def _roles_left(ticket: Ticket, phase: str, only: str | None) -> list[str]:
 
 def _check_out_ticket(ticket: Ticket, slot_number: int, entry: dict, run: Run) -> str:
     """Put the ticket branch in the slot and return the commit its next role starts from."""
-    slot, branch = driver_slots.path(slot_number), f"ticket/{ticket.number}"
+    slot, branch = driver_slots.path(slot_number), run.names.ticket(ticket.number)
     if run.kept.get(ticket.number) == slot_number:
         # The slot holds the uncommitted work of an interrupted role: the branch and the tree stay as they are.
         return entry["tip"] or git(slot, "merge-base", "HEAD", run.tip()).stdout.strip()
@@ -80,7 +84,8 @@ def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
     """The pointers every prompt of the ticket gets. An agent works in its slot, so paths are relative to it."""
     folder = OUT / ticket.number
     return {"spec": os.path.relpath(run.args.spec, slot), "seam": ticket.seam, "pr_branch": run.pr,
-            "branch": f"ticket/{ticket.number}", "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
+            "branch": run.names.ticket(ticket.number),
+            "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
             "correctness": str(driver_review.CORRECTNESS), "gate": run.args.gate,
             "blocked_report": os.path.relpath(_blocked_report(ticket.number, run), slot),
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
@@ -152,7 +157,7 @@ def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list
 
 def _merge_commit(ticket: Ticket, slot: str, run: Run, tip: str, may_resolve: bool) -> _Landing:
     """Merge the ticket tip with the PR tip into a commit that no ref holds yet."""
-    message = f"Merge ticket/{ticket.number} into {run.pr}"
+    message = f"Merge {run.names.ticket(ticket.number)} into {run.pr}"
     pr_tip = run.tip()
     commit, error = driver_merge.commit(pr_tip, tip, message)
     if not error:
@@ -171,7 +176,8 @@ def _merge_commit(ticket: Ticket, slot: str, run: Run, tip: str, may_resolve: bo
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> _Landing:
     """The commit to land, with the locked-file check passed and the gate green. Call it under the merge lock."""
     number = ticket.number
-    git(slot, "checkout", "-q", f"ticket/{number}")  # an earlier try left the slot on its merge commit
+    # An earlier try left the slot on its merge commit.
+    git(slot, "checkout", "-q", run.names.ticket(number))
     tip = run.state.ticket(number, phase="merge")["tip"]
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
     refusal = driver_merge.refused(run.state.read()["tickets"], number, landing.pr_tip, landing.commit)
@@ -208,7 +214,7 @@ def _record_landing(state: dict, number: str, pr_tip: str) -> None:
 
 def _merge(ticket: Ticket, slot: str, run: Run) -> None:
     """Land the reviewed ticket tip on the PR branch, then delete the ticket branch."""
-    number, branch = ticket.number, f"ticket/{ticket.number}"
+    number, branch = ticket.number, run.names.ticket(ticket.number)
     # The merge gate and the conflict agent run under the lock: the commit the gate saw is the one that lands.
     with run.merging, during("the merge"):
         landing = _land(ticket, slot, run)
@@ -348,27 +354,16 @@ def _work(tickets: list[Ticket], slots: int, run: Run) -> tuple[bool, list[str]]
 
 # ---------------------------------------------------------------- before the first agent: resume and answers
 
-def _pr_branch(state: driver_state.State) -> tuple[str, str]:
-    """(the PR branch, "") or ("", why the run cannot start)."""
-    here = git(".", "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
-    # An interrupted run leaves slot 1 on a ticket branch or detached, so the record names the PR branch.
-    pr = state.read()["run"]["pr_branch"] if state.path.exists() else here
-    if not pr:
-        return "", "the PR worktree is on a detached HEAD: check out the PR branch"
-    if here not in ("", pr) and not here.startswith("ticket/"):
-        return "", f"{state.path} records a run on {pr}, not on {here}: check out {pr}, or remove {OUT}"
-    return pr, ""
-
-
 def _resume_error(number: str, state: driver_state.State) -> str:
     """Check the record of one ticket against git. A ticket that git contradicts goes back to its last verified
     phase; "" or the error that stops the run."""
-    entry, branch = state.read()["tickets"][number], f"ticket/{number}"
+    run, entry = state.read()["run"], state.read()["tickets"][number]
+    branch = Names(run["pr_branch"]).ticket(number)
     if entry["phase"] not in driver_state.PHASES:
         return f"{state.path}: ticket {number} has the unknown phase {entry['phase']!r}"
-    if entry["phase"] == "pending" and git(".", "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode == 0:
+    if entry["phase"] == "pending" and driver_slots.branch_exists(branch):
         return f"branch {branch} exists and {state.path} does not record it: delete or rename the branch"
-    fields, why = driver_state.verified(entry, branch, state.read()["run"]["pr_branch"])
+    fields, why = driver_state.verified(entry, branch, run["pr_branch"])
     if fields:
         state.ticket(number, **fields)
         start = fields["tip"][:7] if fields["tip"] else "the PR tip"
@@ -376,15 +371,12 @@ def _resume_error(number: str, state: driver_state.State) -> str:
     return ""
 
 
-def _resume(tickets: list[Ticket], state: driver_state.State, slots: int, args, kept: dict) -> tuple[str, list[str]]:
-    """Start or resume state.json and make the slots: (the PR branch, the errors that stop the run)."""
-    pr, error = _pr_branch(state)
-    if error:
-        return "", [error]
+def _resume(tickets: list[Ticket], state: driver_state.State, pr: str, slots: int, args, kept: dict) -> list[str]:
+    """Start or resume state.json on the PR branch `pr` and make the slots: the errors that stop the run."""
     state.start(pr, [ticket.number for ticket in tickets])
     driver_final.finish_interrupted_move(state, pr)
     errors = [error for error in (_resume_error(ticket.number, state) for ticket in tickets) if error]
-    return pr, errors or driver_slots.setup(slots, args.prepare, set(kept.values()))
+    return errors or driver_slots.setup(slots, args.prepare, set(kept.values()))
 
 
 def _publish_questions(run: dict) -> str:
@@ -474,10 +466,10 @@ def _exit_code(final: dict, args, end_blocked: bool) -> int:
     return code
 
 
-def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[str, int]) -> int:
+def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[str, int], pr: str) -> int:
     state = driver_state.State(STATE)
     slots = 1 if args.only else min(args.parallel, len(tickets))
-    pr, errors = _resume(tickets, state, slots, args, kept)
+    errors = _resume(tickets, state, pr, slots, args, kept)
     errors = errors or _apply_answers(state, args)
     for error in errors:
         print(error)
@@ -564,7 +556,7 @@ def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[s
         errors.append("--spec is required: the spec file the prompts point at")
     if args.parallel < 1:
         errors.append("--parallel must be 1 or more")
-    kept = driver_state.kept(json.loads(STATE.read_text())) if STATE.exists() else {}
+    kept = driver_state.kept(driver_state.State(STATE).read()) if STATE.exists() else {}
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)
     tickets, ticket_errors = driver_tickets.parse(args.tickets)
@@ -579,16 +571,61 @@ def _print_width(tickets: list[Ticket]) -> None:
     print(f"max frontier width: {driver_tickets.max_frontier_width(tickets)}")
 
 
-def _lock_file(args: argparse.Namespace) -> Path | None:
-    """The file one driver per repository locks: in the git common directory, which every worktree shares and
-    `git status` never reports. None, with each error printed, when the call is not valid."""
+def _run_branch() -> str:
+    """The PR branch the run in this worktree is on: the one state.json records, else the one checked out."""
+    # HEAD first: a driver writes state.json before it moves HEAD, so a HEAD that a run moved has a state.json.
+    here = driver_slots.on_branch(".")
+    return driver_state.State(STATE).read()["run"]["pr_branch"] if STATE.exists() else here
+
+
+def _start_errors(pr: str) -> list[str]:
+    """Under the lock of `pr`, before any check reads a ref: the errors that stop the run, or [].
+
+    The run of this worktree must still be on `pr`, a run that an older driver started gets its new names first,
+    and slot 1 must be on `pr` or where an interrupted run left it: on one of its ticket branches, or detached."""
+    if _run_branch() != pr:
+        return [f"the run in this worktree left {pr} while the driver took its lock: run the driver again"]
+    if errors := driver_legacy.resume(driver_state.State(STATE)):
+        return errors
+    here = driver_slots.on_branch(".")
+    # An older driver named its ticket branches `ticket/NN`, and a branch that the resume does not rename stays so.
+    if here in ("", pr) or here.startswith(Names(pr).ticket("")) or re.fullmatch(r"ticket/\d+", here):
+        return []
+    return [f"{STATE} records a run on {pr}, not on {here}: check out {pr}, or remove {OUT}"]
+
+
+def _common_dir_and_branch(args: argparse.Namespace) -> tuple[Path, str] | None:
+    """(the git common directory, which every worktree shares and `git status` never reports, and the PR branch of
+    the run): what names the lock. None, with each error printed, when the call is not valid."""
     common = git(".", "rev-parse", "--git-common-dir")
     # A first call is validated before the lock, so a wrong call makes no file. After an earlier run the lock comes
     # first: the driver that holds it changes what the validation reads.
     first_call = common.returncode or not OUT.exists()
     if first_call and not _validated(args):
         return None
-    return Path(common.stdout.strip()).resolve() / "implement-spec.lock"
+    if not (pr := _run_branch()):
+        print("the PR worktree is on a detached HEAD: check out the PR branch")
+        return None
+    if pr.startswith("ticket/"):  # a slot of another run: its driver owns the worktree and the branch
+        print(f"the PR worktree is on the ticket branch {pr} of a run: check out the PR branch")
+        return None
+    return Path(common.stdout.strip()).resolve(), pr
+
+
+def _hold(common: Path, pr: str) -> tuple[ExitStack | None, str]:
+    """Take the locks of a run on `pr`: (the stack that holds them until it closes, "") or (None, why another
+    driver stops this one)."""
+    with ExitStack() as stack:
+        lock_file = Names(pr).lock_file(common)
+        if not (held := driver_state.lock(lock_file)):
+            return None, (f"another driver runs on {pr}: it holds the lock {lock_file}. Wait until it ends, then "
+                          "run the driver again.")
+        stack.enter_context(held)
+        older, error = driver_legacy.lock(common)
+        if not older:
+            return None, error
+        stack.enter_context(older)
+        return stack.pop_all(), ""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -597,15 +634,19 @@ def main(argv: list[str] | None = None) -> int:
         if valid := _validated(args):
             _print_width(valid[0])
         return 0 if valid else 3
-    if not (lock_file := _lock_file(args)):
+    if not (locking := _common_dir_and_branch(args)):
         return 3
-    held = driver_state.lock(lock_file)
+    common, pr = locking
+    held, error = _hold(common, pr)
     if not held:
-        print(f"implement-spec: another driver runs in this repository: it holds the lock {lock_file}. Wait until it "
-              "ends, then run the driver again.")
+        print(f"implement-spec: {error}")
         return 3
     with held:
-        # Only what is read under the lock is trusted: no other driver changes state.json, the slots or the refs.
+        # Only what is read under the lock is trusted: no other driver changes state.json, the slots, the PR branch
+        # or its ticket branches. Drivers on other PR branches touch none of them.
+        if errors := _start_errors(pr):
+            print("".join(f"implement-spec: {error}\n" for error in errors), end="")
+            return 3
         if not (valid := _validated(args)):
             return 3
         tickets, models, kept = valid
@@ -614,7 +655,7 @@ def main(argv: list[str] | None = None) -> int:
             print("".join(error + "\n" for error in errors), end="")
             return 3
         _print_width(tickets)
-        return _run(tickets, models, args, kept)
+        return _run(tickets, models, args, kept, pr)
 
 
 if __name__ == "__main__":

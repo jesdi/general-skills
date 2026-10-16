@@ -23,7 +23,9 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
 
-One driver runs in a repository at a time. The driver holds a kernel file lock on `implement-spec.lock` in the git common directory (`git rev-parse --git-common-dir`) for the whole run. Each worktree of the repository shares that directory, so a second driver in the same worktree or in another one ends with exit 3 and names the lock file. The file is not in a worktree, so `git status` never shows it. The lock ends with its process, so a driver that was killed leaves no lock behind. `--dry-run` takes no lock. A wrong call in a worktree that has no `.agent/implement/` takes no lock and makes no file; where an earlier run left that folder, the driver takes the lock first, then makes the checks.
+One driver runs on a PR branch at a time. The driver holds a kernel file lock on `implement-spec/<key>.lock` in the git common directory (`git rev-parse --git-common-dir`) for the whole run. `<key>` is the PR branch as one name component: `%` becomes `%25` and `/` becomes `%2F`, so `feat/x` gives `feat%2Fx`. Each worktree of the repository shares that directory, so a second driver on the same PR branch, in the same worktree or in another one, ends with exit 3 and names the lock file. Drivers on different PR branches run at the same time: each ticket branch is `ticket/<key>/<NN>` and the recovery ref is `refs/implement-spec/<key>/recovery`, so two runs share no ref. Git refs are a tree, and one component per PR branch keeps the refs of one run from being a folder of the refs of another. The file is not in a worktree, so `git status` never shows it. The lock ends with its process, so a driver that was killed leaves no lock behind. `--dry-run` takes no lock. A wrong call in a worktree that has no `.agent/implement/` takes no lock and makes no file; where an earlier run left that folder, the driver takes the lock first, then makes the checks.
+
+A driver before this change named the ticket branches `ticket/<NN>` and the recovery ref `refs/implement/recovery`. An older driver holds `implement-spec.lock` in the git common directory alone for its whole run. Each newer driver also holds that file, shared, for its whole run: newer drivers do not stop each other, but while an older driver runs in the repository, a newer one ends with exit 3 and names that lock, and while a newer one runs, no older driver starts. A run that the newer driver started has `schema` 2 in `state.json`. When the newer driver resumes a run with no `schema`, it renames each `ticket/<NN>` that holds the start commit of the run and the tip that the run recorded, and moves `refs/implement/recovery` when it holds the recovery point of the run. It writes one ledger sentence for each, and then `schema`. A ref that git cannot rename ends the run with exit 3 and git's error, and nothing is lost.
 
 ## Flags
 
@@ -56,7 +58,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
 | 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
-| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs in the same repository. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
+| 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs on the same PR branch. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
 | 4 | Stopped: the CLI of an agent failed two times and wrote no report (for example, the account cannot use the model). The driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI or the model entry, then run the same command again to resume. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
 
@@ -75,7 +77,7 @@ Everything is under `.agent/`, which is never committed.
 | Path | Content |
 |---|---|
 | `.agent/implement/state.json` | The resume contract: the run record and one record for each ticket (`driver_state.py`). |
-| `<git common directory>/implement-spec.lock` | An empty file, not in the worktree. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
+| `<git common directory>/implement-spec/<key>.lock` | An empty file, not in the worktree. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
 | `.agent/implement/ledger.md` | One plain sentence for each event. Only the driver writes it, and it reads no fact from it. |
 | `.agent/implement/summary.md` | The result in sentences, and the measurement table: gates, agents, wall time, fix rounds, human stops, cost. |
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |
@@ -88,7 +90,8 @@ Everything is under `.agent/`, which is never committed.
 | `.agent/implement-review.html` | The page with the open questions. |
 | `.agent/implement-answers.json` | The answers: `{"v": 1, "stage": "implement", "submitted": …, "revision": …, "answers": {…}}`. |
 | `.agent/worktrees/slot-K/` | Slots 2..N. Slot 1 is the PR worktree. |
-| `refs/implement/recovery` | A git ref: the PR tip before the tidy. |
+| `refs/implement-spec/<key>/recovery` | A git ref: the PR tip before the tidy. |
+| `ticket/<key>/<NN>` | The branch of one ticket. The driver deletes it when the ticket is merged. |
 
 ## Roles of one ticket
 
@@ -131,7 +134,7 @@ A red gate on the commit of the implementer or of a fixer is a critical finding 
 
 The end of run starts only when every ticket is merged and every slot is idle. Its agents work in slot 1.
 
-1. **Tidy.** The driver saves the PR tip in `refs/implement/recovery`. It then makes one commit for each ticket, in merge order, named `feat(NN): <title>`. Each commit holds the tests, the implementation and the fixes of its ticket. The tree of the new tip must equal the tree of the old tip, or the branch stays as it was.
+1. **Tidy.** The driver saves the PR tip in `refs/implement-spec/<key>/recovery`. It then makes one commit for each ticket, in merge order, named `feat(NN): <title>`. Each commit holds the tests, the implementation and the fixes of its ticket. The tree of the new tip must equal the tree of the old tip, or the branch stays as it was.
 2. **Rebase** onto the fetched tip of the default branch of `origin`. A conflict goes to the conflict agent (`prompts/rebase-conflict.md`) once, and the rebased tip is gated.
 3. **Gate**, then the **final-reviewer** (`prompts/final-reviewer.md`) on the whole range, with the method of the `review-diff` skill. It gets the minor findings of the tickets and the rulings of the operator.
 4. **Fix batch.** Critical and important findings go to one fixer (`prompts/final-fixer.md`). The driver names each of its commits `fix(NN): …` from the ticket in the report. Then the gate, then one scoped review of those commits.

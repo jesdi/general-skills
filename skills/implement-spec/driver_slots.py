@@ -22,6 +22,19 @@ def head(slot: str) -> str:
     return git(slot, "rev-parse", "HEAD").stdout.strip()
 
 
+def on_branch(slot: str) -> str:
+    """The branch the slot has checked out; "" when its HEAD is detached."""
+    return git(slot, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
+
+
+def ancestor(commit: str, of: str) -> bool:
+    return git(".", "merge-base", "--is-ancestor", commit, of).returncode == 0
+
+
+def branch_exists(branch: str) -> bool:
+    return git(".", "rev-parse", "-q", "--verify", f"refs/heads/{branch}").returncode == 0
+
+
 def path(number: int) -> str:
     return "." if number == 1 else f".agent/worktrees/slot-{number}"
 
