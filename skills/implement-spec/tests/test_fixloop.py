@@ -426,7 +426,7 @@ def test_four_rounds_then_blocked_with_the_escalation_at_round_3(tmp_path):
     assert rig.ledger().count(f"Ticket 01 round 3: escalated to {FABLE}.") == 1
     assert [len(rig.led("fixer ran on", entry)) for entry in (OPUS, FABLE)] == [2, 2]
     tips = [rig.sha("01", "implementer")] + [call["sha"] for call in rig.calls("01", "fixer")]
-    assert [gate["commit"] for gate in rig.gates() if gate["branch"] == "ticket/01"] == tips
+    assert [gate["commit"] for gate in rig.gates() if gate["branch"] == "ticket/feat%2Fcsv/01"] == tips
     assert rig.state()["tickets"]["01"]["tip"] == tips[-1] and not rig.calls("02")
     assert rig.state()["tickets"]["03"]["phase"] == "merged"
 
@@ -533,13 +533,13 @@ def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_t
 
 DIRTY = [({"files": {"junk.txt": "x\n", "demo/export.py": "mutated\n"}},
           "the tree is not as the review found it: demo/export.py, junk.txt"),
-         ({"git": [["checkout", "-q", "--detach"]]}, "the slot is no longer on ticket/01 at "),
-         ({"commit": "sneak", "files": {"demo/export.py": "x = 2\n"}}, "the slot is no longer on ticket/01 at ")]
+         ({"git": [["checkout", "-q", "--detach"]]}, "the slot is no longer on ticket/feat%2Fcsv/01 at "),
+         ({"commit": "sneak", "files": {"demo/export.py": "x = 2\n"}}, "the slot is no longer on ticket/feat%2Fcsv/01 at ")]
 
 
 def slot_state(rig):
     git = lambda *args: subprocess.run(["git", "-C", str(rig.repo), *args], capture_output=True, text=True).stdout.strip()
-    return git("status", "--porcelain"), git("rev-parse", "ticket/01")
+    return git("status", "--porcelain"), git("rev-parse", "ticket/feat%2Fcsv/01")
 
 
 @pytest.mark.parametrize("step, left", DIRTY)
@@ -550,7 +550,7 @@ def test_a_reviewer_that_changes_the_slot_is_run_once_more_on_the_restored_tip(t
     (line,) = rig.led("Ticket 01: a read-only role broke its rule:")
     assert left in line and line.endswith(f"the driver restored the slot to {tip[:7]} and runs the review again.")
     first, second = rig.calls("01", "reviewer")
-    assert (second["branch"], second["head"], second["status"]) == ("ticket/01", tip, "")
+    assert (second["branch"], second["head"], second["status"]) == ("ticket/feat%2Fcsv/01", tip, "")
     assert rig.tip() == tip and not (rig.repo / "junk.txt").exists()
 
 

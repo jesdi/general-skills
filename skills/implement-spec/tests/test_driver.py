@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import pytest
 import driver
 import driver_agents
 import driver_report
+import driver_state
 
 from conftest import GIT, ticket
 
@@ -33,7 +35,7 @@ def test_a_run_without_dry_run_needs_the_spec(repo, capsys):
     repo(t01=ticket("01"))
     assert driver.main(["--gate", "make check"]) == 3
     assert capsys.readouterr().out == "--spec is required: the spec file the prompts point at\n"
-    assert "ticket/01" not in subprocess.run(["git", "branch"], capture_output=True, text=True).stdout
+    assert "ticket/feat%2Fx/01" not in subprocess.run(["git", "branch"], capture_output=True, text=True).stdout
 
 
 def test_every_environment_and_ticket_error_is_listed_together(repo, capsys):
@@ -158,7 +160,7 @@ def ledger_of(tmp_path):
 
 def walked(*short):
     """The PR tip as the tickets left it: the recovery point of the tidy when there is one, else the tip of feat/x."""
-    made = subprocess.run(["git", "rev-parse", *short, "-q", "--verify", "refs/implement/recovery"], capture_output=True, text=True)
+    made = subprocess.run(["git", "rev-parse", *short, "-q", "--verify", "refs/implement-spec/feat%2Fx/recovery"], capture_output=True, text=True)
     return made.stdout.strip() or subprocess.run(["git", "rev-parse", *short, "feat/x"], capture_output=True, text=True).stdout.strip()
 
 
@@ -242,7 +244,7 @@ def test_a_moved_head_prompt_line_comes_from_its_template(repo, tmp_path, capsys
     repo()
     tip = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     agents(tmp_path, capsys, "git checkout -q --detach\n")
-    line = (driver_report.PROMPTS / "moved.md").read_text().replace("{branch}", "ticket/01").replace("{tip}", tip)
+    line = (driver_report.PROMPTS / "moved.md").read_text().replace("{branch}", "ticket/feat%2Fx/01").replace("{tip}", tip)
     assert line in prompt_of(tmp_path) and prompt_of(tmp_path).rstrip().endswith("one ref store.")
 
 
@@ -307,10 +309,10 @@ def test_a_timeout_doubles_the_limit_and_a_second_one_blocks(repo, tmp_path, cap
 
 
 @pytest.mark.parametrize("move, problem", [
-    ("git checkout -q feat/x", "HEAD is on feat/x instead of ticket/01"),
-    ("git checkout -q --detach", "HEAD is on a detached commit instead of ticket/01"),
-    ("git checkout -q --detach; git branch -q -D ticket/01", "branch ticket/01 is missing"),
-    ("git checkout -q -B ticket/01 HEAD~1", "ticket/01 no longer holds"),
+    ("git checkout -q feat/x", "HEAD is on feat/x instead of ticket/feat%2Fx/01"),
+    ("git checkout -q --detach", "HEAD is on a detached commit instead of ticket/feat%2Fx/01"),
+    ("git checkout -q --detach; git branch -q -D ticket/feat%2Fx/01", "branch ticket/feat%2Fx/01 is missing"),
+    ("git checkout -q -B ticket/feat%2Fx/01 HEAD~1", "ticket/feat%2Fx/01 no longer holds"),
 ])
 def test_a_moved_head_resets_the_slot_and_reruns(repo, tmp_path, capsys, move, problem):
     repo()
@@ -326,7 +328,7 @@ def test_a_moved_head_resets_the_slot_and_reruns(repo, tmp_path, capsys, move, p
 
 def test_an_existing_ticket_branch_stops_the_run(repo, tmp_path, capsys):
     repo()
-    subprocess.run(["git", "branch", "ticket/01"], check=True)
+    subprocess.run(["git", "branch", "ticket/feat%2Fx/01"], check=True)
     assert agents(tmp_path, capsys, "exit 0\n") == (3, [])
 
 
@@ -357,7 +359,7 @@ echo "$role $nn" >> "${FILE:-work-$nn.txt}"; git add -A; git commit -q -m "$role
 echo "$nn $PWD" >> "$0.calls"
 """
 # Ticket 01 waits until ticket 02 has its branch, so both start from the same PR tip.
-TOGETHER = """[ "$nn" != 01 ] || until git rev-parse -q --verify refs/heads/ticket/02 > /dev/null; do sleep 0.02; done\n"""
+TOGETHER = """[ "$nn" != 01 ] || until git rev-parse -q --verify refs/heads/ticket/feat%2Fx/02 > /dev/null; do sleep 0.02; done\n"""
 REFACTOR = {"seam": "none — refactor"}
 # A fixer that cannot make the red gate green: the ticket blocks at fix round 1.
 GIVE_UP = """[ $role != fixer ] || { printf '{"status": "BLOCKED", "commits": [], "files": [], "concerns": ["the gate stays red"], "green": [], "ticket": "01"}' > "$report"; exit 0; }\n"""
@@ -437,7 +439,7 @@ def test_a_conflict_agent_that_does_not_resolve_blocks_the_ticket_and_keeps_its_
     assert f"BLOCKED at the merge: the conflict agent: report .agent/implement/{number}/conflict-0.json is not" in line
     assert len([line for line in ledger if "conflict ran on" in line]) == 2  # the one rerun of a violation
     assert state_of(tmp_path)["tickets"][number]["phase"] == "blocked"
-    assert f"ticket/{number}" in branches() and f"Ticket {number} is not merged: its phase is blocked." in out
+    assert f"ticket/feat%2Fx/{number}" in branches() and f"Ticket {number} is not merged: its phase is blocked." in out
     for slot in (".", ".agent/worktrees/slot-2"):  # the driver's open merge is gone
         assert out_of("git", "-C", slot, "status", "--porcelain") == ""
         assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
@@ -450,7 +452,7 @@ def test_a_conflict_cli_that_fails_stops_the_run_and_leaves_no_open_merge(repo, 
     assert code == 4 and "with no report: ERROR: not signed in" in out, out
     assert not [line for line in ledger if "BLOCKED" in line]
     (number,) = [n for n, entry in state_of(tmp_path)["tickets"].items() if entry["phase"] == "merge"]
-    assert f"ticket/{number}" in branches()
+    assert f"ticket/feat%2Fx/{number}" in branches()
     for slot in (".", ".agent/worktrees/slot-2"):
         assert out_of("git", "-C", slot, "status", "--porcelain") == ""
         assert out_of("git", "-C", slot, "rev-parse", "-q", "--verify", "MERGE_HEAD") == ""
@@ -459,7 +461,7 @@ def test_a_conflict_cli_that_fails_stops_the_run_and_leaves_no_open_merge(repo, 
 def test_a_red_gate_is_a_finding_and_the_ticket_it_blocks_never_starts(repo, tmp_path, capsys):
     two(repo, second="01")
     code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT, gate="echo CHECK-OUTPUT; exit 1")
-    tip = out_of("git", "rev-parse", "--short=7", "ticket/01")
+    tip = out_of("git", "rev-parse", "--short=7", "ticket/feat%2Fx/01")
     assert code == 1 and ledger[-1] == GAVE_UP, out
     assert ledger[1] == (f"Ticket 01: critical finding of kind code from the gate at "
                          f".agent/implement/01/gate-{tip}.log:0: the gate is red on {tip}.")
@@ -487,7 +489,7 @@ def test_a_tree_that_is_not_clean_is_a_red_gate_and_the_slot_keeps_the_work(repo
     assert code == 1 and "from the gate at .agent/implement/01/gate-" in ledger[-3] and ledger[-1] == GAVE_UP, out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "status: not clean\n    ?? junk.txt\n" in record and "exit: not run" in record and "\nNEVER\n" not in record
-    assert out_of("git", "symbolic-ref", "--short", "HEAD") == "ticket/01" and (tmp_path / "junk.txt").exists()
+    assert out_of("git", "symbolic-ref", "--short", "HEAD") == "ticket/feat%2Fx/01" and (tmp_path / "junk.txt").exists()
     code, _, out = walk(tmp_path, capsys, "exit 9\n")
     assert code == 3 and "uncommitted change: junk.txt" in out
 
@@ -524,7 +526,7 @@ def test_a_resumed_tip_that_is_not_on_the_branch_returns_the_ticket_to_implement
     base = out_of("git", "rev-parse", "feat/x")
     code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
     assert code == 0, out
-    assert "Ticket 01: returned to implement from the PR tip: the recorded tip 1111111 is not on ticket/01." in ledger
+    assert "Ticket 01: returned to implement from the PR tip: the recorded tip 1111111 is not on ticket/feat%2Fx/01." in ledger
     assert out_of("git", "rev-parse", "feat/x~1") == base  # the earlier, untrusted commit is not in the PR branch
 
 
@@ -537,8 +539,100 @@ def test_a_resumed_ticket_with_a_settled_gate_merges_without_a_gate_or_an_agent(
     (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
     # A gate on the ticket branch is still red, so a second gate for the settled commit would block the ticket. The
     # one new gate is that of the end of run, on the PR branch.
-    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/01 ]')
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/feat%2Fx/01 ]')
     assert code == 0 and walked() == tip and "| gates run | 2 |" in out
+
+
+def as_older_driver(tmp_path, *numbers):
+    """Make the run in tmp_path one that an older driver started: no `schema`, and the old names of its ticket
+    branches and of its recovery ref."""
+    state = state_of(tmp_path)
+    del state["run"]["schema"]
+    (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
+    for nn in numbers:
+        subprocess.run(["git", "branch", "-m", f"ticket/feat%2Fx/{nn}", f"ticket/{nn}"], check=True)
+    if recovery := out_of("git", "rev-parse", "-q", "--verify", "refs/implement-spec/feat%2Fx/recovery"):
+        subprocess.run(["git", "update-ref", "refs/implement/recovery", recovery], check=True)
+        subprocess.run(["git", "update-ref", "-d", "refs/implement-spec/feat%2Fx/recovery"], check=True)
+    return recovery
+
+
+def test_a_run_of_an_older_driver_resumes_on_its_renamed_ticket_branch(repo, tmp_path, capsys):
+    """An older driver named the ticket branch `ticket/NN`. The resume renames it and trusts the recorded tip."""
+    entry = blocked_then_edited(repo, tmp_path, capsys, phase="merge")
+    state = state_of(tmp_path)
+    state["tickets"]["01"]["green_gates"] = [entry["tip"]]
+    (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
+    as_older_driver(tmp_path, "01")
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 0, out
+    assert "Ticket 01: renamed the branch ticket/01 of an older driver to ticket/feat%2Fx/01." in ledger
+    assert not any("returned to implement" in line for line in ledger) and walked() == entry["tip"]
+    assert branches() == ["feat/x"]
+
+
+def test_a_run_of_an_older_driver_on_a_contradicted_ticket_branch_returns_the_ticket_to_implement(repo, tmp_path,
+                                                                                               capsys):
+    """Spec review: slot 1 is on `ticket/NN` of an older driver, and git contradicts the recorded tip, so the branch
+    keeps its old name. The resume accepts slot 1 there, as the older driver did, and starts the ticket again."""
+    blocked_then_edited(repo, tmp_path, capsys, phase="review", tip="1" * 40)
+    as_older_driver(tmp_path, "01")
+    subprocess.run(["git", "checkout", "-q", "ticket/01"], check=True)
+    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
+    assert code == 0, out
+    assert "Ticket 01: returned to implement from the PR tip: the recorded tip 1111111 is not on ticket/feat%2Fx/01." in ledger
+    assert not [line for line in ledger if "renamed" in line]
+
+
+def test_a_ticket_branch_of_an_older_driver_that_git_cannot_rename_stops_the_run(repo, tmp_path, capsys):
+    blocked_then_edited(repo, tmp_path, capsys)
+    as_older_driver(tmp_path, "01")
+    subprocess.run(["git", "branch", "ticket/feat%2Fx"], check=True)  # a branch where the folder of the new name goes
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 3 and out.startswith("implement-spec: cannot rename the branch ticket/01 of an older driver to "
+                                        "ticket/feat%2Fx/01: "), out
+    assert "ticket/01" in branches() and not [line for line in ledger if "renamed" in line]
+
+
+def test_a_finished_run_of_an_older_driver_gets_the_new_name_of_its_recovery_ref(repo, tmp_path, capsys):
+    """Spec review: the recovery ref moves through the driver, before the end of run reads it."""
+    repo(t01=ticket("01", **REFACTOR))
+    assert walk(tmp_path, capsys, WORK + REPORT)[0] == 0
+    recovery = as_older_driver(tmp_path)
+    assert recovery
+    code, _, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 0, out
+    assert ("Recovery point: moved refs/implement/recovery of an older driver to refs/implement-spec/feat%2Fx/recovery."
+            in (tmp_path / ".agent/implement/ledger.md").read_text().splitlines())
+    assert out_of("git", "rev-parse", "-q", "--verify", "refs/implement/recovery") == "" and walked() == recovery
+
+
+def test_no_older_driver_starts_while_a_newer_driver_runs(repo, tmp_path, capsys):
+    """Spec review: the newer driver holds the lock of an older driver, shared, for its whole run. The agent tries to
+    take that lock as an older driver does, alone, and cannot."""
+    repo(t01=ticket("01", **REFACTOR))
+    old_lock = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec.lock"
+    probe = tmp_path.parent / f"{tmp_path.name}-probe"
+    older = (f'"{sys.executable}" -c "import fcntl; fcntl.flock(open(\'{old_lock}\', \'a\'), '
+             f'fcntl.LOCK_EX | fcntl.LOCK_NB)" 2>/dev/null; echo $? > {probe}\n')
+    code, _, out = walk(tmp_path, capsys, older + WORK + REPORT)
+    assert code == 0 and probe.read_text() == "1\n", out
+
+
+@pytest.mark.parametrize("older_run", [False, True])
+def test_a_newer_driver_waits_while_an_older_driver_runs(repo, tmp_path, capsys, older_run):
+    """Correctness review: an older driver holds only `implement-spec.lock`, so a newer driver waits for that lock,
+    on a run of its own and on a run that an older driver started."""
+    blocked_then_edited(repo, tmp_path, capsys)
+    if older_run:
+        as_older_driver(tmp_path, "01")
+    old_lock = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec.lock"
+    with hold(old_lock):
+        code, ledger, out = walk(tmp_path, capsys, "exit 9\n")
+    assert code == 3 and out == ("implement-spec: a driver of an older version runs in this repository: it holds the "
+                                 f"lock {old_lock}. Wait until it ends, then run the driver again.\n")
+    assert ("ticket/01" if older_run else "ticket/feat%2Fx/01") in branches()
+    assert not [line for line in ledger if "renamed" in line] and state_of(tmp_path)["tickets"]["01"]["phase"] == "blocked"
 
 
 def test_an_unknown_phase_fails_the_resume(repo, tmp_path, capsys):
@@ -567,12 +661,23 @@ def test_a_first_run_on_a_detached_head_or_with_no_slot_is_refused(repo, tmp_pat
     assert code == 3 and "the PR worktree is on a detached HEAD" in out
 
 
+def test_a_first_run_in_a_slot_of_another_run_is_refused(repo, tmp_path, capsys):
+    """Correctness review: a slot has no state.json of its own, so its ticket branch would name a lock of its own,
+    and two drivers would control one worktree."""
+    repo(t01=ticket("01", **REFACTOR))
+    subprocess.run(["git", "checkout", "-q", "-b", "ticket/feat%2Fx/01"], check=True)
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n")
+    assert (code, ledger) == (3, []) and out == (
+        "the PR worktree is on the ticket branch ticket/feat%2Fx/01 of a run: check out the PR branch\n")
+    assert not (tmp_path / ".agent/implement").exists()
+
+
 def test_a_ticket_branch_that_cannot_be_checked_out_blocks_the_ticket(repo, tmp_path, capsys):
     """A slot of an earlier run with more slots still holds the branch."""
     blocked_then_edited(repo, tmp_path, capsys, phase="implement")
-    subprocess.run(["git", "worktree", "add", "-q", str(tmp_path.parent / f"{tmp_path.name}-other"), "ticket/01"], check=True)
+    subprocess.run(["git", "worktree", "add", "-q", str(tmp_path.parent / f"{tmp_path.name}-other"), "ticket/feat%2Fx/01"], check=True)
     code, ledger, _ = walk(tmp_path, capsys, "exit 9\n")
-    assert code == 1 and "BLOCKED at the start: cannot check out ticket/01 in slot 1" in ledger[-1]
+    assert code == 1 and "BLOCKED at the start: cannot check out ticket/feat%2Fx/01 in slot 1" in ledger[-1]
 
 
 def test_an_interrupt_kills_the_running_agents_and_stops_the_driver_at_once(repo, tmp_path, capsys, monkeypatch):
@@ -599,15 +704,62 @@ def test_an_interrupt_kills_the_running_agents_and_stops_the_driver_at_once(repo
     assert "interrupted; run it again to resume" in capsys.readouterr().out
 
 
-def test_a_second_driver_on_the_same_repository_exits_3_and_changes_nothing(repo, tmp_path, capsys):
+def hold(lock: Path):
+    """The lock of another driver: it holds the kernel lock while it runs."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    held = lock.open("w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return held
+
+
+def test_a_driver_on_another_pr_branch_does_not_stop_the_run(repo, tmp_path, capsys):
+    """Runs on different PR branches share no state.json, no slot and no ref, so the lock of one stops no other."""
+    repo(t01=ticket("01", **REFACTOR))
+    locks = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec"
+    with hold(locks / "feat%2Fother.lock"), hold(locks / "feat.lock"):
+        code, _, out = walk(tmp_path, capsys, WORK + REPORT)
+    assert code == 0 and "1 of 1 tickets are merged into feat/x." in out
+    assert branches() == ["feat/x"]  # the merge deleted ticket/feat%2Fx/01
+
+
+def test_a_driver_that_starts_while_the_first_starts_its_run_locks_the_branch_of_that_run(repo, monkeypatch):
+    """Correctness review: right after the second driver reads HEAD, the first one writes state.json and puts slot 1
+    on a ticket branch. The PR branch that the second driver locks is still the one of that run."""
+    repo(t01=ticket("01", **REFACTOR))
+    real = driver.driver_slots.on_branch
+
+    def first_driver_moves(slot):
+        here = real(slot)
+        driver.STATE.parent.mkdir(parents=True, exist_ok=True)
+        driver.STATE.write_text(json.dumps({"run": {"pr_branch": "feat/x"}}))
+        subprocess.run(["git", "checkout", "-q", "-b", "ticket/feat%2Fx/01"], check=True)
+        return here
+    monkeypatch.setattr(driver.driver_slots, "on_branch", first_driver_moves)
+    assert driver._run_branch() == "feat/x"
+
+
+def test_a_run_that_leaves_its_branch_while_the_driver_takes_the_lock_exits_3(repo, tmp_path, capsys, monkeypatch):
+    repo(t01=ticket("01", **REFACTOR))
+    real = driver_state.lock
+
+    def lock_while_another_run_starts(path, shared=False):
+        driver.STATE.parent.mkdir(parents=True, exist_ok=True)
+        driver.STATE.write_text(json.dumps({"run": {"pr_branch": "feat/other", "schema": driver_state.SCHEMA}}))
+        return real(path, shared)
+    monkeypatch.setattr(driver_state, "lock", lock_while_another_run_starts)
+    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
+    assert (code, ledger) == (3, []) and out == (
+        "implement-spec: the run in this worktree left feat/x while the driver took its lock: run the driver again\n")
+
+
+def test_a_second_driver_on_the_same_pr_branch_exits_3_and_changes_nothing(repo, tmp_path, capsys):
     """Final review, correctness 1: two drivers on one state.json lose updates and move the same refs. Ticket 09:
     the lock is in the git common directory, so it is the same file in every worktree of the repository."""
     repo(t01=ticket("01", **REFACTOR))
-    lock = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec.lock"
-    with lock.open("w") as other:  # the first driver: it holds the kernel lock while it runs
-        fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    lock = Path(out_of("git", "rev-parse", "--git-common-dir")).resolve() / "implement-spec/feat%2Fx.lock"
+    with hold(lock):
         code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
-        assert (code, out) == (3, "implement-spec: another driver runs in this repository: it holds the lock "
+        assert (code, out) == (3, "implement-spec: another driver runs on feat/x: it holds the lock "
                                   f"{lock}. Wait until it ends, then run the driver again.\n")
         assert ledger == [] and not (tmp_path / ".agent/implement").exists() and branches() == ["feat/x"]
         assert not Path(f"{tmp_path}-runner.calls").exists()
@@ -755,7 +907,11 @@ def test_a_merged_ticket_whose_commits_left_the_pr_branch_is_not_merged_on_a_rer
     assert code == 1 and f"End of run: BLOCKED at feat/x does not hold the tidied tip {tip}" in out, out
 
 
-def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_role(repo, tmp_path, capsys, monkeypatch):
+@pytest.mark.parametrize("older_driver", [False, True])
+def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_role(repo, tmp_path, capsys, monkeypatch,
+                                                                                      older_driver):
+    """With `older_driver`, the interrupted run is one whose driver named the ticket branches `ticket/NN` (spec
+    review): the resume renames each one, also in the slot that has it, and the slot keeps its work."""
     two(repo)
     mark = f"{tmp_path.parent}/{tmp_path.name}-started"
 
@@ -776,6 +932,8 @@ def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_r
             walk(tmp_path, capsys, hang)
     slot2 = tmp_path / ".agent/worktrees/slot-2"
     assert (tmp_path / "wip-01.txt").exists() and (slot2 / "wip-02.txt").exists()
+    if older_driver:
+        as_older_driver(tmp_path, "01", "02")
     resume = ('grep -q "was interrupted" "$prompt" || exit 9\nnn=$(basename "$(dirname "$report")")\n'
               '[ "$(cat wip-$nn.txt)" = half ] || exit 8\n')
     code, ledger, out = walk(tmp_path, capsys, resume + WORK + REPORT)
@@ -785,6 +943,8 @@ def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_r
     assert out_of("git", "show", "feat/x:wip-01.txt") == "half" and out_of("git", "show", "feat/x:wip-02.txt") == "half"
     assert [line for line in ledger if "Ticket 02: resumed in slot 2 with the work the interrupted implementer left" in line]
     assert out_of("git", "status", "--porcelain") == "" and branches() == ["feat/x"]
+    renamed = [f"Ticket {nn}: renamed the branch ticket/{nn} of an older driver to ticket/feat%2Fx/{nn}." for nn in ("01", "02")]
+    assert [line for line in ledger if "renamed the branch" in line] == (renamed if older_driver else [])
 
 
 def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(tmp_path, monkeypatch):

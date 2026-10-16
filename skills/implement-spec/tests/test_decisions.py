@@ -99,7 +99,7 @@ def test_an_answers_file_of_an_earlier_run_is_not_applied_to_the_same_question_o
     write_answers(rig, {Q1: "overrule-test"})
     # The operator starts again: the run directory goes, the answers file is outside it and stays.
     shutil.rmtree(rig.repo / ".agent/implement")
-    git(rig.repo, "branch", "-D", "ticket/01")
+    git(rig.repo, "branch", "-D", "ticket/feat%2Fcsv/01")
     again = steps(blocked(), blocked(), impl("01"))
     rig.run(again)
     new = decisions(rig)
@@ -144,7 +144,7 @@ def test_a_stop_with_uncommitted_work_keeps_its_slot_and_takes_the_answer(tmp_pa
     rig.run(steps(dirty, impl("01")), *UNATTENDED)
     assert rig.code == 0, rig.ledger()
     second = rig.calls("01", "implementer")[1]
-    assert second["status"] == "M demo/export.py" and second["branch"] == "ticket/01", "the work is in the tree of the rerun"
+    assert second["status"] == "M demo/export.py" and second["branch"] == "ticket/feat%2Fcsv/01", "the work is in the tree of the rerun"
     prompt = (rig.folder() / "implementer-0.prompt.md").read_text()
     assert "the locked tests stand as they are" in prompt and "uncommitted work" in prompt
     assert "feat: 01 rows" in rig.pr_subjects() and not git(rig.repo, "status", "--porcelain")
@@ -221,7 +221,7 @@ def test_a_correction_that_commits_more_than_the_files_it_lists_is_rejected(tmp_
     assert rig.code == 1, rig.ledger()
     assert rig.led("Ticket 01: BLOCKED at the test-writer: a correction may change only the files it lists in "
                    "`locked`: its commits also change demo/export.py.")
-    assert rig.led(restored(OTHER)) and git(rig.repo, "show", f"ticket/01:{OTHER}") == OTHER_TEST
+    assert rig.led(restored(OTHER)) and git(rig.repo, "show", f"ticket/feat%2Fcsv/01:{OTHER}") == OTHER_TEST
     assert len(rig.calls("01", "test-writer")) == 3 and len(rig.calls("01", "implementer")) == 1, "one rerun, no implementer"
     assert "its commits also change demo/export.py" in rig.prompt("test-writer-0")
     assert "feat: 01 rows" not in rig.pr_subjects() and rig.state()["tickets"]["01"]["held"] == {}
@@ -370,7 +370,7 @@ def test_unattended_writes_the_stage_file_and_prints_no_question(tmp_path, capsy
 
 
 def test_unattended_names_the_blocked_tickets_and_needs_a_stage_path_to_write(tmp_path):
-    rig = Pushing(tmp_path, ONE, gate={"red": ["ticket/01"]})
+    rig = Pushing(tmp_path, ONE, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan(), "--unattended")
     assert rig.code == 1 and not (rig.repo / ".agent/stage.json").exists()
     rig.run(plan(), "--unattended", "--stage-json", ".agent/out/stage.json")

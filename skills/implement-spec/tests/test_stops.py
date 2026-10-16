@@ -266,7 +266,7 @@ def test_unattended_rerun_with_a_submitted_answers_file_at_the_current_revision_
 
 def test_unattended_blocked_ticket_ends_with_stage_json_blocked_naming_it_and_exit_1(tmp_path):
     from test_final import Final
-    rig = Final(tmp_path, gate={"red": ["ticket/01"]})
+    rig = Final(tmp_path, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan(), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}

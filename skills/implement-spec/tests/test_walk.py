@@ -12,7 +12,7 @@ Interface choices (ticket 03):
   `green_gates` holds full SHAs (a dict with a `commit` key is accepted too).
 
 Ticket 08: this fixture has no `origin`, and a run that merges every ticket now ends with the tidy, one gate on the
-tidied tip and the final review. The history as the walk made it is at `refs/implement/recovery`: `Rig.walked()` is
+tidied tip and the final review. The history as the walk made it is at `refs/implement-spec/feat%2Fcsv/recovery`: `Rig.walked()` is
 that tip, `Rig.pr_subjects()` reads it, and `Rig.walk_gates()` leaves out the one gate of the end of run.
 """
 import json
@@ -234,7 +234,7 @@ class Rig:
 
     def walked(self):
         """The PR tip as the walk left it: the recovery point of the end-of-run tidy, or the branch with no tidy."""
-        out = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement/recovery"], cwd=self.repo,
+        out = subprocess.run(["git", "rev-parse", "--verify", "-q", "refs/implement-spec/feat%2Fcsv/recovery"], cwd=self.repo,
                              capture_output=True, text=True).stdout.strip()
         return out or git(self.repo, "rev-parse", "feat/csv").strip()
 
@@ -247,7 +247,7 @@ class Rig:
         return git(self.repo, "log", "--format=%s", self.walked()).splitlines()
 
     def branches(self):
-        return git(self.repo, "branch", "--list", "ticket/*").split()
+        return git(self.repo, "branch", "--list", "ticket/feat%2Fcsv/*").split()
 
     def output(self):
         return f"exit {self.code}\n{self.out}{self.err}"
@@ -271,9 +271,9 @@ def std(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def blocked(tmp_path_factory):
-    """The default scenario with a red gate on ticket/01 that four fix rounds do not make green."""
+    """The default scenario with a red gate on ticket/feat%2Fcsv/01 that four fix rounds do not make green."""
     fixes = [fix("01", n) for n in (1, 2, 3, 4)]
-    return Rig(tmp_path_factory.mktemp("blocked"), gate={"red": ["ticket/01"]}).run(plan(**{"01/fixer": fixes}))
+    return Rig(tmp_path_factory.mktemp("blocked"), gate={"red": ["ticket/feat%2Fcsv/01"]}).run(plan(**{"01/fixer": fixes}))
 
 
 def test_01_starts_in_slot_1_03_in_slot_2_and_02_after_the_merge_of_01(std):
@@ -281,7 +281,7 @@ def test_01_starts_in_slot_1_03_in_slot_2_and_02_after_the_merge_of_01(std):
     first = lambda nn: std.calls(nn)[0]
     assert first("01")["cwd"] == str(std.repo.resolve()) and first("03")["cwd"] == str(std.slot2)
     assert "feat: 01 rows" in first("02")["pr_log"] and "feat: 01 rows" in first("02")["log"]
-    assert first("02")["t0"] > std.calls("01")[-1]["t1"] and first("02")["branch"] == "ticket/02"
+    assert first("02")["t0"] > std.calls("01")[-1]["t1"] and first("02")["branch"] == "ticket/feat%2Fcsv/02"
 
 
 def test_touches_overlap_holds_03_until_01_is_merged(tmp_path):
@@ -349,7 +349,7 @@ def test_red_gate_blocks_the_ticket_after_round_4_names_the_record_and_launches_
     assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-{last[:7]}.log" in l], blocked.ledger()
     assert [c["role"] for c in blocked.calls("01")] == ["test-writer", "implementer"] + ["fixer"] * 4
     assert blocked.state()["tickets"]["01"]["phase"] == "blocked"
-    assert "ticket/01" in blocked.branches() and "feat: 01 rows" not in blocked.pr_subjects()
+    assert "ticket/feat%2Fcsv/01" in blocked.branches() and "feat: 01 rows" not in blocked.pr_subjects()
 
 
 def test_blocked_ticket_stops_only_the_tickets_it_blocks(blocked):
@@ -372,7 +372,7 @@ def test_non_fast_forward_merge_is_a_plumbing_merge_commit_gated_once(tmp_path):
     commits = [g["commit"] for g in rig.walk_gates()]
     assert sorted(commits) == sorted([a01, a03, tip]), commits
     waited = rig.calls("01", "implementer")[0]
-    assert waited["after_wait"]["branch"] == "ticket/01" and waited["after_wait"]["head"] == waited["head"]
+    assert waited["after_wait"]["branch"] == "ticket/feat%2Fcsv/01" and waited["after_wait"]["head"] == waited["head"]
     assert waited["after_wait"]["status"] == ""
     assert git(rig.repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "feat/csv"
     assert git(rig.repo, "status", "--short") == "" and (rig.repo / "demo/cli.py").exists()
@@ -439,7 +439,7 @@ def test_resume_returns_a_ticket_with_an_unverifiable_tip_to_implement_from_the_
                                                            commit="feat: 01 again")]})
     assert rig.code == 0, rig.output()
     again = rig.calls("01", "implementer")[1]
-    assert (again["branch"], again["head"]) == ("ticket/01", tw_sha) and len(rig.calls("01", "test-writer")) == 1
+    assert (again["branch"], again["head"]) == ("ticket/feat%2Fcsv/01", tw_sha) and len(rig.calls("01", "test-writer")) == 1
     assert [l for l in rig.ledger()[len(before):] if "01" in l and fake[:7] in l], rig.ledger()
     assert "feat: 01 again" in rig.pr_subjects()
 
@@ -450,7 +450,7 @@ def test_resume_keeps_a_settled_gate_and_runs_no_gate_again(tmp_path):
     state["tickets"]["01"].update(phase="merge", tip=a1, green_gates=[a1])
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     gates_before = len(rig.gates())
-    rig.gate_conf(red=["ticket/01"])  # any gate run on the ticket would block it; the end of run gates feat/csv
+    rig.gate_conf(red=["ticket/feat%2Fcsv/01"])  # any gate run on the ticket would block it; the end of run gates feat/csv
     rig.run(plan())
     assert rig.code == 0, rig.output()
     assert len(rig.walk_gates()) == gates_before and rig.walked() == a1

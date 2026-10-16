@@ -4,7 +4,7 @@ commits with a scoped review, then stop before the push, or push and open the PR
 
 `run.final` of state.json is the resume contract (`driver_state._final` makes it with every key):
     skipped    why the end-of-run work did not start
-    recovery   the PR tip before the rewrite; the ref RECOVERY holds it. None when origin had the history already
+    recovery   the PR tip before the rewrite; Run.names names its ref. None when origin had the history already
     tidied     the tip the rewrite made, or the tip as the tickets left it when the history is kept
     base, onto the default branch of origin and its tip under the history; with no origin: "" and the start of the run
     commits    {ticket: its commit}
@@ -34,7 +34,6 @@ from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
 
-RECOVERY = "refs/implement/recovery"
 KIND = "final-finding"
 ROUNDS = 2  # the full review and the scoped one after the fix batch
 # The final review runs through the review-diff skill, which is installed next to this one.
@@ -170,7 +169,8 @@ def _resolve_rebase_conflict(run: Run, env: dict, base: str, onto: str) -> None:
         raise Blocked(f"the conflict agent: {error}" if error else
                       f"the rebase onto {base} conflicts a second time, in {', '.join(again)}")
     # The resolution may not change a locked test: each one is as the recovery point has it.
-    changed = driver_review.locked_changes(".", git(".", "rev-parse", RECOVERY).stdout.strip(), _locked_files(run))
+    before = git(".", "rev-parse", run.names.recovery).stdout.strip()
+    changed = driver_review.locked_changes(".", before, _locked_files(run))
     if error := error or "; ".join(finding["title"] for finding in changed):
         raise Blocked(f"the conflict agent: {error}")
     ledger(f"Rebase: the conflict agent resolved the conflict with {base} in {', '.join(files)} at {head('.')[:7]}.")
@@ -249,7 +249,7 @@ def _rewrite_once(run: Run, tickets: list[Ticket]) -> None:
     final = run.state.read()["run"]["final"]
     if final["tidied"]:
         if not driver_merge.ancestor(final["tidied"], run.tip()):
-            raise Blocked(f"{run.pr} does not hold the tidied tip {final['tidied'][:7]}; {RECOVERY} holds the "
+            raise Blocked(f"{run.pr} does not hold the tidied tip {final['tidied'][:7]}; {run.names.recovery} holds the "
                           "history before the tidy")
         return
     base, onto = _base(run)
@@ -258,9 +258,9 @@ def _rewrite_once(run: Run, tickets: list[Ticket]) -> None:
         _keep_published_history(run, old, base, onto)
         return
     tree = git(".", "rev-parse", f"{old}^{{tree}}").stdout.strip()
-    git(".", "update-ref", "-m", "implement-spec: recovery point", RECOVERY, old)
+    git(".", "update-ref", "-m", "implement-spec: recovery point", run.names.recovery, old)
     ledger(f"Recovery point: {run.pr} was at {old} with the tree {tree} before the rebase and the tidy; "
-           f"{RECOVERY} holds that commit.")
+           f"{run.names.recovery} holds that commit.")
     git(".", "checkout", "-q", "--detach")  # slot 1 is off the branch while the history is made
     try:
         commits = _new_history(run, tickets, old, base, onto)

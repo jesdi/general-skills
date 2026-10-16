@@ -8,11 +8,7 @@ from __future__ import annotations
 import os
 import subprocess
 
-from driver_slots import git, names
-
-
-def ancestor(commit: str, of: str) -> bool:
-    return git(".", "merge-base", "--is-ancestor", commit, of).returncode == 0
+from driver_slots import ancestor, git, names
 
 
 def identity(tip: str, slot: str = ".") -> dict[str, str]:
