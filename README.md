@@ -2,6 +2,21 @@
 
 Personal agent skills, installable into Claude Code and OpenCode.
 
+## Development
+
+The checks require Node 20 or newer, pnpm, and Python 3.10 or newer (CI uses 3.13).
+Prepare a local Python environment once:
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+pnpm install --frozen-lockfile
+pnpm check
+```
+
+`pnpm test:python` and `pnpm check` use `.venv` automatically when no other
+virtual environment is active. Otherwise they use `python3` from your PATH.
+
 ## Install skills
 
 ```bash
