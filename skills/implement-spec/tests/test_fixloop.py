@@ -562,6 +562,23 @@ def test_a_second_review_that_changes_the_slot_blocks_the_ticket_with_the_slot_c
     assert slot_state(rig) == ("", rig.sha("01", "implementer")) and "feat: 01 rows" not in rig.pr_subjects()
 
 
+def test_a_reviewer_that_writes_the_shared_git_config_gets_it_restored_and_runs_once_more(tmp_path):
+    # Issue #94: a reviewer ran git with GIT_DIR on the real git dir and left core.worktree on a deleted temp dir.
+    rig = Inside(tmp_path)
+    shared = rig.repo / ".git" / "config"
+    config = shared.read_bytes()
+    gone = {"git": [["config", "core.worktree", str(tmp_path / "gone")]]}
+    rig.run(plan(**{"01/reviewer": [{**review("01"), **gone}, review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    assert shared.read_bytes() == config
+    (line,) = rig.led("Ticket 01: a read-only role broke its rule:")
+    assert f"the shared git config {shared.resolve()} changed" in line
+    assert line.endswith("the driver restored the shared git config and runs the review again.")
+    tip, prompt = rig.sha("01", "implementer"), rig.prompt("reviewer-0")
+    assert len(rig.calls("01", "reviewer")) == 2 and rig.tip() == tip
+    assert f".agent/implement/01/gate-{tip[:7]}.log" in prompt and "never write with `git config`" in prompt
+
+
 def test_a_reviewer_that_times_out_starts_again_from_the_clean_tip(tmp_path):
     hang = {"files": {"demo/export.py": "mutated\n", "junk.txt": "x\n"}, "sleep": 60}
     rig = Inside(tmp_path).run(plan(**{"01/reviewer": [hang, review("01")]}), "--timeout", "reviewer=0.03")

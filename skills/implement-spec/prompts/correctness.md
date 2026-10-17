@@ -32,4 +32,6 @@ Write one JSON report at {report}. When your sandbox is read-only, give the JSON
 }
 ```
 
+Run git as plain `git` in this worktree, and leave the git config as it is: all worktrees read one shared config, and one key written there, such as a `core.worktree`, breaks git in each of them. So never set GIT_DIR or GIT_WORK_TREE, and never write with `git config`.
+The gate record of the driver for {start_sha} is {gate_record}.
 Never run `git stash`, never reset, and never check out another branch: worktrees share one stash and one ref store.
