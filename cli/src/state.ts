@@ -16,6 +16,8 @@ export interface InstalledSkill {
   agents?: AgentId[];
   /** Stays at `version`: no update, in any scope, until it is unpinned. */
   pinned?: true;
+  /** Hook registrations this install created (`agent\0event\0matcher\0command`); only these are removed again. */
+  ownedHooks?: string[];
 }
 
 export interface GlobalState {
