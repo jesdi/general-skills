@@ -1,10 +1,11 @@
 import { join } from 'node:path';
 
-export type AgentId = 'claude' | 'opencode';
+export type AgentId = 'claude' | 'codex' | 'opencode';
 export type Scope = 'global' | 'local';
 
 export const AGENTS: Record<AgentId, { label: string }> = {
   claude: { label: 'Claude Code' },
+  codex: { label: 'Codex' },
   opencode: { label: 'OpenCode (.agents standard)' },
 };
 
@@ -15,6 +16,7 @@ export interface Ctx {
 
 const AGENT_SUBDIR: Record<AgentId, string> = {
   claude: join('.claude', 'skills'),
+  codex: join('.agents', 'skills'),
   opencode: join('.agents', 'skills'),
 };
 
