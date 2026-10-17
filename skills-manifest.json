@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-17T15:47:59.977Z",
+  "generatedAt": "2026-10-17T15:52:14.213Z",
   "skills": [
     {
       "name": "backlog",
@@ -46,8 +46,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.22",
-      "hash": "sha256-66e2dec93c2b4ca09e8ca6693307e5e92f46fe1bd9b0a44379e7d4a4bd82d3f9",
+      "version": "0.1.23",
+      "hash": "sha256-c0a64ae43e2ba3c2e100b4d0a78085fdab558f8ee4eda01d7ae15eb677b8dbb5",
       "description": "Implement a specification in code."
     },
     {
