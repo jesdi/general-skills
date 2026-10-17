@@ -25,12 +25,16 @@ def _after(slot: str, commit: str) -> str:
     return "not clean\n" + "".join(f"    {line}\n" for line in status.splitlines()).rstrip("\n") if status else "clean"
 
 
+def record_path(folder: Path, commit: str) -> Path:
+    return folder / f"gate-{commit[:7]}.log"
+
+
 def run(command: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Path]:
     """Gate the HEAD of `slot`. Returns (green, the record)."""
     commit = head(slot)
     status = git(slot, "status", "--short").stdout
     folder.mkdir(parents=True, exist_ok=True)
-    record = folder / f"gate-{commit[:7]}.log"
+    record = record_path(folder, commit)
     # The cache of compiled Python stays out of the slot, so the gate leaves the tree clean.
     env = dict(os.environ, IMPLEMENT_SPEC_BASE=pr_branch, PYTHONPYCACHEPREFIX=str(folder.parent.resolve() / "pycache"))
     with record.open("w") as out:

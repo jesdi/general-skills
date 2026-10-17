@@ -26,6 +26,7 @@ from pathlib import Path
 
 import driver_agents
 import driver_decisions
+import driver_gate
 import driver_merge
 import driver_review
 import driver_tidy
@@ -325,7 +326,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
     """One round of the final review on `tip`: the full review, or after it the scoped one."""
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
-              "gate": str(folder / f"gate-{tip[:7]}.log"), "review_diff": str(REVIEW_DIFF),
+              "gate": str(driver_gate.record_path(folder, tip)), "review_diff": str(REVIEW_DIFF),
               "ledger": str(OUT / "ledger.md"), "minors": _minor_findings(), "reviewed": str(final["reviewed"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
               "findings": str(folder / f"findings-{done - 1}.json")}
@@ -441,7 +442,7 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
         raise Blocked("the pr skill is missing: the PR body follows it; install it with "
                       "`npx skills add mattpocock/skills --skill pr`")
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
-              "gate": str(OUT / FINAL / f"gate-{tip[:7]}.log"), "pr_skill": str(method), "facts": facts}
+              "gate": str(driver_gate.record_path(OUT / FINAL, tip)), "pr_skill": str(method), "facts": facts}
     with during("the PR body"):
         report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent("pr-writer", FINAL, ".", values))
     body.write_text(f"{report['body'].strip()}\n\n{facts}")

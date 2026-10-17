@@ -28,4 +28,5 @@ Write one JSON report at {report} that matches this schema:
 }
 ```
 
+Run git as plain `git` in this worktree, and leave the git config as it is: all worktrees read one shared config, and one key written there, such as a `core.worktree`, breaks git in each of them. So never set GIT_DIR or GIT_WORK_TREE, and never write with `git config`.
 Never run `git stash`, never reset, and never check out another branch: worktrees share one stash and one ref store.

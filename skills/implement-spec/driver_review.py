@@ -7,6 +7,8 @@ A mutation proof is keyed by (production file, line); the line is the one the fi
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
 import driver_agents
 from driver_slots import git, head, names, on_branch
 from driver_tickets import Ticket
@@ -135,3 +137,23 @@ def disturbed(slot: str, branch: str, tip: str) -> str:
         return f"the slot is no longer on {branch} at {tip[:7]}"
     left = [line[3:] for line in git(slot, "status", "--porcelain").stdout.splitlines()]
     return f"the tree is not as the review found it: {', '.join(left)}" if left else ""
+
+
+def _read(config: Path) -> bytes:
+    return config.read_bytes() if config.exists() else b""
+
+
+def shared_config(slot: str) -> tuple[Path, bytes]:
+    """(the git config file that every worktree of the repository shares, its bytes)."""
+    common = git(slot, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
+    return Path(common, "config"), _read(Path(common, "config"))
+
+
+def restore_config(before: tuple[Path, bytes]) -> str:
+    """"" when the shared git config is still `before` (from `shared_config`), else write it back and say so.
+    One worktree that writes the config breaks git in all of them, as a core.worktree on a gone directory does."""
+    config, data = before
+    if _read(config) == data:
+        return ""
+    config.write_bytes(data)
+    return f"the shared git config {config} changed"

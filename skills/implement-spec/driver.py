@@ -26,6 +26,7 @@ import driver_answers
 import driver_decisions
 import driver_final
 import driver_fixloop
+import driver_gate
 import driver_graph
 import driver_legacy
 import driver_merge
@@ -109,7 +110,7 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
     values = {**_prompt_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
     for role in roles:
         run.state.ticket(number, phase=DURING.get(role, "review"))
-        values["start_sha"] = start
+        values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, start), slot))
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
         if check["correction"] and (restored := run.restore_locked_files(number, slot)):

@@ -120,15 +120,15 @@ class Run:
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""
         for last in (False, True):
-            error = ""
+            error, config = "", driver_review.shared_config(slot)
             try:
                 result = review()
             except Blocked as blocked:
                 error = str(blocked)
             except Halted:
-                _restore_if_changed(number, slot, branch, tip, runs_again=False)
+                _restore_if_changed(number, slot, branch, tip, config, runs_again=False)
                 raise
-            left = _restore_if_changed(number, slot, branch, tip, runs_again=not (error or last))
+            left = _restore_if_changed(number, slot, branch, tip, config, runs_again=not (error or last))
             if error or not left:
                 break
         if error or left:
@@ -182,15 +182,21 @@ class Run:
         return paths
 
 
-def _restore_if_changed(number: str, slot: str, branch: str, tip: str, runs_again: bool) -> str:
-    """After read-only agents: "" when the slot is as it was; else restore it and return what they left."""
-    left = driver_review.disturbed(slot, branch, tip)
-    if left:
+def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: tuple[Path, bytes],
+                        runs_again: bool) -> str:
+    """After read-only agents: "" when the slot and the shared git config (`driver_review.shared_config` before
+    them) are as they were; else restore both and return what they left."""
+    # The config first: a bad core.worktree in it breaks the git commands of the slot check.
+    changed = driver_review.restore_config(config)
+    moved = driver_review.disturbed(slot, branch, tip)
+    if moved:
         driver_review.restore(slot, branch, tip)
-        where, what = ("slot 1", "the final review") if number == FINAL else ("the slot", "the review")
-        again = f" and runs {what} again" if runs_again else ""
-        ledger(f"{_owner(number)}: a read-only role broke its rule: {left}; the driver restored {where} to "
-               f"{tip[:7]}{again}.")
+    left = "; ".join(filter(None, (changed, moved)))
+    if left:
+        where = ("slot 1" if number == FINAL else "the slot") + f" to {tip[:7]}"
+        restored = " and ".join(filter(None, ("the shared git config" if changed else "", where if moved else "")))
+        again = f" and runs {'the final review' if number == FINAL else 'the review'} again" if runs_again else ""
+        ledger(f"{_owner(number)}: a read-only role broke its rule: {left}; the driver restored {restored}{again}.")
     return left
 
 

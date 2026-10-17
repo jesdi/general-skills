@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import driver_agents
+import driver_gate
 import driver_merge
 import driver_review
 import driver_slots
@@ -39,9 +40,11 @@ class Job:
         """The values of a prompt; `review` is the round whose findings the agent reads."""
         entry = self.run.state.read()["tickets"][self.ticket.number]
         findings = os.path.relpath(OUT / self.ticket.number / f"findings-{review}.json", self.slot)
+        gate = os.path.relpath(driver_gate.record_path(OUT / self.ticket.number, self.tip), self.slot)
         return {**self.values, "start_sha": self.tip, "from_sha": self.previous, "round": str(self.round),
                 "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
-                "findings": findings, "proofs": " ".join(f"{file}:{line}" for file, line in sorted(self.again))}
+                "findings": findings, "gate_record": gate,
+                "proofs": " ".join(f"{file}:{line}" for file, line in sorted(self.again))}
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
