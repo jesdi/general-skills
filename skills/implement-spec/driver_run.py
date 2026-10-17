@@ -105,6 +105,9 @@ class Run:
             # Its report may change a locked file of a merged ticket only when it lists the file.
             merged = driver_merge.protected(self.state.read()["tickets"], number)
             options["check"] = {**(options.get("check") or {}), "merged": merged, "pr": self.tip()}
+            values = {**values, "protected": " ".join(merged) or "none"}
+            if options["check"].get("correction"):
+                options["notes"] = [*options.get("notes", ()), "corrected"]
         report = _attempts(self, role, number, slot, values, **options)
         if role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
