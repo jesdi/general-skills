@@ -269,7 +269,7 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
     folder.mkdir(parents=True, exist_ok=True)
     report, log, prompt = (folder / f"{role}-{fix_round}{suffix}" for suffix in (".json", ".log", ".prompt.md"))
     report_in_slot = os.path.relpath(report, slot)  # the agent works in its slot
-    context = {"repo": slot, "branch": values["branch"], "start": values["start_sha"], "log": str(log), "round": 0,
+    context = {"repo": slot, "branch": values["branch"], "start": values["start_sha"], "log": str(log),
                "template": template or role, **(check or {})}
     argv = _command(run, role, entry, os.path.relpath(prompt, slot), report_in_slot)
     text = _first_prompt(context["template"], values, notes, report_in_slot)

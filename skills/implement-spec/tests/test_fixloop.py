@@ -506,16 +506,38 @@ def test_a_first_review_proves_each_locked_file_and_a_second_bad_report_blocks(t
     assert "feat: 01 rows" not in rig.pr_subjects()
 
 
+def test_a_full_review_after_a_correction_names_each_locked_file_that_needs_a_proof(tmp_path):
+    """Issue #92: the full review after a correction in a later round must prove each locked file, not only round 1."""
+    two = ("tests/test_01.py", "tests/test_01b.py")
+    first = {**tw("01"), "files": {path: "def test_x():\n    assert 0\n" for path in two}}
+    first["report"] = {**first["report"], "files": list(two), "locked": list(two)}
+    proofs = [dict(test=f"{path}::test_x", file="demo/export.py", line=1, red=f"FAILED {path}::test_x") for path in two]
+    both = lambda found=(): {"stdout": "".join(p["red"] + "\n" for p in proofs),
+                             "report": {**review("01", found)["report"], "mutations": proofs}}
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    correction = {**first, "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
+    correction["report"] = {**first["report"], "files": ["tests/test_01.py"], "locked": ["tests/test_01.py"]}
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first, correction], "01/fixer": [fix("01", 1)],
+                                       "01/reviewer": [both([STUCK]), review("01", [vacuous], lines=()), both()]}))
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "fixer", "reviewer", "test-writer", "reviewer"]
+    due = "give one mutation proof or more for each of these locked test files: tests/test_01.py tests/test_01b.py\n"
+    initial, again, full = (call["prompt"] for call in rig.calls("01", "reviewer"))
+    assert due in initial and due in full, full
+    assert "In round 1" not in full and due not in again
+
+
 def test_the_locked_file_rule_is_for_the_first_review_only(tmp_path):
     report = dict(status="DONE", commits=[], files=[], concerns=[], findings=[], mutations=[])
     path = tmp_path / "reviewer-0.json"
     path.write_text(json.dumps(report))
     context = {"repo": ".", "branch": "main", "start": "HEAD", "log": str(path), "locked": ["tests/a.py", "tests/b.py"]}
-    assert driver_report.validate("reviewer", str(path), {**context, "round": 0}) == []
-    assert driver_report.validate("reviewer", str(path), {**context, "round": 1}) == [
+    assert driver_report.validate("reviewer", str(path), context) == []
+    assert driver_report.validate("reviewer", str(path), {**context, "full": True}) == [
         "mutations: no mutation proof for the locked test file tests/a.py",
         "mutations: no mutation proof for the locked test file tests/b.py"]
-    assert driver_report.validate("correctness", str(path), {**context, "round": 0}) == []
+    assert driver_report.validate("correctness", str(path), context) == []
 
 
 def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_the_slot(tmp_path):

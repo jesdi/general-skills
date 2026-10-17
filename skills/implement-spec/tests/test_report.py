@@ -1,7 +1,7 @@
 """Report validation acceptance tests, through driver_report.validate only.
 
 context is a dict: repo (slot path), branch, start (HEAD sha when the role started),
-log (the agent's log file), round (fix-loop round, default 0).
+log (the agent's log file), full (a full review of the reviewer).
 """
 import json
 import subprocess
@@ -45,7 +45,7 @@ def world(tmp_path):
     def check(role, report, **context):
         path = tmp_path / f"{role}-0.json"
         path.write_text(report if isinstance(report, str) else json.dumps(report))
-        ctx = {"repo": str(root), "branch": "ticket/01", "log": str(tmp_path / "agent.log"), "round": 0}
+        ctx = {"repo": str(root), "branch": "ticket/01", "log": str(tmp_path / "agent.log")}
         return validate(role, str(path), {**ctx, **context})
     return shas, check, tmp_path
 
@@ -151,12 +151,12 @@ def test_red_line_absent_from_the_log_is_a_violation(world):
 
 def test_reviewer_fields_and_mutation_proofs(world):
     shas, check, _ = world
-    assert check("reviewer", reviewer(), start=shas["impl"], round=1) == []
+    assert check("reviewer", reviewer(), start=shas["impl"], full=True) == []
     assert any("severity" in e for e in check("reviewer", reviewer(findings=[finding(severity="huge")]),
                                               start=shas["impl"]))
     assert any("kind" in e for e in check("reviewer", reviewer(findings=[finding(kind="style")]), start=shas["impl"]))
     no_proof = reviewer()
     del no_proof["mutations"]
-    assert any("mutations" in e for e in check("reviewer", no_proof, start=shas["impl"], round=1))
+    assert any("mutations" in e for e in check("reviewer", no_proof, start=shas["impl"], full=True))
     fake = reviewer(mutations=[{"test": "t", "file": "demo/export.py", "line": 2, "red": "never ran"}])
-    assert any("not found in log" in e for e in check("reviewer", fake, start=shas["impl"], round=1))
+    assert any("not found in log" in e for e in check("reviewer", fake, start=shas["impl"], full=True))

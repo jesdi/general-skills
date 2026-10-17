@@ -1,6 +1,6 @@
 """Report validation: validate(role, path, context) -> list of errors, empty when the report is accepted.
 
-context: repo (slot path), branch, start (HEAD when the role started), log, round (1 = first review), locked,
+context: repo (slot path), branch, start (HEAD when the role started), log, full (a full review: no fix range), locked,
   correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
   restore_red (the gate is red on the commit of that restore),
   owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip)."""
@@ -93,14 +93,14 @@ def _proof_errors(report: dict, context: dict) -> list[str]:
     errors = []
     if lines and not all(_seen(line, Path(context["log"]).read_text(errors="replace")) for line in lines):
         errors.append(RED)
-    if context.get("round") == 1 and "findings" in report and "mutations" not in report:
-        errors.append("mutations: required in round 1")
+    if context.get("full") and "findings" in report and "mutations" not in report:
+        errors.append("mutations: required in a full review")
     return errors
 
 
 def _locked_errors(report: dict, context: dict) -> list[str]:
-    """In the first review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`)."""
-    if context.get("round") != 1 or "findings" not in report:
+    """In a full review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`)."""
+    if not context.get("full") or "findings" not in report:
         return []
     tests = [proof["test"] for proof in report.get("mutations", [])]
     return [f"mutations: no mutation proof for the locked test file {path}" for path in context.get("locked", [])
