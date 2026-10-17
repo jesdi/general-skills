@@ -341,6 +341,22 @@ def test_a_fixture_correction_starts_from_the_locked_file_of_the_merged_ticket(t
     assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
 
 
+def test_the_test_writer_checks_fixture_preconditions_and_a_correction_keeps_shared_fixtures_and_runs_the_locked_files(tmp_path):
+    """Issue #97: a fixture misses the precondition of its scenario or a rule that a merged ticket locks, and a
+    correction adds a requirement that the shared fakes of other locked tests do not satisfy."""
+    stale = finding("STALE", kind="fixture", file="tests/test_02.py")
+    correction = {**tw("02"), "files": {"tests/test_02.py": "# corrected\n"}, "commit": "test: 02 fixture fix"}
+    rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [tw("02"), correction],
+                                                "02/reviewer": [review("02", [stale]), review("02")]}), parallel="1")
+    assert rig.code == 0, rig.ledger()
+    first, corrected = rig.prompt("test-writer-0", "02"), rig.prompt("test-writer-1", "02")
+    assert "Each fixture sets up exactly the precondition of its scenario" in first
+    assert "the locked tests of merged tickets: tests/test_01.py." in first
+    assert "update each shared fake or fixture" not in first
+    assert "update each shared fake or fixture that other locked tests use" in corrected
+    assert "run each whole file of `locked` and each locked test of merged tickets" in corrected
+
+
 def test_the_restore_before_a_correction_is_committed_so_the_next_fixer_and_its_gate_find_a_clean_tree(tmp_path):
     """Issue #86: the correction and the fixer each commit only their own files. The restore of the merged ticket's
     file must not stay in the tree, where the gate of the fixer's commit is `not clean` and burns a round."""
