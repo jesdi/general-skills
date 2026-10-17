@@ -23,17 +23,18 @@ cd "$dir" || exit 0
 exit 0
 `;
 
-/** Agent config files that take a `hooks.SessionStart` list, by the directory that owns them. */
+/** Agent config files that take a `hooks.<event>` list, by the directory that owns them. */
 const HOOK_CONFIGS = [
   ['.claude', 'settings.json'],
   ['.codex', 'hooks.json'],
 ] as const;
 
 interface HookGroup {
+  matcher?: string;
   hooks?: { type: string; command: string; timeout?: number }[];
 }
 
-type HookConfig = { hooks?: { SessionStart?: HookGroup[] } };
+type HookConfig = { hooks?: Record<string, HookGroup[]> };
 
 async function readConfig(file: string): Promise<HookConfig> {
   if (!existsSync(file)) return {};
@@ -44,26 +45,26 @@ async function readConfig(file: string): Promise<HookConfig> {
   }
 }
 
-/** Add the command to the file's SessionStart hooks. False when it is already there. */
-async function register(file: string, command: string): Promise<boolean> {
+/** Add the command to the file's hooks for the event and matcher. False when it is already there. */
+export async function register(file: string, event: string, matcher: string | undefined, command: string): Promise<boolean> {
   const config = await readConfig(file);
-  const groups = ((config.hooks ??= {}).SessionStart ??= []);
-  if (groups.some((g) => g.hooks?.some((h) => h.command === command))) return false;
-  groups.push({ hooks: [{ type: 'command', command, timeout: 10 }] });
+  const groups = ((config.hooks ??= {})[event] ??= []);
+  if (groups.some((g) => g.matcher === matcher && g.hooks?.some((h) => h.command === command))) return false;
+  groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [{ type: 'command', command, timeout: 10 }] });
   await writeFile(file, JSON.stringify(config, null, 2) + '\n');
   return true;
 }
 
-/** Remove the command from the file's SessionStart hooks. False when it is not there. */
-async function unregister(file: string, command: string): Promise<boolean> {
+/** Remove the command from the file's hooks for the event and matcher. False when it is not there. */
+export async function unregister(file: string, event: string, matcher: string | undefined, command: string): Promise<boolean> {
   if (!existsSync(file)) return false;
   const config = await readConfig(file);
-  const groups = config.hooks?.SessionStart ?? [];
+  const groups = config.hooks?.[event] ?? [];
   const kept = groups
-    .map((g) => ({ ...g, hooks: g.hooks?.filter((h) => h.command !== command) }))
+    .map((g) => (g.matcher === matcher ? { ...g, hooks: g.hooks?.filter((h) => h.command !== command) } : g))
     .filter((g, i) => g.hooks?.length || !groups[i].hooks?.length);
   if (JSON.stringify(kept) === JSON.stringify(groups)) return false;
-  config.hooks!.SessionStart = kept;
+  config.hooks![event] = kept;
   await writeFile(file, JSON.stringify(config, null, 2) + '\n');
   return true;
 }
@@ -85,7 +86,7 @@ export async function ensureSessionHook(ctx: Ctx): Promise<string[]> {
   for (const [dir, name] of HOOK_CONFIGS) {
     if (!existsSync(join(ctx.home, dir))) continue;
     const file = join(ctx.home, dir, name);
-    if (await register(file, `sh '${script}'`)) changed.push(file);
+    if (await register(file, 'SessionStart', undefined, `sh '${script}'`)) changed.push(file);
   }
   return changed;
 }
@@ -96,7 +97,7 @@ export async function removeSessionHook(ctx: Ctx): Promise<string[]> {
   const changed: string[] = [];
   for (const [dir, name] of HOOK_CONFIGS) {
     const file = join(ctx.home, dir, name);
-    if (await unregister(file, `sh '${script}'`)) changed.push(file);
+    if (await unregister(file, 'SessionStart', undefined, `sh '${script}'`)) changed.push(file);
   }
   await rm(script, { force: true });
   return changed;
