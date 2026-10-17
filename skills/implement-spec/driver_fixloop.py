@@ -66,12 +66,12 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
     errors: dict[str, str] = {}
 
     def call(role: str, entry: str) -> dict:
-        # The first review of a tip must give a mutation proof for each locked test.
-        first_review = not job.previous and role == "reviewer"
+        # A full review (no fix range) must give a mutation proof for each locked test file; the prompt names them.
+        full = not job.previous and role == "reviewer"
+        notes = ["rereview"] if job.previous else ["full-review"] if full else []
         try:
             return job.run.agent(role, job.ticket.number, job.slot, values, entry=entry, fix_round=job.round,
-                                 notes=["rereview"] if job.previous else [],
-                                 check={"round": 1, "locked": locked} if first_review else {},
+                                 notes=notes, check={"full": True, "locked": locked} if full else {},
                                  alone=lambda: len(running) == 1)
         except Blocked as blocked:
             errors[role] = f"the {role}: {blocked}"
