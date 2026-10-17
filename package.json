@@ -1,6 +1,6 @@
 {
   "name": "@jesdi/skills",
-  "version": "0.0.45",
+  "version": "0.0.46",
   "description": "jesdi's agent skills (content package consumed by @jesdi/skills-cli)",
   "license": "MIT",
   "repository": {
