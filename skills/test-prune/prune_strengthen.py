@@ -243,10 +243,16 @@ def strengthen_finish(ctx) -> int:
     st = ctx.state.load("strengthen.json")
     unattended = base["mode"] == "unattended"
     try:
-        return _finish(ctx, base, st, _finish_reviews(ctx, st), unattended)
-    finally:
+        code = _finish(ctx, base, st, _finish_reviews(ctx, st), unattended)
+    except BadInput:
+        raise  # HEAD stays at the proven head: fix the input and rerun
+    except BaseException:
         if unattended:
-            repo.leave_on(base["branch"], base["commit"])
+            repo.leave_on(base["branch"], base["commit"], [BASELINE])
+        raise
+    if unattended:
+        repo.leave_on(base["branch"], base["commit"], [BASELINE])
+    return code
 
 
 def _keep_accepted(ctx, base: dict, st: dict, reviews: dict) -> tuple[dict, list]:
