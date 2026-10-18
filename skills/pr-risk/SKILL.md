@@ -12,3 +12,6 @@ description: >-
 
 The block is the one fenced ```` ```merge-risk v1 ```` block in the body. Keys: `door`, `blast_radius`,
 `touches`, `rollback`, `verdict`, `reasons`.
+
+`python3 merge_risk.py gate --body <file> --base <ref> --head <sha>` prints JSON with `verdict` (`auto | human`),
+`reasons`, `categories` and `countedLines`. The policy is read from `origin/<base>`; the block's `verdict` is ignored.
