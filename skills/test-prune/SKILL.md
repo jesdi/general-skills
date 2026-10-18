@@ -1,0 +1,128 @@
+---
+name: test-prune
+description: >-
+  Mutation-guided test pruning: a fixer proposes deleting redundant tests and strengthening
+  weak ones, an independent reviewer accepts or rejects each proposal, and prune.py applies
+  the accepted batch behind a cold mutation run and the ratchet. Use when the user says
+  "prune tests", "test-prune", "mutation test pruning" or "strengthen weak tests", or when a
+  scheduled job runs it with `--unattended`.
+---
+
+# test-prune: delete what the mutation ratchet proves redundant, strengthen what it proves weak
+
+You are the orchestrator. `prune.py` owns every git, make and file operation and every safety
+guard; the subagents only write JSON files or test commits. Each role is a fresh subagent: the
+reviewer never sees the fixer's reasoning, only its proposals and the code.
+
+The target repo provides the make targets `test`, `mutation`, `mutation-check`,
+`mutation-baseline`, `test-candidates`, `prune-gate` and `crap`, and the layout `backend/tests/`,
+`backend/mutation_baseline.json`. Every command:
+
+```bash
+python3 "<skill-dir>/prune.py" <command> [--state DIR] [--date YYYY-MM-DD]
+```
+
+Run it from inside the target repo. State lives in `<git dir>/test-prune/` (outside the working
+tree); each command reads what the previous one wrote there. Exit 0 is done (including nothing to
+do), 1 is a failed make target, gate or guard, 2 is bad input or an unmet precondition; the
+message names the offending ids or files. On exit 2 fix the input and rerun the same command; on
+exit 1 stop and report the output.
+
+**Runtime.** Each cold `make mutation` takes about 30 minutes on a real repo, and a run makes
+several (collect, every bisect step, each strengthen proof). Run long commands with a timeout of
+an hour or more, or in the background, and wait for them.
+
+## Modes
+
+- **Interactive** (default): nothing in the working tree changes before the human approves the
+  batch. Stop after `batch`, show its output, and run `apply` only on an explicit yes.
+- **Unattended** (`collect --unattended`, run headless by the weekly CI job): only protected
+  candidates, at most 10 deletions per run, work on a detached HEAD at the base commit, one PR
+  from `chore/test-prune-<date>` and one from `chore/test-strengthen-<date>`, both from the
+  base commit. You run only `prune.py` commands and dispatch subagents: `prune.py` alone
+  branches, pushes and opens PRs, and the base branch stays where it was. A merge is the human's
+  approval, so the run ends with open PRs.
+
+Equivalent mutants are proposals in both modes: the batch lists them and every PR body carries
+them for a human to triage. The skill writes no equivalent id into the baseline.
+
+## Prune loop
+
+1. `collect [--unattended | --protected-only]`. Needs a clean tracked tree on a branch. Runs the
+   base checks, a cold mutation run and `make test-candidates`, then writes
+   `fixer-input.json`. When it prints `no candidates` / `no protected candidates`, the weak spots
+   may still need the fixer; continue.
+2. **Fixer.** Dispatch a subagent with `<state>/fixer-input.json`, read access to the repo, and
+   this brief: for every candidate decide `keep`, `delete` into one named test that contains it,
+   or `strengthen` with one named assertion; for every weak-spot group decide `strengthen`
+   (which test to add to or strengthen) or `equivalent` (with the argument why no test can tell
+   the mutant apart). Compare assertions, not coverage: a candidate whose assertions pin a value,
+   boundary or error the container never checks is `keep` or `strengthen`. It writes:
+
+   ```json
+   {"candidates": [{"test_id": "...", "verdict": "keep|delete|strengthen",
+                    "into": "<test id, delete only>", "assertion": "<strengthen only>", "reason": "..."}],
+    "weak_spots": [{"group": "...", "verdict": "strengthen|equivalent",
+                    "mutant_ids": ["<subset of the group's ids, omit for all>"],
+                    "test": "<test id or test file>", "reason": "..."}]}
+   ```
+
+   One entry per candidate and per group, no others.
+3. `review-input --proposals <fixer file>` validates the file and writes
+   `<state>/review-input.json`: each proposal with the candidate's source and assertions and,
+   for a deletion, the containing test's source and assertions.
+4. **Reviewer.** Dispatch a *different* fresh subagent with `<state>/review-input.json` and read
+   access to the repo. Brief: accept a deletion only when every assertion of the candidate is
+   implied by an assertion of the `into` test (same inputs or a superset, an equal or stricter
+   check); covering the same lines is not enough. Accept a strengthen proposal only when the
+   named assertion checks behaviour a user would notice. Accept an equivalent only with a
+   concrete argument that no input distinguishes the mutant. Every reason names the assertion or
+   input it rests on. It writes, one entry per proposal:
+
+   ```json
+   {"reviews": [{"id": "<proposal id>", "verdict": "accept|reject", "reason": "..."}]}
+   ```
+
+5. `batch --reviews <reviewer file>` writes `batch.json` and prints the accepted deletions (each
+   with its containing test and the reviewer's reason), strengthen items, equivalent proposals,
+   skipped deletions with the reason, and rejections. It edits nothing.
+   - Interactive: show that output to the human and stop. After approval, `apply` applies the
+     deletions, runs the safety check, restores every culprit and commits on the current branch.
+   - Unattended: `prune` applies the first 10, runs the safety check, `make test`, commits,
+     runs `make prune-gate` and, only when it passes, pushes the branch and opens the PR.
+
+**Safety check** (inside `apply` and `prune`): a cold mutation run plus `make mutation-check`
+on the batch; when a module gains survivors it bisects, restores each culprit and reports it by
+test id with the module, the survivors with it deleted, the baseline and the survivors after
+restoring it.
+
+## Strengthen loop
+
+Runs after the prune loop, also in unattended mode, independently of the prune PR.
+
+1. `strengthen-start` writes `<state>/strengthen-input.json` (each accepted strengthen item with
+   the mutant ids it must kill and, for a candidate item, the test's source) and prints the
+   commit to build on; unattended it detaches HEAD at the base commit. `nothing to strengthen`
+   ends the loop.
+2. **Strengthen agent.** Dispatch a fresh subagent with `strengthen-input.json`. Brief: per item,
+   test-first, write the assertion or test that fails against each named mutant and passes on
+   the real code; touch only `backend/tests/`; make one or more commits per item, each ending
+   with the trailer line `Test-Prune-Item: <item id>`; leave the tree clean.
+3. `strengthen-verify` rejects commits without a known trailer or outside `backend/tests/`, then
+   proves each item on a cold run: every named id survived on the base and is killed on the
+   head. Unproven items are reverted. It writes `<state>/strengthen-proof.json`.
+4. **Strengthen reviewer.** Dispatch a fresh subagent with `strengthen-proof.json` and the diff
+   of the proven items (`git log -p <start>..HEAD`). Brief: accept an item only when its test
+   asserts observable behaviour through the public interface, rather than restating the
+   implementation; one review per proven item, same schema as the prune reviewer.
+5. `strengthen-finish --reviews <file>` reverts rejected items, reruns the proof cold, runs
+   `make mutation-check`, `make test`, `make crap` and `make mutation-baseline`, refuses a
+   baseline that gained an equivalent id, and commits the lower baseline. Unattended it opens the
+   strengthen PR listing each changed test with the ids it now kills; interactive it leaves the
+   commits on the current branch for the human.
+
+## Report
+
+End with what the last command printed: deleted, restored, skipped and left-for-next-week tests,
+strengthened tests with their killed ids, the PR links, and the equivalent proposals. In CI the
+same summaries land in `$GITHUB_STEP_SUMMARY`.
