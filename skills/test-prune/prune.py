@@ -87,6 +87,10 @@ def _run(ctx: Context) -> tuple[int, str]:
     except Fail as exc:
         emit(f"test-prune: {exc}")
         code, summary = 1, f"test-prune: {exc}"
+    except Exception as exc:  # a bug or an operational surprise still fails the run in status.json
+        summary = f"test-prune: unexpected {type(exc).__name__}: {exc}"
+        emit(summary)
+        code = 1
     if ctx.repo.stranded:
         emit(ctx.repo.stranded)
         if code == 0:

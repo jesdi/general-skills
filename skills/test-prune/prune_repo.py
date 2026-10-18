@@ -72,7 +72,7 @@ class Repo:
             raise BadInput(f"not inside a git repository: {cwd}")
         self.root = Path(proc.stdout.strip())
         self.backend = self.root / "backend"
-        self.written: dict[str, bytes] = {}  # path → the bytes this run last wrote there
+        self.written: dict = {}  # path → the bytes this run last wrote there (None: the run deleted it)
         self.stranded = ""  # why leave_on stayed off the base branch, when it did
 
     # --- git -------------------------------------------------------------------------
@@ -139,30 +139,39 @@ class Repo:
             raise Fail(f"gh pr create failed: {proc.stderr.strip()}")
         return proc.stdout.strip()
 
-    def write(self, path: str, text: str) -> None:
-        """Write a file of the run (path relative to the repo root) and remember what was written."""
-        (self.root / path).write_text(text)
-        self.own(path)
+    def read(self, path: str):
+        """The bytes at path (relative to the repo root), None when there is no file."""
+        try:
+            return (self.root / path).read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def unchanged(self, path: str, commit: str) -> bool:
+        """Nobody else changed path: it holds what the run last wrote there, or its content at commit."""
+        return (path in self.written and self.read(path) == self.written[path]
+                or self.run_git("diff", "--quiet", commit, "--", path).returncode == 0)
+
+    def write(self, paths: dict, commit: str) -> None:
+        """Write {path: text} for the run, but only over files nobody else changed since (see unchanged):
+        otherwise Fail naming them, writing nothing. A run needs a checkout of its own."""
+        changed = [path for path in paths if not self.unchanged(path, commit)]
+        if changed:
+            raise Fail(f"{', '.join(changed)} changed during the run, not by test-prune; left as it is "
+                       "(a run needs a checkout of its own)")
+        for path, text in paths.items():
+            (self.root / path).write_text(text)
+            self.own(path)
 
     def own(self, path: str) -> None:
-        """Remember the current content of path as the run's own: leave_on may restore it."""
-        self.written[path] = (self.root / path).read_bytes()
-
-    def _ours(self, path: str, commit: str) -> bool:
-        """The change at path is the run's: the file holds what the run last wrote, or the base content."""
-        try:
-            current = (self.root / path).read_bytes()
-        except OSError:
-            return False
-        return path in self.written and (current == self.written[path]
-                                         or self.run_git("diff", "--quiet", commit, "--", path).returncode == 0)
+        """Remember the current content of path (None when missing) as the run's own: leave_on may restore it."""
+        self.written[path] = self.read(path)
 
     def leave_on(self, branch: str, commit: str) -> None:
         """Back on the base branch, undoing only the run's own edits (files still holding what the run
         wrote). Any other tracked change is never discarded: HEAD then stays where it is and `stranded`
         says why (the command then fails). The base ref must not move."""
         dirty = self.dirty()
-        foreign = [path for path in dirty if not self._ours(path, commit)]
+        foreign = [path for path in dirty if path not in self.written or not self.unchanged(path, commit)]
         if foreign:
             self.stranded = (f"test-prune: staying at {self.head()[:12]}, not on {branch}: tracked changes "
                              f"test-prune did not make: {', '.join(foreign)}; keep or discard them, then "

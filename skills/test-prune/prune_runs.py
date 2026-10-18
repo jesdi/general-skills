@@ -25,9 +25,11 @@ class DeletionSet:
 
     def write(self, ids) -> None:
         targets = _targets(ids)
+        texts = {}
         for path in self.files:
             source = self.repo.show(self.commit, f"backend/{path}")
-            self.repo.write(f"backend/{path}", delete_tests(source, targets[path]) if path in targets else source)
+            texts[f"backend/{path}"] = delete_tests(source, targets[path]) if path in targets else source
+        self.repo.write(texts, self.commit)
 
 
 def families(ids) -> list:
@@ -128,8 +130,8 @@ def equivalents_section(equivalents: list) -> list:
         f"- `{e['group']}`: {', '.join(f'`{m}`' for m in e['mutant_ids'])}. {e['reason']}" for e in equivalents]
 
 
-def _deletions_report(kept: list, by_id: dict, restored: list, left: list, ratchet: dict) -> list:
-    lines = [f"## Deleted tests ({len(kept)})", ""]
+def _deletions_report(heading: str, kept: list, by_id: dict, restored: list, left: list, ratchet: dict) -> list:
+    lines = [f"## {heading} ({len(kept)})", ""]
     lines += [f"- `{t}`, contained by `{by_id[t]['into']}`: {by_id[t]['reason']}" for t in kept]
     if restored:
         lines += ["", f"## Restored by the safety check ({len({t for r in restored for t in r['test_ids']})})", ""]
@@ -160,7 +162,10 @@ def _apply_and_commit(repo, base: dict, deletions: list) -> tuple[list, list, di
             repo.must_make("test")
             _commit(repo, kept, by_id)
     except BaseException:
-        DeletionSet(repo, base["commit"], ids).write([])
+        try:
+            DeletionSet(repo, base["commit"], ids).write([])
+        except Fail as kept_edit:  # a file someone else changed stays as it is
+            emit(f"test-prune: {kept_edit}")
         raise
     return kept, restored, ratchet
 
@@ -176,7 +181,7 @@ def apply(ctx) -> int:
     head = (f"Committed on {base['branch']}: {repo.git('log', '-1', '--format=%s').strip()}" if kept
             else "Every deletion was restored: nothing committed")
     by_id = {d["test_id"]: d for d in deletions}
-    emit("\n".join([head, ""] + _deletions_report(kept, by_id, restored, [], ratchet)))
+    emit("\n".join([head, ""] + _deletions_report("Deletions committed", kept, by_id, restored, [], ratchet)))
     return 0
 
 
@@ -217,14 +222,25 @@ def _prune_detached(ctx, base: dict, out: dict, branch: str) -> int:
         emit("\n".join(["test-prune: the safety check restored every accepted deletion; no branch, no PR", ""]
                        + restored_lines(restored)))
         return 0
-    report = _deletions_report(kept, by_id, restored, left, ratchet)
+    def report(heading: str) -> list:
+        return _deletions_report(heading, kept, by_id, restored, left, ratchet)
+
     try:
         return _publish(ctx, base, out, branch, kept, report)
     except Fail as exc:  # the job summary keeps what the safety check found
-        raise Fail("\n".join([f"{exc}", ""] + report)) from None
+        raise Fail("\n".join([f"{exc}", ""] + report(_where(repo, branch)))) from None
 
 
-def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report: list) -> int:
+def _where(repo, branch: str) -> str:
+    """Where the deletions are after a failure past the safety check."""
+    if repo.run_git("rev-parse", "--verify", "-q", f"refs/heads/{branch}").returncode:
+        return "Deletions that passed the safety check, not committed"
+    if repo.run_git("ls-remote", "--heads", "origin", branch).stdout.strip():
+        return f"Deletions on `{branch}`, pushed without a PR"
+    return f"Deletions on the unpushed branch `{branch}`"
+
+
+def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report) -> int:
     """make test, the commit, the branch, make prune-gate, then the push and the PR."""
     repo = ctx.repo
     repo.must_make("test")
@@ -234,10 +250,10 @@ def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report: list) 
     gate_output = (gate.stdout + gate.stderr).strip()
     if gate.returncode:
         emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", fenced(gate_output), ""]
-                       + report))
+                       + report(f"Deletions on the unpushed branch `{branch}`")))
         return 1
     body = "\n".join([f"Weekly test prune from `{base['branch']}` at {base['commit'][:12]}. "
-                      "Delete-only; merge it to accept the batch.", ""] + report
+                      "Delete-only; merge it to accept the batch.", ""] + report("Deleted tests")
                      + ["", "## Prune gate", "", "```", gate_output, "```"]
                      + suggestions_section(out) + equivalents_section(out["equivalents"])) + "\n"
     repo.push(branch)
