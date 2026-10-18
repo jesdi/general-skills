@@ -87,12 +87,24 @@ def _run(ctx: Context) -> tuple[int, str]:
         return 1, f"test-prune: {exc}"
 
 
-def run_status(previous: dict | None, command: str, code: int, summary: str) -> dict:
+STALE = {"command": "status", "exit": 0, "reason": "previous status.json unreadable or in an old format; started fresh"}
+
+
+def _current(previous) -> bool:
+    return (isinstance(previous, dict) and isinstance(previous.get("exit"), int)
+            and isinstance(previous.get("reason"), str) and isinstance(previous.get("commands"), list))
+
+
+def run_status(previous, command: str, code: int, summary: str) -> dict:
     """The run's status, sticky across commands: the highest exit code seen and its reason, plus every
-    command in order. `collect` starts a new run."""
+    command in order. `collect` starts a new run; a missing, malformed or old-format status starts fresh
+    (noted in the list) rather than failing the command."""
     reason = next((line for line in summary.splitlines() if line.strip()), "")
     entry = {"command": command, "exit": code, "reason": reason}
-    previous = previous if previous and command != "collect" else {"exit": 0, "commands": []}
+    if command == "collect" or previous is None:
+        previous = {"exit": 0, "reason": "", "commands": []}
+    elif not _current(previous):
+        previous = {"exit": 0, "reason": "", "commands": [STALE]}
     worst = entry if code >= previous["exit"] else {"exit": previous["exit"], "reason": previous["reason"]}
     return {"exit": worst["exit"], "reason": worst["reason"], "commands": previous["commands"] + [entry]}
 
@@ -101,7 +113,10 @@ def _record(ctx: Context, code: int, summary: str) -> None:
     if not ctx.state.path.is_dir():
         return
     path = ctx.state.path / "status.json"
-    previous = json.loads(path.read_text()) if path.exists() else None
+    try:
+        previous = json.loads(path.read_text()) if path.exists() else None
+    except (OSError, ValueError):
+        previous = "unreadable"
     ctx.state.save("status.json", run_status(previous, ctx.args.command, code, summary))
 
 

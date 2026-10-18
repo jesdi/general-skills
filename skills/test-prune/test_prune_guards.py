@@ -456,3 +456,16 @@ def test_an_unattended_batch_skips_a_family_larger_than_the_cap(target):
     assert [d["test_id"] for d in batch["deletions"]] == [case(1)]
     assert sorted(s["test_id"] for s in batch["skipped"]) == sorted(grid)
     assert {s["reason"] for s in batch["skipped"]} == {"11 cases exceed the cap of 10"}
+
+
+@pytest.mark.parametrize("old", ['{"command": "collect", "exit": 0, "reason": "1 candidates"}', "{not json", "[]"])
+def test_an_old_or_malformed_status_never_crashes_a_command(target, old):
+    target.prepare([cand(case(1), unprotected=True)])
+    (target.state / "status.json").write_text(old)
+
+    proc = target.run("prune")
+
+    assert proc.returncode == 0 and "Traceback" not in proc.stderr
+    status = target.read_state("status.json")
+    assert status["exit"] == 0 and [c["command"] for c in status["commands"]] == ["status", "prune"]
+    assert "started fresh" in status["commands"][0]["reason"]
