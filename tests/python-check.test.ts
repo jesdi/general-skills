@@ -31,7 +31,7 @@ describe('Python check runner', () => {
     execFileSync('sh', [runner], { cwd: root, env });
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
       '-m coverage erase',
-      '-m coverage run -m pytest skills/backlog skills/crap-gate -q',
+      '-m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q',
       '-m coverage run -a -m pytest skills/implement-spec -q',
       '-m coverage run -m pytest skills/test-prune -q',
       '-m coverage combine --append -q',
@@ -52,7 +52,7 @@ describe('Python check runner', () => {
     expect(result.status).toBe(1);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
       '-m coverage erase',
-      '-m coverage run -m pytest skills/backlog skills/crap-gate -q',
+      '-m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q',
     ]);
   });
 });
