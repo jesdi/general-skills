@@ -10,7 +10,7 @@ fi
 
 mkdir -p .crap
 "$python" -m coverage erase
-"$python" -m coverage run -m pytest skills/backlog skills/crap-gate -q
+"$python" -m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q
 "$python" -m coverage run -a -m pytest skills/implement-spec -q
 COVERAGE_SUBPROCESS_PATCH=subprocess "$python" -m coverage run -m pytest skills/test-prune -q
 "$python" -m coverage combine --append -q
