@@ -707,3 +707,13 @@ def test_the_gate_report_keeps_the_ratchet_block_and_the_verdict():
     assert gate_report("\n".join(noise + check + noise[:3] + verdict)) == "\n".join(check + verdict)
     assert gate_report("\n".join(noise + verdict)) == "\n".join(verdict)
     assert gate_report("\n".join(noise)) == "\n".join(noise[-30:])
+
+
+def test_a_cut_inside_a_fence_closes_it(tmp_path):
+    from prune_repo import capped
+    text = "## Prune gate\n\n```\n" + "x\n" * 40_000 + "```\n"
+
+    cut = capped(text, tmp_path / "full.md", 1000)
+
+    assert len(cut) <= 1000 and cut.count("```") == 2 and cut.endswith(f"… truncated, full text in {tmp_path / 'full.md'}\n")
+    assert (tmp_path / "full.md").read_text() == text and capped("short", tmp_path / "other.md") == "short"
