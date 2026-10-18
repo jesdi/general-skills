@@ -239,16 +239,27 @@ def cap(deletions: list) -> tuple[list, list, list]:
     """(take, left, over): every whole family that still fits within CAP ids, in batch order; the families
     that do not fit this run, left for next week; and a family of more than CAP cases, which never fits,
     as skipped entries."""
+    take, left, over = _fit(families(d["test_id"] for d in deletions))
+    over_entries = [{"test_id": t, "reason": f"{len(f)} cases exceed the cap of {CAP}"} for f in over for t in f]
+    return _only(deletions, take), _only(deletions, left), over_entries
+
+
+def _fit(groups: list) -> tuple[set, set, list]:
+    """(ids taken, ids left, families too big ever to fit) for families in batch order."""
     take, left, over, count = set(), set(), [], 0
-    for family in families(d["test_id"] for d in deletions):
+    for family in groups:
         if len(family) > CAP:
-            over += [{"test_id": t, "reason": f"{len(family)} cases exceed the cap of {CAP}"} for t in family]
+            over.append(family)
         elif count + len(family) > CAP:
             left.update(family)
         else:
             take.update(family)
             count += len(family)
-    return [d for d in deletions if d["test_id"] in take], [d for d in deletions if d["test_id"] in left], over
+    return take, left, over
+
+
+def _only(deletions: list, ids: set) -> list:
+    return [d for d in deletions if d["test_id"] in ids]
 
 
 def _strengthen_item(proposal: dict, review: dict) -> dict:
@@ -290,6 +301,13 @@ def _ids(ids: list, shown: int | None) -> str:
     return listed + (f" +{len(ids) - shown} more" if shown is not None and len(ids) > shown else "")
 
 
+def _left_lines(left: list) -> list:
+    if not left:
+        return []
+    return [f"Left for next week ({len(left)}, over the cap of {CAP} per run):"] + [
+        f"  - {d['test_id']} → contained by {d['into']}" for d in left]
+
+
 def _render_batch(out: dict, mode: str) -> str:
     lines = [f"Accepted batch ({mode})" + (": nothing is edited until a human approves and runs `apply`"
                                            if mode == "interactive" else "")]
@@ -298,9 +316,7 @@ def _render_batch(out: dict, mode: str) -> str:
     spots = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
     lines.append(f"Strengthen, weak spots for the strengthen agent ({len(spots)}):")
     lines += [f"  - {s['id']} {mutant_summary(s['mutant_ids'])}: {s['reason']}" for s in spots]
-    if out["left"]:
-        lines.append(f"Left for next week ({len(out['left'])}, over the cap of {CAP} per run):")
-        lines += [f"  - {d['test_id']} → contained by {d['into']}" for d in out["left"]]
+    lines += _left_lines(out["left"])
     lines.append(f"Skipped ({len(out['skipped'])}):")
     lines += [f"  - {s['test_id']}: {s['reason']}" for s in out["skipped"]]
     lines.append(f"Rejected ({len(out['rejected'])}):")
