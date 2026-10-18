@@ -40,11 +40,11 @@ def families(ids) -> list:
 
 
 def capped(deletions: list) -> tuple[list, list]:
-    """Whole families in batch order while the id count stays within CAP; the rest is left for next week."""
+    """Every whole family that still fits within CAP ids, in batch order; the rest is left for next week."""
     taken, count = set(), 0
     for family in families(d["test_id"] for d in deletions):
         if count + len(family) > CAP:
-            break
+            continue
         taken.update(family)
         count += len(family)
     return [d for d in deletions if d["test_id"] in taken], [d for d in deletions if d["test_id"] not in taken]
@@ -202,13 +202,17 @@ def prune(ctx) -> int:
     try:
         return _prune_detached(ctx, base, out, branch)
     finally:
-        repo.leave_on(base["branch"], base["commit"])
+        repo.leave_on(base["branch"], base["commit"],
+                      [f"backend/{path}" for path in _targets(d["test_id"] for d in out["deletions"])])
 
 
 def _prune_detached(ctx, base: dict, out: dict, branch: str) -> int:
     repo = ctx.repo
     by_id = {d["test_id"]: d for d in out["deletions"]}
     take, left = capped(out["deletions"])
+    if not take:
+        emit(f"test-prune: no accepted deletion fits the cap of {CAP} test ids; no branch, no PR")
+        return 0
     kept, restored, ratchet = safety_check(repo, base, [d["test_id"] for d in take])
     if not kept:
         emit("\n".join(["test-prune: the safety check restored every accepted deletion; no branch, no PR", ""]
