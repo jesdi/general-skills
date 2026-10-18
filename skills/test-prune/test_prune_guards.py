@@ -427,3 +427,32 @@ def test_batch_prints_long_mutant_lists_shortened():
 
     assert mutant_summary(ids) == "(65 mutants: " + ", ".join(ids[:5]) + " +60 more)"
     assert mutant_summary(ids[:1]) == "(1 mutant: x_f__mutmut_1)"
+
+
+def test_a_nested_class_that_would_empty_its_outer_class_is_skipped(target):
+    path = target.root / "backend/tests/test_rebalancer.py"
+    path.write_text(path.read_text() + "\n\nclass TestOuter:\n    class TestInner:\n        def test_inner(self):\n"
+                    "            assert apply_drift(0.5) == 0.5\n")
+    target.git("commit", "-q", "-am", "nest a test class")
+    inner = R + "TestOuter::TestInner::test_inner"
+
+    target.prepare([cand(inner, HOLD)], accept=[inner], deletions={inner: HOLD})
+
+    (skipped,) = target.read_state("batch.json")["skipped"]
+    assert skipped["test_id"] == inner and "leaves class TestOuter empty" in skipped["reason"]
+
+
+def test_an_unattended_batch_skips_a_family_larger_than_the_cap(target):
+    path = target.root / "backend/tests/test_rebalancer.py"
+    path.write_text(path.read_text() + "\n\n@pytest.mark.parametrize(\"d\", " + repr(list(range(11))) + ")\n"
+                    "def test_drift_grid(d):\n    assert apply_drift(d / 20) == d / 20\n")
+    target.git("commit", "-q", "-am", "an eleven-case family")
+    grid = [f"{R}test_drift_grid[{i}]" for i in range(11)]
+    deletions = {**{t: HOLD for t in grid}, case(1): REFERENCE}
+
+    target.prepare([cand(t, into) for t, into in deletions.items()], accept=list(deletions), deletions=deletions)
+
+    batch = target.read_state("batch.json")
+    assert [d["test_id"] for d in batch["deletions"]] == [case(1)]
+    assert sorted(s["test_id"] for s in batch["skipped"]) == sorted(grid)
+    assert {s["reason"] for s in batch["skipped"]} == {"11 cases exceed the cap of 10"}
