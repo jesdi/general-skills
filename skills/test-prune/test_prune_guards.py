@@ -717,3 +717,26 @@ def test_a_cut_inside_a_fence_closes_it(tmp_path):
 
     assert len(cut) <= 1000 and cut.count("```") == 2 and cut.endswith(f"… truncated, full text in {tmp_path / 'full.md'}\n")
     assert (tmp_path / "full.md").read_text() == text and capped("short", tmp_path / "other.md") == "short"
+
+
+def test_a_pr_that_failed_after_the_push_says_the_branch_is_pushed(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    (target.bin / "gh").write_text("#!/bin/sh\necho 'Body is too long' >&2\nexit 1\n")
+
+    proc = target.run("prune")
+
+    assert proc.returncode == 1 and "gh pr create failed: Body is too long" in proc.stdout
+    assert f"## Deletions on `{PRUNE_BRANCH}`, pushed without a PR (1)" in proc.stdout
+    assert PRUNE_BRANCH in target.remote_branches()
+
+
+def test_apply_keeps_a_user_edit_when_it_puts_the_test_files_back(target):
+    target.prepare([cand(case(1))], unattended=False, accept=[case(1)], deletions={case(1): REFERENCE})
+    edited = target.root / "backend/tests/test_concentration.py"
+    fake_make(target, f"echo '# my edit' >> '{edited}'; exit 2")
+
+    proc = target.run("apply")
+
+    assert proc.returncode == 1 and "# my edit" in edited.read_text()
+    assert "backend/tests/test_concentration.py changed during the run, not by test-prune" in proc.stdout
+    assert "make test failed (exit 2)" in target.read_state("status.json")["reason"]

@@ -12,24 +12,29 @@ _CHECK_LINE = re.compile(r"^(  [✓✗•!] |      \S|    ↑)")
 _VERDICT = re.compile(r"^Prune gate (PASSED|FAILED|ERROR)")
 
 
+def _check_block(lines: list) -> list:
+    """The last `make mutation-check` block in lines: back from `Mutation ratchet PASSED/FAILED.` over its
+    module lines to `Mutation results from…` when printed."""
+    ends = [i for i, line in enumerate(lines) if re.match(r"^Mutation ratchet (PASSED|FAILED)", line)]
+    if not ends:
+        return []
+    start = ends[-1]
+    while start and _CHECK_LINE.match(lines[start - 1]):
+        start -= 1
+    if start and lines[start - 1].startswith("Mutation results from"):
+        start -= 1
+    return lines[start:ends[-1] + 1]
+
+
 def gate_report(output: str) -> str:
     """The prune gate's own report out of its whole log (the real gate prints its cold mutmut run): the
-    `make mutation-check` block it printed (back from `Mutation ratchet PASSED/FAILED.`) and everything
-    from its verdict on. No verdict found: the log's last 30 lines."""
+    `make mutation-check` block it printed and everything from its verdict on. No verdict found: the
+    log's last 30 lines."""
     lines = output.splitlines()
     verdicts = [i for i, line in enumerate(lines) if _VERDICT.match(line)]
     if not verdicts:
         return "\n".join(lines[-30:])
-    report = lines[verdicts[-1]:]
-    checks = [i for i, line in enumerate(lines[:verdicts[-1]]) if re.match(r"^Mutation ratchet (PASSED|FAILED)", line)]
-    if checks:
-        start = checks[-1]
-        while start and _CHECK_LINE.match(lines[start - 1]):
-            start -= 1
-        if start and lines[start - 1].startswith("Mutation results from"):
-            start -= 1
-        report = lines[start:checks[-1] + 1] + report
-    return "\n".join(report)
+    return "\n".join(_check_block(lines[:verdicts[-1]]) + lines[verdicts[-1]:])
 
 
 def _targets(ids) -> dict:
