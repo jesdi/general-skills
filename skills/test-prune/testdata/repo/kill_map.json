@@ -1,0 +1,131 @@
+{
+  "services/concentration.py": {
+    "x_herfindahl__mutmut_1": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_2": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_3": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_4": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_5": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_6": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_7": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_8": [
+      "tests/test_concentration.py::test_hhi_reference",
+      "tests/test_concentration.py::test_hhi_case_01"
+    ],
+    "x_herfindahl__mutmut_9": [],
+    "x_herfindahl__mutmut_10": []
+  },
+  "services/rebalancer.py": {
+    "x_compute_trades__mutmut_1": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_2": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_3": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_4": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_5": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_6": [
+      "tests/test_rebalancer.py::test_zero_weight",
+      "tests/test_rebalancer.py::test_small_weight",
+      "tests/test_rebalancer.py::test_compute_trades_sums_to_zero"
+    ],
+    "x_compute_trades__mutmut_7": [
+      "tests/test_rebalancer.py::test_compute_trades_rounding"
+    ],
+    "x_compute_trades__mutmut_8": [
+      "tests/test_rebalancer.py::test_small_weight"
+    ],
+    "x_compute_trades__mutmut_9": [
+      "tests/test_rebalancer.py::test_compute_trades_rounding"
+    ],
+    "x_apply_drift__mutmut_1": [
+      "tests/test_rebalancer.py::test_apply_drift_bounds",
+      "tests/test_rebalancer.py::TestDriftHelpers::test_drift_scales"
+    ],
+    "x_apply_drift__mutmut_2": [
+      "tests/test_rebalancer.py::test_apply_drift_new"
+    ],
+    "x_apply_drift__mutmut_3": [
+      "tests/test_rebalancer.py::test_apply_drift_bounds",
+      "tests/test_rebalancer.py::TestDriftHelpers::test_drift_scales"
+    ],
+    "x_apply_drift__mutmut_4": [],
+    "x_rebalance__mutmut_1": [],
+    "x_rebalance__mutmut_2": [],
+    "x_rebalance__mutmut_3": [],
+    "x_rebalance__mutmut_4": [],
+    "x_rebalance__mutmut_5": [],
+    "x_rebalance__mutmut_6": [],
+    "x_rebalance__mutmut_7": [],
+    "x_rebalance__mutmut_8": [],
+    "x_rebalance__mutmut_9": [],
+    "x_rebalance__mutmut_10": [],
+    "x_rebalance__mutmut_11": [],
+    "x_rebalance__mutmut_12": [],
+    "x_rebalance__mutmut_13": [],
+    "x_rebalance__mutmut_14": [],
+    "x_rebalance__mutmut_15": [],
+    "x_rebalance__mutmut_16": [],
+    "x_rebalance__mutmut_17": [
+      "tests/test_rebalancer.py::test_hold_when_on_target",
+      "tests/test_rebalancer.py::test_hold_when_within_band",
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ],
+    "x_rebalance__mutmut_18": [
+      "tests/test_rebalancer.py::test_hold_when_on_target",
+      "tests/test_rebalancer.py::test_hold_when_within_band",
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ],
+    "x_rebalance__mutmut_19": [
+      "tests/test_rebalancer.py::test_hold_when_on_target",
+      "tests/test_rebalancer.py::test_hold_when_within_band",
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ],
+    "x_rebalance__mutmut_20": [
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ],
+    "x_rebalance__mutmut_21": [
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ],
+    "x_rebalance__mutmut_22": [
+      "tests/test_rebalancer.py::test_sell_only_rebalance"
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+#!@PYTHON@
+"""Fake gh: logs argv and the --body-file content, prints a PR URL for `pr create`."""
+import json
+import sys
+
+args = sys.argv[1:]
+body = None
+if "--body-file" in args:
+    path = args[args.index("--body-file") + 1]
+    body = sys.stdin.read() if path == "-" else open(path).read()
+elif "--body" in args:
+    body = args[args.index("--body") + 1]
+with open("@LOGS@/gh.log", "a") as f:
+    f.write(json.dumps({"argv": args, "body": body}) + "\n")
+if args[:2] == ["pr", "create"]:
+    print("https://github.com/acme/portfolio/pull/42")
