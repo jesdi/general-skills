@@ -35,7 +35,10 @@ exit 1 stop and report the output.
 
 Every command also records itself in `<state>/status.json`, sticky across the run (`collect`
 starts it afresh): `{"exit", "reason", "commands": [{"command", "exit", "reason"}]}`, where
-`exit` is the highest exit code seen so far and `reason` the first line that command printed.
+`exit` is the highest exit code still open and `reason` the first line that command printed. An
+exit 1 stays for the whole run; an exit 2 closes once the same command reruns with exit 0. A failed
+make target's reason names it (`make test failed (exit 2)`); the summary below it carries the last
+30 lines of its output.
 End a headless session by reporting that `reason` as the final line. The session cannot set the
 job's exit code: ticket 24's CI job reads `<state>/status.json` after the session and fails the
 job when `exit` is not 0. Nothing to do is exit 0.
@@ -56,7 +59,11 @@ an hour or more, or in the background, and wait for them.
   candidates, at most 10 deleted test ids per run (a parametrized test goes whole, every case
   counted; one with more than 10 cases is skipped), work on a detached HEAD at the base commit, one PR from `chore/test-prune-<date>`
   and one from `chore/test-strengthen-<date>`, both from the base commit. The base branch stays
-  where it was. A merge is the human's approval, so the run ends with open PRs.
+  where it was. A merge is the human's approval, so the run ends with open PRs. Leaving the detached
+  HEAD, a command restores only the files that still hold what it wrote; any other tracked change,
+  including your edit to one of those files mid-run, keeps HEAD detached and untouched, is named in
+  the summary, and fails the command (exit 1). Keep or discard the change, then check out the base
+  branch.
 
 Two kinds of accepted proposal reach a human only: equivalent mutants (the skill writes no
 equivalent id into the baseline) and "strengthen this candidate with this assertion" verdicts
@@ -109,7 +116,9 @@ PR body and the job summary carry them.
    - Interactive: show that output to the human and stop. After approval, `apply` applies the
      deletions, runs the safety check, restores every culprit and commits on the current branch.
    - Unattended: `prune` applies the first 10, runs the safety check, `make test`, commits,
-     runs `make prune-gate` and, only when it passes, pushes the branch and opens the PR.
+     runs `make prune-gate` and, only when it passes, pushes the branch and opens the PR. When a
+     step after the safety check fails, its summary still carries the safety-check result
+     (deletions, restored tests, ratchet lines).
 
 **Safety check** (inside `apply` and `prune`): a cold mutation run plus `make mutation-check`
 on the batch; when a module gains survivors it bisects (a parametrized test is one unit), restores each culprit and reports it by
