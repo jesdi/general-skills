@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prune_repo import SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
+from prune_repo import FULL_DIR, SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
 from prune_review import batch, collect, review_input
 from prune_runs import apply, prune
 from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
@@ -56,6 +56,7 @@ class Context:
         self.repo = Repo(Path.cwd())
         self.state = State(Path(args.state).resolve() if args.state else self.repo.git_dir() / "test-prune")
         self.date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        FULL_DIR[0] = self.state.path
 
     def validate(self) -> None:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date):
