@@ -24,13 +24,14 @@ Interface choices (ticket 06):
 """
 import json
 import re
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
 
 import pytest
 
-from test_cli import git, ticket
+from test_cli import SKILL, git, ticket
 from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, review
 from test_stops import UNATTENDED, decisions, stage
 from test_walk import impl, plan, tw
@@ -445,3 +446,112 @@ def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
     assert rig.code == 1, rig.output()
     assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
+
+
+# ---------------------------------------------------------------- the merge-risk block of the PR body (ticket 15)
+
+PR_RISK = SKILL.parent / "pr-risk"
+BLOCK = ("door: two-way\nblast_radius: isolated\ntouches: [%s]\nrollback: revert\nverdict: auto\n"
+         "reasons:\n  - \"Only prose changes\"\n")
+
+
+def risk_body(touches="docs"):
+    return ("## Summary\n\nCSV export.\n\n## Merge Danger\n\n```merge-risk v1\n" + BLOCK % touches + "```\n")
+
+
+def writer(body):
+    return {"report": dict(status="DONE", commits=[], files=[], concerns=[], body=body)}
+
+
+def risk_valid(tmp_path, body):
+    f = tmp_path / "check-body.md"
+    f.write_text(body)
+    return subprocess.run([sys.executable, str(PR_RISK / "merge_risk.py"), "validate", str(f)],
+                          capture_output=True, text=True).returncode == 0
+
+
+def pushed_run(tmp_path, monkeypatch, steps, risk_in, gh_fails=False):
+    """`implement-spec` as installed (a copy next to review-diff) with `pr` installed in `risk_in`'s home, and
+    `pr-risk` there too unless `risk_in` is None; the run is `--push`."""
+    rig = Final(tmp_path, ONE)
+    if gh_fails:
+        (tmp_path / "bin/gh").write_text("#!/bin/sh\necho gh down >&2\nexit 1\n")
+    skills = tmp_path / "installed/skills"
+    shutil.copytree(SKILL, skills / "implement-spec", ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "test_*"))
+    shutil.copytree(SKILL.parent / "review-diff", skills / "review-diff", ignore=shutil.ignore_patterns("__pycache__"))
+    home = tmp_path / "home"
+    claude = tmp_path / "claude-home"
+    claude.mkdir(), home.mkdir()
+    where = {"claude": claude / "skills", "agents": home / ".agents/skills", None: claude / "skills"}[risk_in]
+    names = ["pr", "pr-risk"] if risk_in else ["pr"]
+    for name in names:
+        (where / name).mkdir(parents=True)
+        (where / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
+    if risk_in:
+        shutil.copy(PR_RISK / "merge_risk.py", where / "pr-risk/merge_risk.py")
+    env = {**rig.env, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(claude)}
+    (rig.rig / "plan.json").write_text(json.dumps(steps))
+    args = ["--tickets", ".agent/tickets", "--gate", str(rig.rig / "gate"), "--spec", "specs/csv/spec.md",
+            "--models", str(rig.models), "--runner", str(rig.rig / "run-agent"), "--push"]
+    rig.rerun = lambda: _rerun(rig, ["sh", str(skills / "implement-spec/run.sh"), *args], env)
+    rig.rerun()
+    return rig, where / "pr-risk/SKILL.md"
+
+
+def _rerun(rig, cmd, env):
+    proc = subprocess.run(cmd, cwd=rig.repo, env=env, text=True, capture_output=True, timeout=180)
+    rig.code, rig.out = proc.returncode, proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("home", ["claude", "agents"])
+def test_the_pr_writer_gets_the_pr_risk_path_and_the_pr_opens_with_a_valid_block_above_the_facts(tmp_path, monkeypatch, home):
+    rig, skill = pushed_run(tmp_path, monkeypatch, plan(**{"final/pr-writer": [writer(risk_body())]}), home)
+    assert rig.code == 0, rig.out
+    (call,) = rig.final_calls("pr-writer")
+    assert str(skill) in call["prompt"]
+    (pr,) = rig.prs()
+    body = pr["body"]
+    assert risk_valid(tmp_path, body), body
+    assert 0 <= body.index("## Merge Danger") < body.index("## Tickets"), "the driver's facts come after the block"
+
+
+def test_without_pr_risk_installed_the_run_is_blocked_with_the_install_command_and_pushes_nothing(tmp_path, monkeypatch):
+    rig, _ = pushed_run(tmp_path, monkeypatch, plan(), None)
+    assert rig.code != 0 and "pr-risk" in rig.out and "install" in rig.out.lower(), rig.out
+    assert re.search(r"npx [^\n]*pr-risk", rig.out), f"no executable install command: {rig.out}"
+    assert rig.pushes() == [] and not rig.prs() and not rig.final_calls("pr-writer")
+
+
+def test_an_invalid_first_body_runs_the_pr_writer_once_more_and_a_valid_second_body_opens_the_pr(tmp_path, monkeypatch):
+    steps = plan(**{"final/pr-writer": [writer(risk_body("styles")), writer(risk_body())]})
+    rig, _ = pushed_run(tmp_path, monkeypatch, steps, "claude")
+    assert rig.code == 0, rig.out
+    assert len(rig.final_calls("pr-writer")) == 2
+    (pr,) = rig.prs()
+    assert risk_valid(tmp_path, pr["body"]) and "styles" not in pr["body"].split("## Tickets")[0]
+
+
+def test_an_invalid_second_body_blocks_the_run_and_opens_no_pr(tmp_path, monkeypatch):
+    steps = plan(**{"final/pr-writer": [writer(risk_body("styles")), writer(risk_body("styles")), writer(risk_body())]})
+    rig, _ = pushed_run(tmp_path, monkeypatch, steps, "claude")
+    assert rig.code != 0, rig.out
+    assert len(rig.final_calls("pr-writer")) == 2 and not rig.prs()
+
+
+def test_skill_md_step_2_tells_the_operator_to_start_the_babysitter_on_the_pr_url():
+    step = next(l for l in (SKILL / "SKILL.md").read_text().splitlines() if l.startswith("2. "))
+    assert "/babysit-pr https://github.com/jesdi/demo/pull/61" in step
+
+
+def test_a_cached_body_that_no_longer_validates_is_rewritten_before_gh_pr_create_on_resume(tmp_path, monkeypatch):
+    steps = plan(**{"final/pr-writer": [writer(risk_body()), writer(risk_body())]})
+    rig, _ = pushed_run(tmp_path, monkeypatch, steps, "claude", gh_fails=True)
+    assert rig.code != 0 and "gh pr create failed" in rig.out and len(rig.final_calls("pr-writer")) == 1, rig.out
+    cached = rig.repo / ".agent/implement/final/pr-body.md"
+    cached.write_text(cached.read_text().replace("touches: [docs]", "touches: [styles]"))
+    (tmp_path / "bin/gh").write_text(GH)
+    rig.rerun()
+    assert rig.code == 0, rig.out
+    assert len(rig.final_calls("pr-writer")) == 2, "the invalid cached body was not rewritten"
+    (pr,) = rig.prs()
+    assert risk_valid(tmp_path, pr["body"].split("## Tickets")[0]) and "styles" not in pr["body"].split("## Tickets")[0]

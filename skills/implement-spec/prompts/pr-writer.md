@@ -6,11 +6,12 @@ PR branch: {pr_branch}, at commit {start_sha}
 Range: {range}
 Gate record of the driver for {start_sha}: {gate}
 PR method: {pr_skill}
+Merge-risk block: {pr_risk_skill}
 Facts of the run, which the driver puts after your body:
 {facts}
 
-Write the body of the PR of the range with the method of the pr skill in the file above: its sections, in its order. Read the spec, the tickets and the range first. The gate record and the tests of the range are the execution-based evidence; you cannot take screenshots. Do not repeat the facts of the run: the driver puts them after your body.
-Do not commit. Leave the branch and the tree as you found them.
+Write the body of the PR of the range with the method of the pr skill in the file above: its sections, in its order. Put the merge-risk block, as the pr-risk skill describes it, under `## Merge Danger`, and check it with `python3 merge_risk.py validate <body-file>` from that skill's folder. Read the spec, the tickets and the range first. The gate record and the tests of the range are the execution-based evidence; you cannot take screenshots. Do not repeat the facts of the run: the driver puts them after your body.
+{risk_errors}Do not commit. Leave the branch and the tree as you found them.
 
 Write one JSON report at {report} that matches this schema:
 

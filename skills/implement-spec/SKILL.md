@@ -24,7 +24,7 @@ has passed. The review rounds adapt superpowers' subagent-driven-development
 Run the driver. It makes every choice of the run; you start it and relay its result.
 
 1. In the PR worktree, run `sh <skill-dir>/run.sh` with the flags the operator gave, unchanged. `<skill-dir>` is the directory of this file. The driver needs `--gate` and `--spec`: ask the operator for a flag that is missing. A run can take hours: run the command in the background and wait for it to exit.
-2. When it exits, relay `.agent/implement/summary.md` and the exit code: 0 is done, 1 is a BLOCKED ticket, 2 is parked on questions, 3 is invalid input, 4 is stopped by a CLI failure (after the fix, the same command resumes). Relay the lines the driver printed after the summary too.
+2. When it exits, relay `.agent/implement/summary.md` and the exit code: 0 is done, 1 is a BLOCKED ticket, 2 is parked on questions, 3 is invalid input, 4 is stopped by a CLI failure (after the fix, the same command resumes). Relay the lines the driver printed after the summary too. With exit 0 and a PR URL such as `https://github.com/jesdi/demo/pull/61`, tell the operator to start the babysitter: run `/babysit-pr https://github.com/jesdi/demo/pull/61`.
 3. With exit 2, and with exit 1 when the driver printed questions, show the operator those questions. When the operator answers, run the same command again with one `--answer <question id>=<option id>` for each answer.
 
 Do not answer a question for the operator. Do not edit `.agent/implement/`, the code or the branches during a run.

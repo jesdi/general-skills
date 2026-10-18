@@ -95,8 +95,8 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     (pr,) = rig.prs()
     assert pr["argv"][:10] == ["pr", "create", "--base", "main", "--head", "feat/csv", "--title", "csv spec",
                                "--body-file", ".agent/implement/final/pr-body.md"]
-    assert pr["body"].startswith("## Summary\n\nCSV export.\n\n## Tickets\n"), "the pr-writer's body, then the facts"
-    assert [f"- {nn}: {row['sha'][:7]} {TITLES[nn]}" for nn, row in zip(order, rows)] == pr["body"].splitlines()[8:11]
+    assert pr["body"].startswith("## Summary\n\nCSV export.\n\n## Merge Danger\n"), "the pr-writer's body, then the facts"
+    assert [f"- {nn}: {row['sha'][:7]} {TITLES[nn]}" for nn, row in zip(order, rows)] == pr["body"].split("## Tickets\n\nOne commit per ticket, in merge order:\n\n")[1].splitlines()[:3]
     (writer,) = rig.final_calls("pr-writer")
     assert f"PR method: {pr_skill}\n" in writer["prompt"]
     assert "Facts of the run, which the driver puts after your body:\n## Tickets" in writer["prompt"]
