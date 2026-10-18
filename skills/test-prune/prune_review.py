@@ -5,6 +5,7 @@ import json
 from pathlib import PurePosixPath
 
 from prune_repo import BadInput, Fail, emit, ratchet_lines
+from prune_runs import CAP, families
 from prune_source import class_refusals, describe, undeletable
 
 CANDIDATE_VERDICTS = {"keep", "delete", "strengthen"}
@@ -233,10 +234,24 @@ def _settle(accepted: list, tests: list, sources: Sources) -> tuple[list, list]:
             skipped + partial + [{"test_id": t, "reason": r} for t, r in refused.items()])
 
 
+def over_cap(deletions: list) -> tuple[list, list]:
+    """A parametrized test with more cases than the unattended cap can never be deleted unattended."""
+    big = [family for family in families(d["test_id"] for d in deletions) if len(family) > CAP]
+    over = {t: f"{len(family)} cases exceed the cap of {CAP}" for family in big for t in family}
+    return ([d for d in deletions if d["test_id"] not in over],
+            [{"test_id": t, "reason": reason} for t, reason in over.items()])
+
+
 def _strengthen_item(proposal: dict, review: dict) -> dict:
     item = {k: v for k, v in proposal.items() if k not in ("into", "verdict")}
     return dict(item, kind="weak_spot" if "group" in proposal else "candidate",
                 fixer_reason=proposal.get("reason"), reason=review["reason"])
+
+
+def mutant_summary(ids: list, shown: int = 5) -> str:
+    """`(<n> mutants: <first ids> +N more)`: batch.json keeps every id, the printout stays readable."""
+    more = f" +{len(ids) - shown} more" if len(ids) > shown else ""
+    return f"({len(ids)} mutant{'' if len(ids) == 1 else 's'}: {', '.join(ids[:shown])}{more})"
 
 
 def suggestion_lines(out: dict) -> list:
@@ -255,10 +270,10 @@ def _render_batch(out: dict, mode: str) -> str:
     lines += [f"  - {d['test_id']} → contained by {d['into']}: {d['reason']}" for d in out["deletions"]]
     spots = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
     lines.append(f"Strengthen, weak spots for the strengthen agent ({len(spots)}):")
-    lines += [f"  - {s['id']}: {', '.join(s['mutant_ids'])}: {s['reason']}" for s in spots]
+    lines += [f"  - {s['id']} {mutant_summary(s['mutant_ids'])}: {s['reason']}" for s in spots]
     lines += suggestion_lines(out)
     lines.append(f"Equivalent proposals ({len(out['equivalents'])}, never declared by test-prune):")
-    lines += [f"  - {e['group']}: {', '.join(e['mutant_ids'])}: {e['reason']}" for e in out["equivalents"]]
+    lines += [f"  - {e['group']} {mutant_summary(e['mutant_ids'])}: {e['reason']}" for e in out["equivalents"]]
     lines.append(f"Skipped ({len(out['skipped'])}):")
     lines += [f"  - {s['test_id']}: {s['reason']}" for s in out["skipped"]]
     lines.append(f"Rejected ({len(out['rejected'])}):")
@@ -297,6 +312,9 @@ def batch(ctx) -> int:
         else:
             out["strengthen"].append(_strengthen_item(p, review))
     out["deletions"], out["skipped"] = _settle(accepted, base["tests"], Sources(ctx.repo, base["commit"]))
+    if base["mode"] == "unattended":
+        out["deletions"], over = over_cap(out["deletions"])
+        out["skipped"] += over
     path = ctx.state.save("batch.json", out)
     emit(f"{_render_batch(out, base['mode'])}\n→ {path}")
     return 0

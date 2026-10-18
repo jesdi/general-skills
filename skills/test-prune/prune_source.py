@@ -86,14 +86,28 @@ def undeletable(source: str, test_id: str) -> str | None:
     node = find(tree, classes, name)
     if node is None:
         return "not a test function defined in its file (inherited or generated), cannot be deleted whole"
-    start, end = _span(node)
-    if _uses(tree)[0].get(name, set()) - set(range(start, end + 1)):
+    uses = _uses(tree)[0]
+    if _named_outside(uses, node):
         return f"the file reads or spells the name {name} outside the test"
+    named = next((cls for cls in _enclosing(tree, classes) if _named_outside(uses, cls)), None)
+    if named is not None:
+        return (f"class {named.name} is subclassed or named elsewhere in the file: deleting its test changes "
+                "what that code inherits or finds")
     owner = find_class(tree, classes)
     if owner is not None and owner.body[0] is node and node.decorator_list:
         return (f"decorated first member of class {owner.name}: the prune gate reads its decorators as the "
                 "class header")
     return None
+
+
+def _named_outside(uses: dict, node: ast.stmt) -> bool:
+    start, end = _span(node)
+    return bool(uses.get(node.name, set()) - set(range(start, end + 1)))
+
+
+def _enclosing(tree: ast.Module, classes: tuple[str, ...]) -> list:
+    """The class nodes along classes, outermost first."""
+    return [c for c in (find_class(tree, classes[:depth]) for depth in range(1, len(classes) + 1)) if c is not None]
 
 
 def find_class(tree: ast.Module, classes: tuple[str, ...]) -> ast.ClassDef | None:
@@ -141,21 +155,15 @@ def _leaves_empty(parent: ast.ClassDef, scope: tuple[str, ...], targets: set) ->
 
 
 def class_refusals(source: str, test_ids: list) -> dict:
-    """{test id: reason} for tests whose deletion together removes a class the prune gate keeps (its name
-    is read or spelled outside it, e.g. a subclass) or that would leave its enclosing class empty."""
+    """{test id: reason} for tests whose deletion together removes a nested class and leaves its
+    enclosing class empty (a class named outside itself is refused per test, by undeletable)."""
     tree = ast.parse(source)
     targets = {split_id(t)[1:] for t in test_ids}
-    uses = _uses(tree)[0]
     out: dict = {}
     for node, scope, parent in _removed_classes(tree.body, (), None, targets):
-        start, end = _span(node)
-        path = scope + (node.name,)
-        reason = None
-        if uses.get(node.name, set()) - set(range(start, end + 1)):
-            reason = f"deleting it removes class {node.name}, whose name the file reads or spells elsewhere"
-        elif parent is not None and _leaves_empty(parent, scope, targets):
+        if parent is not None and _leaves_empty(parent, scope, targets):
+            path = scope + (node.name,)
             reason = f"deleting it removes class {node.name} and leaves class {parent.name} empty"
-        if reason:
             out.update({t: reason for t in test_ids if split_id(t)[1][:len(path)] == path})
     return out
 
