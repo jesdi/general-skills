@@ -26,11 +26,26 @@ class BadInput(Exception):
 
 
 SUMMARY: list = []
+FULL_DIR: list = [None]  # where a summary over LIMIT keeps its full text (the state dir)
+LIMIT = 60_000  # characters per PR body or summary block; GitHub refuses a PR body over 65,536
+
+
+def capped(text: str, full: Path, limit: int = LIMIT) -> str:
+    """text, or when it exceeds limit, its start with a visible truncation line (the full text saved to full)."""
+    if len(text) <= limit:
+        return text
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(text)
+    note = f"\n\n… truncated, full text in {full}\n"
+    cut = text[:limit - len(note) - 4]
+    return cut + ("\n```" if cut.count("```") % 2 else "") + note
 
 
 def emit(text: str) -> None:
     """Print a run summary; also append it to the GitHub job summary when there is one. Every summary a
-    command emits is kept in SUMMARY, in order."""
+    command emits is kept in SUMMARY, in order; one over LIMIT is cut, its full text kept in FULL_DIR."""
+    if FULL_DIR[0] is not None:
+        text = capped(text, FULL_DIR[0] / f"summary-{len(SUMMARY) + 1}.md")
     SUMMARY.append(text)
     print(text, flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -238,6 +253,12 @@ class State:
 
     def save(self, name: str, data: dict) -> Path:
         return self.save_text(name, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+    def save_body(self, name: str, text: str) -> tuple[Path, str]:
+        """A PR body, capped to fit GitHub with room for the summary around it; the full text, when cut,
+        goes to <name>-full.md."""
+        body = capped(text, self.path / name.replace(".md", "-full.md"), LIMIT - 1000)
+        return self.save_text(name, body), body
 
     def save_text(self, name: str, text: str) -> Path:
         path = self.path / name

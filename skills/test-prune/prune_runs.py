@@ -2,10 +2,34 @@
 restore every culprit, then commit; unattended also branches, gates, pushes and opens the PR."""
 from __future__ import annotations
 
+import re
+
 from prune_repo import BadInput, Fail, emit, fenced, ratchet_lines
 from prune_source import delete_tests, split_id
 
 CAP = 10
+_CHECK_LINE = re.compile(r"^(  [✓✗•!] |      \S|    ↑)")
+_VERDICT = re.compile(r"^Prune gate (PASSED|FAILED|ERROR)")
+
+
+def gate_report(output: str) -> str:
+    """The prune gate's own report out of its whole log (the real gate prints its cold mutmut run): the
+    `make mutation-check` block it printed (back from `Mutation ratchet PASSED/FAILED.`) and everything
+    from its verdict on. No verdict found: the log's last 30 lines."""
+    lines = output.splitlines()
+    verdicts = [i for i, line in enumerate(lines) if _VERDICT.match(line)]
+    if not verdicts:
+        return "\n".join(lines[-30:])
+    report = lines[verdicts[-1]:]
+    checks = [i for i, line in enumerate(lines[:verdicts[-1]]) if re.match(r"^Mutation ratchet (PASSED|FAILED)", line)]
+    if checks:
+        start = checks[-1]
+        while start and _CHECK_LINE.match(lines[start - 1]):
+            start -= 1
+        if start and lines[start - 1].startswith("Mutation results from"):
+            start -= 1
+        report = lines[start:checks[-1] + 1] + report
+    return "\n".join(report)
 
 
 def _targets(ids) -> dict:
@@ -247,16 +271,18 @@ def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report) -> int
     subject = _commit(repo, kept, {d["test_id"]: d for d in out["deletions"]})
     repo.git("branch", branch)
     gate = repo.make("prune-gate", f"BASE={base['commit']}", f"HEAD={branch}")
-    gate_output = (gate.stdout + gate.stderr).strip()
+    log = ctx.state.save_text("prune-gate.log", gate.stdout + gate.stderr)
+    gate_output = f"{fenced(gate_report(gate.stdout + gate.stderr))}\n\nThe gate's report; its full log is in `{log}`."
     if gate.returncode:
-        emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", fenced(gate_output), ""]
+        emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", gate_output, ""]
                        + report(f"Deletions on the unpushed branch `{branch}`")))
         return 1
     body = "\n".join([f"Weekly test prune from `{base['branch']}` at {base['commit'][:12]}. "
                       "Delete-only; merge it to accept the batch.", ""] + report("Deleted tests")
-                     + ["", "## Prune gate", "", "```", gate_output, "```"]
+                     + ["", "## Prune gate", "", gate_output]
                      + suggestions_section(out) + equivalents_section(out["equivalents"])) + "\n"
     repo.push(branch)
-    url = repo.open_pr(base["branch"], branch, subject, ctx.state.save_text("prune-pr.md", body))
+    path, body = ctx.state.save_body("prune-pr.md", body)
+    url = repo.open_pr(base["branch"], branch, subject, path)
     emit(f"Opened {url}\n\n{body}")
     return 0

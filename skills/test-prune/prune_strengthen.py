@@ -297,6 +297,7 @@ def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
     repo.git("branch", branch)
     repo.push(branch)
     title = f"test: strengthen {len(accepted)} weak spot{'' if len(accepted) == 1 else 's'}"
-    url = repo.open_pr(base["branch"], branch, title, ctx.state.save_text("strengthen-pr.md", body))
+    path, body = ctx.state.save_body("strengthen-pr.md", body)
+    url = repo.open_pr(base["branch"], branch, title, path)
     emit(f"Opened {url}\n\n{body}")
     return 0

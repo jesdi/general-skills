@@ -6,10 +6,11 @@ import sys
 
 import pytest
 
-from prune_harness import PRUNE, PRUNE_BRANCH, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
+from prune_harness import PRUNE, PRUNE_BRANCH, arg, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
 from prune_repo import Fail, Repo
 from prune_runs import capped
-from test_prune_strengthen import COMPUTE, COMPUTE_TEST, DRIFT, DRIFT_TEST, IDS_7_9, strengthen_group, strengthen_pr
+from test_prune_strengthen import (COMPUTE, COMPUTE_TEST, DRIFT, DRIFT_TEST, EQUIVALENT_ID, HERFINDAHL, IDS_7_9,
+                                   strengthen, strengthen_group, strengthen_pr)
 
 CULPRIT = R + "test_sell_only_rebalance"  # sole killer of x_rebalance__mutmut_20..22
 HOLD = R + "test_hold_when_on_target"
@@ -644,3 +645,65 @@ def test_an_exit_1_stays_open_after_the_command_passes():
     assert status["exit"] == 1 and status["reason"] == "prune said 1"
     status = run_status(status, "strengthen-finish", 1, "strengthen-finish said 1")
     assert status["exit"] == 1 and status["reason"] == "strengthen-finish said 1"  # the latest on a tie
+
+
+# --- PR body size ----------------------------------------------------------------------
+
+def prune_pr(target):
+    (create,) = [c for c in target.pr_creates() if arg(c["argv"], "--head") == PRUNE_BRANCH]
+    return create["body"]
+
+
+def test_the_pr_carries_the_gate_report_not_its_whole_mutmut_log(target, tmp_path):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    fake_make(target, "for i in $(seq 1 20000); do echo \"    x_herfindahl__mutmut_$i: killed\"; done\n"
+                      "echo 'Mutation results from commit abc123'\n"
+                      "echo '  ✓ services/concentration.py: 2 survivors, baseline 2, score 80.00'\n"
+                      "echo 'Mutation ratchet PASSED.'\n"
+                      'exec $MAKE "$@"', goal="prune-gate")
+    summary = tmp_path / "summary.md"
+
+    proc = target.run("prune", env={"GITHUB_STEP_SUMMARY": str(summary)})
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body, log = prune_pr(target), target.state / "prune-gate.log"
+    gate = body.split("## Prune gate", 1)[1]
+    assert "Mutation results from commit abc123" in gate and "Mutation ratchet PASSED." in gate
+    assert "  ✓ services/concentration.py: 2 survivors" in gate and "Prune gate PASSED" in gate
+    assert "mutmut_" not in gate and str(log) in gate and "truncated" not in body
+    assert "x_herfindahl__mutmut_20000: killed" in log.read_text()
+    assert len(summary.read_text()) < 60_000
+
+
+def test_pr_bodies_and_summaries_over_the_limit_are_cut_visibly(target, tmp_path):
+    huge = "the fixer's argument, " * 3500  # 77,000 characters
+    summary = tmp_path / "summary.md"
+    env = {"GITHUB_STEP_SUMMARY": str(summary)}
+    target.prepare([cand(case(1))], accept=[case(1), COMPUTE, HERFINDAHL], deletions={case(1): REFERENCE}, env=env,
+                   reasons={case(1): huge}, groups={COMPUTE: strengthen_group(IDS_7_9),
+                                                   HERFINDAHL: {"verdict": "equivalent", "mutant_ids": [EQUIVALENT_ID],
+                                                                "test": "tests/test_concentration.py", "reason": huge}})
+
+    target.ok("prune", env=env)
+    assert strengthen(target, [(COMPUTE, COMPUTE_TEST)], [COMPUTE], env=env).returncode == 0
+
+    for body, name in ((prune_pr(target), "prune-pr-full.md"), (strengthen_pr(target), "strengthen-pr-full.md")):
+        full = target.state / name
+        assert len(body) < 60_000 and f"… truncated, full text in {full}" in body
+        assert huge in full.read_text() and body == (target.state / name.replace("-full", "")).read_text()
+    batch_full = target.state / "summary-1.md"  # batch prints both arguments
+    assert f"… truncated, full text in {batch_full}" in summary.read_text() and huge in batch_full.read_text()
+
+
+def test_the_gate_report_keeps_the_ratchet_block_and_the_verdict():
+    from prune_runs import gate_report
+    noise = [f"    x_hhi__mutmut_{i}: killed" for i in range(500)]
+    check = ["Mutation results from commit abc", "  ✗ services/a.py: 3 survivors > baseline 2 (score 50.00)",
+             "      x_a__mutmut_1", "  ✓ services/b.py: 1 survivors, baseline 1, score 90.00",
+             "    ↑ fewer survivors than the baseline, run 'make mutation-baseline' to lock it in",
+             "Mutation ratchet FAILED."]
+    verdict = ["Prune gate FAILED at point 4:", "  ✗ the mutation ratchet check failed (output above)"]
+
+    assert gate_report("\n".join(noise + check + noise[:3] + verdict)) == "\n".join(check + verdict)
+    assert gate_report("\n".join(noise + verdict)) == "\n".join(verdict)
+    assert gate_report("\n".join(noise)) == "\n".join(noise[-30:])
