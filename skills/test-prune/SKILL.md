@@ -33,10 +33,12 @@ do), 1 is a failed make target, gate or guard, 2 is bad input or an unmet precon
 message names the offending ids or files. On exit 2 fix the input and rerun the same command; on
 exit 1 stop and report the output.
 
-Every command also writes `<state>/status.json`: `{"command", "exit", "reason"}`, the reason
-being the first line of what it printed. A headless run (ticket 24's job) ends its session with
-the last command's status: report that `reason` as the run's final line and exit with its
-`exit`, so the job is red exactly when a command failed. Nothing to do is exit 0.
+Every command also records itself in `<state>/status.json`, sticky across the run (`collect`
+starts it afresh): `{"exit", "reason", "commands": [{"command", "exit", "reason"}]}`, where
+`exit` is the highest exit code seen so far and `reason` the first line that command printed.
+End a headless session by reporting that `reason` as the final line. The session cannot set the
+job's exit code: ticket 24's CI job reads `<state>/status.json` after the session and fails the
+job when `exit` is not 0. Nothing to do is exit 0.
 
 When a push succeeded but `gh pr create` failed (exit 1, the branch is on origin with no PR),
 open the PR by hand from `<state>/prune-pr.md` or `<state>/strengthen-pr.md` after fixing `gh`;
@@ -52,7 +54,7 @@ an hour or more, or in the background, and wait for them.
   batch. Stop after `batch`, show its output, and run `apply` only on an explicit yes.
 - **Unattended** (`collect --unattended`, run headless by the weekly CI job): only protected
   candidates, at most 10 deleted test ids per run (a parametrized test goes whole, every case
-  counted), work on a detached HEAD at the base commit, one PR from `chore/test-prune-<date>`
+  counted; one with more than 10 cases is skipped), work on a detached HEAD at the base commit, one PR from `chore/test-prune-<date>`
   and one from `chore/test-strengthen-<date>`, both from the base commit. The base branch stays
   where it was. A merge is the human's approval, so the run ends with open PRs.
 
@@ -116,7 +118,8 @@ restoring it.
 
 ## Strengthen loop
 
-Runs after the prune loop, also in unattended mode, independently of the prune PR.
+Runs after the prune loop, also in unattended mode, independently of the prune PR: run it even
+when `prune` exited 1 (the status keeps that failure, so the job still goes red).
 
 1. `strengthen-start` writes `<state>/strengthen-input.json` (each accepted weak-spot strengthen
    item with the mutant ids it must kill) and prints the commit to build on; unattended it
@@ -128,13 +131,16 @@ Runs after the prune loop, also in unattended mode, independently of the prune P
 3. `strengthen-verify` rejects commits without a known trailer or outside `backend/tests/`, then
    proves each item on a cold run: every named id survived on the base and is killed on the
    head. Unproven items are reverted and closed: a later commit for a closed item is refused. It
-   writes `<state>/strengthen-proof.json`, including the proven head.
+   writes `<state>/strengthen-proof.json`, including the proven head. On failure HEAD stays
+   where the commits are (detached, unattended): fix and rerun. To abandon the loop instead,
+   `git checkout <base branch>`; the item commits stay reachable through `git reflog`.
 4. **Strengthen reviewer.** Dispatch a fresh subagent with `strengthen-proof.json` and the diff
    of the proven items (`git log -p <start>..HEAD`). Brief: accept an item only when its test
    asserts observable behaviour through the public interface, rather than restating the
    implementation; one review per proven item, same schema as the prune reviewer.
 5. `strengthen-finish --reviews <file>` refuses a HEAD other than the proven one (rerun
-   `strengthen-verify` after any new commit), reverts rejected items, reruns the proof cold, runs
+   `strengthen-verify` after any new commit); on any exit 2 HEAD stays at the proven head, so fix
+   the input and rerun it. It reverts rejected items, reruns the proof cold, runs
    `make mutation-check`, `make test`, `make crap` and `make mutation-baseline`, refuses a
    baseline that gained an equivalent id, and commits the lower baseline. Unattended it opens the
    strengthen PR listing each changed test with the ids it now kills; interactive it leaves the
