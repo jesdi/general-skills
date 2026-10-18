@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import re
 
-from prune_repo import BadInput, Fail, emit, fenced, ratchet_lines
-from prune_source import delete_tests, split_id
+from prune_repo import Fail, fenced, ratchet_lines
+from prune_review import CAP, equivalents_section, suggestions_section
+from prune_source import delete_tests, families, targets
 
-CAP = 10
 _CHECK_LINE = re.compile(r"^(  [✓✗•!] |      \S|    ↑)")
 _VERDICT = re.compile(r"^Prune gate (PASSED|FAILED|ERROR)")
 
@@ -37,48 +37,18 @@ def gate_report(output: str) -> str:
     return "\n".join(_check_block(lines[:verdicts[-1]]) + lines[verdicts[-1]:])
 
 
-def _targets(ids) -> dict:
-    """{test file: {(classes, function)}} for the test ids."""
-    out: dict = {}
-    for test_id in ids:
-        path, classes, name = split_id(test_id)
-        out.setdefault(path, set()).add((classes, name))
-    return out
-
-
 class DeletionSet:
     """Writes a deletion set over the base commit's content of every file the whole batch touches."""
 
     def __init__(self, repo, commit: str, ids):
-        self.repo, self.commit, self.files = repo, commit, sorted(_targets(ids))
+        self.repo, self.commit, self.files = repo, commit, sorted(targets(ids))
 
     def write(self, ids) -> None:
-        targets = _targets(ids)
-        texts = {}
+        chosen, texts = targets(ids), {}
         for path in self.files:
-            source = self.repo.show(self.commit, f"backend/{path}")
-            texts[f"backend/{path}"] = delete_tests(source, targets[path]) if path in targets else source
+            source = self.repo.show_test(self.commit, path)
+            texts[self.repo.test_path(path)] = delete_tests(source, chosen[path]) if path in chosen else source
         self.repo.write(texts, self.commit)
-
-
-def families(ids) -> list:
-    """Test ids grouped by test function, in batch order: a parametrize family is deleted, capped,
-    bisected and restored as one unit, because deleting one case deletes the function."""
-    groups: dict = {}
-    for test_id in ids:
-        groups.setdefault(test_id.split("[")[0], []).append(test_id)
-    return list(groups.values())
-
-
-def capped(deletions: list) -> tuple[list, list]:
-    """Every whole family that still fits within CAP ids, in batch order; the rest is left for next week."""
-    taken, count = set(), 0
-    for family in families(d["test_id"] for d in deletions):
-        if count + len(family) > CAP:
-            continue
-        taken.update(family)
-        count += len(family)
-    return [d for d in deletions if d["test_id"] in taken], [d for d in deletions if d["test_id"] not in taken]
 
 
 def _culprit(family: list, failing: dict, passing: dict) -> list:
@@ -126,7 +96,7 @@ def _commit(repo, kept: list, by_id: dict) -> str:
     subject = f"test: delete {len(kept)} redundant test{'' if len(kept) == 1 else 's'}"
     body = "Each one is contained by another test and the mutation ratchet passes without it:\n" + "\n".join(
         f"- {t} (contained by {by_id[t]['into']})" for t in kept)
-    repo.git("add", "--", *(f"backend/{path}" for path in sorted(_targets(kept))))
+    repo.git("add", "--", *(repo.test_path(path) for path in sorted(targets(kept))))
     repo.git("commit", "-q", "-m", subject, "-m", body)
     return subject
 
@@ -138,25 +108,6 @@ def restored_lines(restored: list) -> list:
 
 def _cases(restored: dict) -> str:
     return f" ({len(restored['test_ids'])} parametrized cases)" if len(restored["test_ids"]) > 1 else ""
-
-
-def suggestions_section(out: dict) -> list:
-    items = [i for i in out["strengthen"] if i["kind"] == "candidate"]
-    if not items:
-        return []
-    return ["", "## Strengthen suggestions", "",
-            "The reviewer accepted these \"strengthen with this assertion\" verdicts. test-prune does not apply "
-            "them; a human adds each assertion.", ""] + [
-        f"- `{i['id']}`: add `{i['assertion']}`. {i['reason']}" for i in items]
-
-
-def equivalents_section(equivalents: list) -> list:
-    if not equivalents:
-        return []
-    return ["", "## Equivalent proposals", "",
-            "The reviewer accepted these as equivalent mutants. test-prune never declares an equivalent; "
-            "a human adds them to `backend/mutation_baseline.json` after checking each one.", ""] + [
-        f"- `{e['group']}`: {', '.join(f'`{m}`' for m in e['mutant_ids'])}. {e['reason']}" for e in equivalents]
 
 
 def _deletions_report(heading: str, kept: list, by_id: dict, restored: list, left: list, ratchet: dict) -> list:
@@ -174,15 +125,9 @@ def _deletions_report(heading: str, kept: list, by_id: dict, restored: list, lef
     return lines
 
 
-def require_at_base(repo, base: dict, command: str) -> None:
-    repo.require_clean()
-    if repo.branch() != base["branch"] or repo.head() != base["commit"]:
-        raise BadInput(f"{command} runs on {base['branch']} at the collected commit {base['commit']}; "
-                       "check it out, or collect again after moving it")
-
-
-def _apply_and_commit(repo, base: dict, deletions: list) -> tuple[list, list, dict]:
+def _apply_and_commit(ctx, base: dict, deletions: list) -> tuple[list, list, dict]:
     """Safety check, make test and the commit; any failure puts every touched test file back."""
+    repo = ctx.repo
     by_id = {d["test_id"]: d for d in deletions}
     ids = [d["test_id"] for d in deletions]
     try:
@@ -194,23 +139,23 @@ def _apply_and_commit(repo, base: dict, deletions: list) -> tuple[list, list, di
         try:
             DeletionSet(repo, base["commit"], ids).write([])
         except Fail as kept_edit:  # a file someone else changed stays as it is
-            emit(f"test-prune: {kept_edit}")
+            ctx.state.emit(f"test-prune: {kept_edit}")
         raise
     return kept, restored, ratchet
 
 
 def apply(ctx) -> int:
     repo, base = ctx.repo, ctx.base("interactive")
-    require_at_base(repo, base, "apply")
+    repo.require_at(base, "apply")
     deletions = ctx.state.load("batch.json")["deletions"]
     if not deletions:
-        emit("no accepted deletions to apply")
+        ctx.state.emit("no accepted deletions to apply")
         return 0
-    kept, restored, ratchet = _apply_and_commit(repo, base, deletions)
+    kept, restored, ratchet = _apply_and_commit(ctx, base, deletions)
     head = (f"Committed on {base['branch']}: {repo.git('log', '-1', '--format=%s').strip()}" if kept
             else "Every deletion was restored: nothing committed")
     by_id = {d["test_id"]: d for d in deletions}
-    emit("\n".join([head, ""] + _deletions_report("Deletions committed", kept, by_id, restored, [], ratchet)))
+    ctx.state.emit("\n".join([head, ""] + _deletions_report("Deletions committed", kept, by_id, restored, [], ratchet)))
     return 0
 
 
@@ -227,12 +172,10 @@ def prune(ctx) -> int:
     repo, base = ctx.repo, ctx.base("unattended")
     out = ctx.state.load("batch.json")
     if not out["deletions"]:
-        emit(_nothing_to_prune(ctx, base, out))
+        ctx.state.emit(_nothing_to_prune(ctx, base, out))
         return 0
     branch = f"chore/test-prune-{ctx.date}"
-    require_at_base(repo, base, "prune")
-    repo.require_new_branch(branch)
-    repo.git("checkout", "-q", "--detach", base["commit"])
+    repo.detach_at(base, branch, "prune")
     try:
         return _prune_detached(ctx, base, out, branch)
     finally:
@@ -242,13 +185,10 @@ def prune(ctx) -> int:
 def _prune_detached(ctx, base: dict, out: dict, branch: str) -> int:
     repo = ctx.repo
     by_id = {d["test_id"]: d for d in out["deletions"]}
-    take, left = capped(out["deletions"])
-    if not take:
-        emit(f"test-prune: no accepted deletion fits the cap of {CAP} test ids; no branch, no PR")
-        return 0
-    kept, restored, ratchet = safety_check(repo, base, [d["test_id"] for d in take])
+    left = out["left"]
+    kept, restored, ratchet = safety_check(repo, base, [d["test_id"] for d in out["deletions"]])
     if not kept:
-        emit("\n".join(["test-prune: the safety check restored every accepted deletion; no branch, no PR", ""]
+        ctx.state.emit("\n".join(["test-prune: the safety check restored every accepted deletion; no branch, no PR", ""]
                        + restored_lines(restored)))
         return 0
     def report(heading: str) -> list:
@@ -279,7 +219,7 @@ def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report) -> int
     log = ctx.state.save_text("prune-gate.log", gate.stdout + gate.stderr)
     gate_output = f"{fenced(gate_report(gate.stdout + gate.stderr))}\n\nThe gate's report; its full log is in `{log}`."
     if gate.returncode:
-        emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", gate_output, ""]
+        ctx.state.emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", gate_output, ""]
                        + report(f"Deletions on the unpushed branch `{branch}`")))
         return 1
     body = "\n".join([f"Weekly test prune from `{base['branch']}` at {base['commit'][:12]}. "
@@ -289,5 +229,5 @@ def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report) -> int
     repo.push(branch)
     path, body = ctx.state.save_body("prune-pr.md", body)
     url = repo.open_pr(base["branch"], branch, subject, path)
-    emit(f"Opened {url}\n\n{body}")
+    ctx.state.emit(f"Opened {url}\n\n{body}")
     return 0

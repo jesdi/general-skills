@@ -5,9 +5,8 @@ from __future__ import annotations
 
 import json
 
-from prune_repo import KILLED, SURVIVING, BadInput, Fail, emit, ratchet_lines
-from prune_review import check_reviews, suggestion_lines
-from prune_runs import equivalents_section, suggestions_section
+from prune_repo import KILLED, SURVIVING, BadInput, Fail, Repo, ratchet_lines
+from prune_review import check_reviews, equivalents_section, suggestions_section
 from prune_source import test_sources
 
 TRAILER = "Test-Prune-Item"
@@ -26,29 +25,25 @@ def _work_item(item: dict) -> dict:
             "source": candidate.get("source"), "reason": item.get("fixer_reason"), "review": item["reason"]}
 
 
-def _detach_at_base(ctx, base: dict) -> None:
-    ctx.repo.require_new_branch(_branch(ctx))
-    if ctx.repo.ref(base["branch"]) != base["commit"]:
-        raise BadInput(f"{base['branch']} moved since collect ({base['commit']}): collect again")
-    ctx.repo.git("checkout", "-q", "--detach", base["commit"])
-
-
 def strengthen_start(ctx) -> int:
     repo, base = ctx.repo, ctx.base()
     out = ctx.state.load("batch.json")
     items = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
     if not items:
-        emit("\n".join(["nothing to strengthen"] + suggestion_lines(out)))
+        ctx.state.emit("\n".join(["nothing to strengthen"] + suggestions_section(out)
+                                  + equivalents_section(out["equivalents"], shown=5)))
+        ctx.finished = True
         return 0
-    repo.require_clean()
     if base["mode"] == "unattended":
-        _detach_at_base(ctx, base)
+        repo.detach_at(base, _branch(ctx), "strengthen-start")
+    else:
+        repo.require_clean()
     start = repo.head()
     work = [_work_item(i) for i in items]
     ctx.state.save("strengthen.json", {"start": start, "verified": False, "items": work,
                                        "status": {i["id"]: "open" for i in work}, "closed": {}})
     path = ctx.state.save("strengthen-input.json", {"start": start, "items": work})
-    emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one or more "
+    ctx.state.emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one or more "
          f"commits per item, each touching only backend/tests/ and ending with the trailer `{TRAILER}: <item id>`.")
     return 0
 
@@ -169,13 +164,13 @@ def strengthen_verify(ctx) -> int:
     proof = _prove(ctx, base, st)
     st["verified"] = True
     ctx.state.save("strengthen.json", st)
-    emit("\n".join(["Strengthen proof (survives on the base, killed on the head, per mutant id):"] + _proof_lines(proof)))
+    ctx.state.emit("\n".join(["Strengthen proof (survives on the base, killed on the head, per mutant id):"] + _proof_lines(proof)))
     return 0
 
 
 def changed_tests(before: str, after: str, path: str) -> list:
     """Test ids in the file at path that are new or changed from before to after."""
-    old, rel = test_sources(before), path[len("backend/"):]
+    old, rel = test_sources(before), path[len(Repo.test_path("")):]
     return [f"{rel}::{name}" for name, text in test_sources(after).items() if old.get(name) != text]
 
 
@@ -242,25 +237,28 @@ def strengthen_finish(ctx) -> int:
     repo, base = ctx.repo, ctx.base()
     st = ctx.state.load("strengthen.json")
     unattended = base["mode"] == "unattended"
+    leave = unattended
     try:
         code = _finish(ctx, base, st, _finish_reviews(ctx, st), unattended)
     except BadInput:
-        raise  # HEAD stays at the proven head: fix the input and rerun
-    except BaseException:
-        if unattended:
-            repo.leave_on(base["branch"], base["commit"])
+        leave = False  # HEAD stays at the proven head: fix the input and rerun
         raise
-    if unattended:
-        repo.leave_on(base["branch"], base["commit"])
+    finally:
+        if leave:
+            repo.leave_on(base["branch"], base["commit"])
+    ctx.finished = code == 0
     return code
 
 
 def _keep_accepted(ctx, base: dict, st: dict, reviews: dict) -> tuple[dict, list]:
-    commits = _commits(ctx.repo, st)
-    for item_id, review in reviews.items():
-        if review["verdict"] == "reject":
-            _close(ctx.repo, st, item_id, commits, "rejected", f"Rejected by the reviewer: {review['reason']}")
-    proof = _prove(ctx, base, st)
+    rejected = [i for i, review in reviews.items() if review["verdict"] == "reject"]
+    if rejected:  # a revert changes the head: prove the rest again, cold
+        commits = _commits(ctx.repo, st)
+        for item_id in rejected:
+            _close(ctx.repo, st, item_id, commits, "rejected", f"Rejected by the reviewer: {reviews[item_id]['reason']}")
+        proof = _prove(ctx, base, st)
+    else:
+        proof = ctx.state.load("strengthen-proof.json")["items"]
     return proof, [i for i, s in st["status"].items() if s == "proven"]
 
 
@@ -284,14 +282,14 @@ def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
     repo = ctx.repo
     proof, accepted = _keep_accepted(ctx, base, st, reviews)
     if not accepted:
-        emit("test-prune: nothing proven and accepted to strengthen; no branch, no PR")
+        ctx.state.emit("test-prune: nothing proven and accepted to strengthen; no branch, no PR")
         return 0
     ratchet, new = _lower_baseline(repo, base)
     commits = [(sha, items[0]) for sha, items, _ in _history(repo, st["start"]) if items]
     tests = {i: _item_tests(repo, commits, i) for i in accepted}
     body = _body(base, st, proof, accepted, tests, new, ratchet, ctx.state.load("batch.json"))
     if not unattended:
-        emit(f"Strengthen commits kept on {repo.branch()}:\n\n{body}")
+        ctx.state.emit(f"Strengthen commits kept on {repo.branch()}:\n\n{body}")
         return 0
     branch = _branch(ctx)
     repo.git("branch", branch)
@@ -299,5 +297,5 @@ def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
     title = f"test: strengthen {len(accepted)} weak spot{'' if len(accepted) == 1 else 's'}"
     path, body = ctx.state.save_body("strengthen-pr.md", body)
     url = repo.open_pr(base["branch"], branch, title, path)
-    emit(f"Opened {url}\n\n{body}")
+    ctx.state.emit(f"Opened {url}\n\n{body}")
     return 0

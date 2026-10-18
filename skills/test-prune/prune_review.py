@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 from pathlib import PurePosixPath
 
-from prune_repo import BadInput, Fail, emit, ratchet_lines
-from prune_runs import CAP, families
-from prune_source import class_refusals, describe, undeletable
+from prune_repo import BadInput, Fail, ratchet_lines
+from prune_source import class_refusals, describe, families, undeletable
+
+CAP = 10  # deleted test ids per unattended run; a parametrized test counts each case
 
 CANDIDATE_VERDICTS = {"keep", "delete", "strengthen"}
 GROUP_VERDICTS = {"strengthen", "equivalent"}
@@ -20,7 +21,7 @@ class Sources:
 
     def text(self, path: str) -> str | None:
         if path not in self.files:
-            self.files[path] = self.repo.show(self.commit, f"backend/{path}")
+            self.files[path] = self.repo.show_test(self.commit, path)
         return self.files[path]
 
     def describe(self, test_id: str) -> dict:
@@ -83,7 +84,7 @@ def collect(ctx) -> int:
     path = ctx.state.save("fixer-input.json", fixer)
     kind = "protected candidates" if protected else "candidates"
     count = f"{len(fixer['candidates'])} {kind}" if fixer["candidates"] else f"no {kind}"
-    emit(f"{count}, {len(fixer['weak_spots'])} weak-spot groups → {path}")
+    ctx.state.emit(f"{count}, {len(fixer['weak_spots'])} weak-spot groups → {path}")
     return 0
 
 
@@ -191,7 +192,7 @@ def review_input(ctx) -> int:
                  for c in fixer["candidates"] if cands[c["test_id"]]["verdict"] != "keep"]
     proposals += [p for w in fixer["weak_spots"] for p in _group_proposals(w, spots[w["group"]])]
     path = ctx.state.save("review-input.json", {"proposals": proposals})
-    emit(f"{len(proposals)} proposals for the reviewer → {path}")
+    ctx.state.emit(f"{len(proposals)} proposals for the reviewer → {path}")
     return 0
 
 
@@ -234,12 +235,20 @@ def _settle(accepted: list, tests: list, sources: Sources) -> tuple[list, list]:
             skipped + partial + [{"test_id": t, "reason": r} for t, r in refused.items()])
 
 
-def over_cap(deletions: list) -> tuple[list, list]:
-    """A parametrized test with more cases than the unattended cap can never be deleted unattended."""
-    big = [family for family in families(d["test_id"] for d in deletions) if len(family) > CAP]
-    over = {t: f"{len(family)} cases exceed the cap of {CAP}" for family in big for t in family}
-    return ([d for d in deletions if d["test_id"] not in over],
-            [{"test_id": t, "reason": reason} for t, reason in over.items()])
+def cap(deletions: list) -> tuple[list, list, list]:
+    """(take, left, over): every whole family that still fits within CAP ids, in batch order; the families
+    that do not fit this run, left for next week; and a family of more than CAP cases, which never fits,
+    as skipped entries."""
+    take, left, over, count = set(), set(), [], 0
+    for family in families(d["test_id"] for d in deletions):
+        if len(family) > CAP:
+            over += [{"test_id": t, "reason": f"{len(family)} cases exceed the cap of {CAP}"} for t in family]
+        elif count + len(family) > CAP:
+            left.update(family)
+        else:
+            take.update(family)
+            count += len(family)
+    return [d for d in deletions if d["test_id"] in take], [d for d in deletions if d["test_id"] in left], over
 
 
 def _strengthen_item(proposal: dict, review: dict) -> dict:
@@ -254,13 +263,31 @@ def mutant_summary(ids: list, shown: int = 5) -> str:
     return f"({len(ids)} mutant{'' if len(ids) == 1 else 's'}: {', '.join(ids[:shown])}{more})"
 
 
-def suggestion_lines(out: dict) -> list:
+def suggestions_section(out: dict) -> list:
     """Accepted "strengthen with this assertion" verdicts on candidates: listed for a human, never applied."""
     items = [i for i in out["strengthen"] if i["kind"] == "candidate"]
     if not items:
         return []
-    return [f"Strengthen suggestions for a human ({len(items)}, not applied by test-prune):"] + [
-        f"  - {i['id']}: add `{i['assertion']}`: {i['reason']}" for i in items]
+    return ["", "## Strengthen suggestions", "",
+            "The reviewer accepted these \"strengthen with this assertion\" verdicts. test-prune does not apply "
+            "them; a human adds each assertion.", ""] + [
+        f"- `{i['id']}`: add `{i['assertion']}`. {i['reason']}" for i in items]
+
+
+def equivalents_section(equivalents: list, shown: int | None = None) -> list:
+    """Accepted equivalent proposals, for a human to check and declare; shown: ids listed per group
+    before the rest is counted (None: every id, as the PR bodies need)."""
+    if not equivalents:
+        return []
+    return ["", "## Equivalent proposals", "",
+            "The reviewer accepted these as equivalent mutants. test-prune never declares an equivalent; "
+            "a human adds them to `backend/mutation_baseline.json` after checking each one.", ""] + [
+        f"- `{e['group']}`: {_ids(e['mutant_ids'], shown)}. {e['reason']}" for e in equivalents]
+
+
+def _ids(ids: list, shown: int | None) -> str:
+    listed = ", ".join(f"`{m}`" for m in ids[:shown])
+    return listed + (f" +{len(ids) - shown} more" if shown is not None and len(ids) > shown else "")
 
 
 def _render_batch(out: dict, mode: str) -> str:
@@ -271,14 +298,14 @@ def _render_batch(out: dict, mode: str) -> str:
     spots = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
     lines.append(f"Strengthen, weak spots for the strengthen agent ({len(spots)}):")
     lines += [f"  - {s['id']} {mutant_summary(s['mutant_ids'])}: {s['reason']}" for s in spots]
-    lines += suggestion_lines(out)
-    lines.append(f"Equivalent proposals ({len(out['equivalents'])}, never declared by test-prune):")
-    lines += [f"  - {e['group']} {mutant_summary(e['mutant_ids'])}: {e['reason']}" for e in out["equivalents"]]
+    if out["left"]:
+        lines.append(f"Left for next week ({len(out['left'])}, over the cap of {CAP} per run):")
+        lines += [f"  - {d['test_id']} → contained by {d['into']}" for d in out["left"]]
     lines.append(f"Skipped ({len(out['skipped'])}):")
     lines += [f"  - {s['test_id']}: {s['reason']}" for s in out["skipped"]]
     lines.append(f"Rejected ({len(out['rejected'])}):")
     lines += [f"  - {r['id']} [{r['kind']}]: {r['reason']}" for r in out["rejected"]]
-    return "\n".join(lines)
+    return "\n".join(lines + suggestions_section(out) + equivalents_section(out["equivalents"], shown=5))
 
 
 def check_reviews(reviews: list, ids: list) -> dict:
@@ -298,7 +325,7 @@ def batch(ctx) -> int:
     base = ctx.base()
     proposals = ctx.state.load("review-input.json")["proposals"]
     reviews = check_reviews(ctx.reviews(), [p["id"] for p in proposals])
-    out: dict = {"deletions": [], "strengthen": [], "equivalents": [], "rejected": [], "skipped": []}
+    out: dict = {"deletions": [], "left": [], "strengthen": [], "equivalents": [], "rejected": [], "skipped": []}
     accepted = []
     for p in proposals:
         review = reviews[p["id"]]
@@ -313,8 +340,8 @@ def batch(ctx) -> int:
             out["strengthen"].append(_strengthen_item(p, review))
     out["deletions"], out["skipped"] = _settle(accepted, base["tests"], Sources(ctx.repo, base["commit"]))
     if base["mode"] == "unattended":
-        out["deletions"], over = over_cap(out["deletions"])
+        out["deletions"], out["left"], over = cap(out["deletions"])
         out["skipped"] += over
     path = ctx.state.save("batch.json", out)
-    emit(f"{_render_batch(out, base['mode'])}\n→ {path}")
+    ctx.state.emit(f"{_render_batch(out, base['mode'])}\n→ {path}")
     return 0

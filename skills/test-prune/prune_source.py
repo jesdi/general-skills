@@ -18,18 +18,31 @@ def split_id(test_id: str) -> tuple[str, tuple[str, ...], str]:
     return path, tuple(names[:-1]), names[-1]
 
 
+def targets(ids) -> dict:
+    """{test file: {(classes, function)}} for the test ids."""
+    out: dict = {}
+    for test_id in ids:
+        path, classes, name = split_id(test_id)
+        out.setdefault(path, set()).add((classes, name))
+    return out
+
+
+def families(ids) -> list:
+    """Test ids grouped by test function, in order: a parametrize family is deleted, capped, bisected and
+    restored as one unit, because deleting one case deletes the function."""
+    groups: dict = {}
+    for test_id in ids:
+        groups.setdefault(test_id.split("[")[0], []).append(test_id)
+    return list(groups.values())
+
+
 def _span(node: ast.stmt) -> tuple[int, int]:
     return min([node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))]), node.end_lineno
 
 
 def find(tree: ast.Module, classes: tuple[str, ...], name: str) -> ast.stmt | None:
-    body = tree.body
-    for cls in classes:
-        node = next((n for n in body if isinstance(n, ast.ClassDef) and n.name == cls), None)
-        if node is None:
-            return None
-        body = node.body
-    return next((n for n in body if isinstance(n, FUNCS) and n.name == name), None)
+    owner = find_class(tree, classes) if classes else tree
+    return next((n for n in owner.body if isinstance(n, FUNCS) and n.name == name), None) if owner else None
 
 
 def _callee(func: ast.expr) -> str | None:
