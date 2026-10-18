@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
 """test-prune: drive the fixer/reviewer prune loop and the strengthen loop over a target repo.
 
-Stub: defines the CLI surface only. Every command exits 3, "not implemented".
+collect → (fixer) → review-input → (reviewer) → batch → apply (interactive) | prune (unattended);
+strengthen-start → (strengthen agent) → strengthen-verify → (reviewer) → strengthen-finish.
+The script owns every git, make and file operation; the agents only write JSON or test commits.
 """
+from __future__ import annotations
+
 import argparse
+import re
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from prune_repo import BadInput, Fail, Repo, State, emit, read_agent_json
+from prune_review import batch, collect, review_input
+from prune_runs import apply, prune
+from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
+
+COMMANDS = {
+    "collect": collect, "review-input": review_input, "batch": batch, "apply": apply, "prune": prune,
+    "strengthen-start": strengthen_start, "strengthen-verify": strengthen_verify,
+    "strengthen-finish": strengthen_finish,
+}
 
 
 def build_parser():
@@ -15,9 +33,9 @@ def build_parser():
     parser = argparse.ArgumentParser(prog="prune.py", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    collect = sub.add_parser("collect", parents=[common])
-    collect.add_argument("--unattended", action="store_true")
-    collect.add_argument("--protected-only", action="store_true")
+    collect_cmd = sub.add_parser("collect", parents=[common])
+    collect_cmd.add_argument("--unattended", action="store_true")
+    collect_cmd.add_argument("--protected-only", action="store_true")
 
     sub.add_parser("review-input", parents=[common]).add_argument("--proposals", required=True)
     sub.add_parser("batch", parents=[common]).add_argument("--reviews", required=True)
@@ -29,10 +47,41 @@ def build_parser():
     return parser
 
 
+class Context:
+    """What every command gets: the repo, the run state, the branch date and its arguments."""
+
+    def __init__(self, args):
+        self.args = args
+        self.repo = Repo(Path.cwd())
+        self.state = State(Path(args.state).resolve() if args.state else self.repo.git_dir() / "test-prune")
+        self.date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date):
+            raise BadInput(f"--date must be YYYY-MM-DD, got {self.date!r}")
+
+    def base(self, mode: str | None = None) -> dict:
+        base = self.state.load("base.json")
+        if mode and base["mode"] != mode:
+            raise BadInput(f"`{self.args.command}` needs a {mode} run; this run was collected {base['mode']}")
+        return base
+
+    def reviews(self) -> list:
+        return read_agent_json(self.args.reviews, "reviews")
+
+    def proposals(self) -> dict:
+        return {"candidates": read_agent_json(self.args.proposals, "candidates"),
+                "weak_spots": read_agent_json(self.args.proposals, "weak_spots")}
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
-    print(f"{args.command}: not implemented", file=sys.stderr)
-    return 3
+    try:
+        return COMMANDS[args.command](Context(args))
+    except BadInput as exc:
+        print(f"test-prune: {exc}", file=sys.stderr)
+        return 2
+    except Fail as exc:
+        emit(f"test-prune: {exc}")
+        return 1
 
 
 if __name__ == "__main__":
