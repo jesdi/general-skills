@@ -33,19 +33,11 @@ do), 1 is a failed make target, gate or guard, 2 is bad input or an unmet precon
 message names the offending ids or files. On exit 2 fix the input and rerun the same command; on
 exit 1 stop and report the output.
 
-Every command also records itself in `<state>/status.json`, sticky across the run (`collect`
-starts it afresh): `{"exit", "reason", "commands": [{"command", "exit", "reason"}]}`, where
-`exit` is the highest exit code still open and `reason` the first line that command printed. An
-exit 1 stays for the whole run; an exit 2 closes once the same command reruns with exit 0. A failed
-make target's reason names it (`make test failed (exit 2)`); the summary below it carries the last
-30 lines of its output.
-End a headless session by reporting that `reason` as the final line. The session cannot set the
-job's exit code: ticket 24's CI job reads `<state>/status.json` after the session and fails the
-job when `exit` is not 0. Nothing to do is exit 0.
-
-PR bodies and summary blocks stay under 60,000 characters (GitHub refuses a PR body over 65,536):
-a longer one is cut with a line `… truncated, full text in <state>/<file>`. The prune PR carries
-the gate's report (its ratchet block and verdict); the gate's full log is `<state>/prune-gate.log`.
+Every command records itself in `<state>/status.json`. A CI job reads it after the headless
+session (which cannot set the job's exit code) and fails the job when its `exit` is not 0; an
+unattended run stays red there until the strengthen loop ends (`nothing to strengthen`, or
+`strengthen-finish` exit 0). End a headless session by reporting its `reason` as the final line.
+`--state` must be empty, new, or an earlier run's state dir.
 
 When a push succeeded but `gh pr create` failed (exit 1, the branch is on origin with no PR),
 open the PR by hand from `<state>/prune-pr.md` or `<state>/strengthen-pr.md` after fixing `gh`;
@@ -53,10 +45,11 @@ rerunning the command refuses because the branch exists.
 
 **A run needs a checkout dedicated to it** for its whole duration: the CI checkout, or a worktree.
 If anything else edits a file there mid-run, the run stops with exit 1 rather than overwrite it,
-and nothing is lost; races beyond that check are out of scope.
+leaves the checkout as it is (HEAD may stay detached), names the files, and nothing is lost; keep
+or discard the change, then check out the base branch. Races beyond that check are out of scope.
 
 **Runtime.** Each cold `make mutation` takes about 30 minutes on a real repo, and a run makes
-several (collect, every bisect step, each strengthen proof). Run long commands with a timeout of
+several (collect, each safety-check run, each strengthen proof). Run long commands with a timeout of
 an hour or more, or in the background, and wait for them.
 
 ## Modes
@@ -65,15 +58,10 @@ an hour or more, or in the background, and wait for them.
   batch. Stop after `batch`, show its output, and run `apply` only on an explicit yes.
 - **Unattended** (`collect --unattended`, run headless by the weekly CI job): only protected
   candidates, at most 10 deleted test ids per run (a parametrized test goes whole, every case
-  counted; one with more than 10 cases is skipped), work on a detached HEAD at the base commit, one PR from `chore/test-prune-<date>`
-  and one from `chore/test-strengthen-<date>`, both from the base commit. The base branch stays
-  where it was. A merge is the human's approval, so the run ends with open PRs. Leaving the detached
-  HEAD, a command restores only the files that still hold what it wrote; any other tracked change,
-  including an edit to one of those files mid-run or a baseline left by a failed
-  `make mutation-baseline`, keeps HEAD detached and untouched, is named in the summary, and fails
-  the command (exit 1). An unexpected error is reported as `test-prune: unexpected <Type>: <msg>`,
-  exit 1. Keep or discard the change, then check out the base
-  branch.
+  counted; one with more than 10 cases is skipped, the rest left for next week), one PR from
+  `chore/test-prune-<date>` and one from `chore/test-strengthen-<date>`, both from the base
+  commit. The base branch never moves. A merge is the human's approval, so the run ends with open
+  PRs.
 
 Two kinds of accepted proposal reach a human only: equivalent mutants (the skill writes no
 equivalent id into the baseline) and "strengthen this candidate with this assertion" verdicts
@@ -125,16 +113,11 @@ PR body and the job summary carry them.
    skipped deletions with the reason, and rejections. It edits nothing.
    - Interactive: show that output to the human and stop. After approval, `apply` applies the
      deletions, runs the safety check, restores every culprit and commits on the current branch.
-   - Unattended: `prune` applies the first 10, runs the safety check, `make test`, commits,
-     runs `make prune-gate` and, only when it passes, pushes the branch and opens the PR. When a
-     step after the safety check fails, its summary still carries the safety-check result
-     (restored tests, ratchet lines), headed by where the deletions are: not committed, or on the
-     unpushed (or pushed, PR-less) branch.
+   - Unattended: `prune` applies the batch, runs the safety check, `make test`, commits, runs
+     `make prune-gate` and, only when it passes, pushes the branch and opens the PR.
 
 **Safety check** (inside `apply` and `prune`): a cold mutation run plus `make mutation-check`
-on the batch; when a module gains survivors it bisects (a parametrized test is one unit), restores each culprit and reports it by
-test id with the module, the survivors with it deleted, the baseline and the survivors after
-restoring it.
+on the batch; every deletion that lets a module exceed its baseline is restored and reported.
 
 ## Strengthen loop
 
