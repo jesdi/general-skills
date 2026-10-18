@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 # mutmut's status_by_exit_code, as check_mutation.py reads it.
@@ -122,9 +123,18 @@ class Repo:
             raise Fail(f"gh pr create failed: {proc.stderr.strip()}")
         return proc.stdout.strip()
 
-    def leave_on(self, branch: str, commit: str) -> None:
-        """Back on the base branch, discarding the run's own edits; the base ref must not have moved."""
-        self.git("checkout", "-q", "--force", branch)
+    def leave_on(self, branch: str, commit: str, owned=()) -> None:
+        """Back on the base branch, undoing only the run's own edits (owned paths). A tracked change the
+        run did not make is never discarded: HEAD then stays where it is. The base ref must not move."""
+        dirty = [line[3:] for line in self.git("status", "--porcelain", "--untracked-files=no").splitlines()]
+        foreign = [path for path in dirty if path not in set(owned)]
+        if foreign:
+            print(f"test-prune: staying at {self.head()[:12]}, not on {branch}: tracked changes test-prune did "
+                  f"not make: {', '.join(foreign)}", file=sys.stderr)
+        else:
+            if dirty:
+                self.git("checkout", "-q", "HEAD", "--", *dirty)
+            self.git("checkout", "-q", branch)
         if self.ref(branch) != commit:
             raise Fail(f"guard: {branch} moved from {commit} during the run")
 
