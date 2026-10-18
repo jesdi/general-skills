@@ -1,0 +1,252 @@
+"""collect, review-input and batch: from the candidate report to the accepted batch; edits nothing."""
+from __future__ import annotations
+
+import json
+from pathlib import PurePosixPath
+
+from prune_repo import BadInput, Fail, emit, ratchet_lines
+from prune_source import describe, undeletable
+
+CANDIDATE_VERDICTS = {"keep", "delete", "strengthen"}
+GROUP_VERDICTS = {"strengthen", "equivalent"}
+
+
+class Sources:
+    """Test files as of one commit, keyed by their backend-relative path."""
+
+    def __init__(self, repo, commit: str):
+        self.repo, self.commit, self.files = repo, commit, {}
+
+    def text(self, path: str) -> str | None:
+        if path not in self.files:
+            self.files[path] = self.repo.show(self.commit, f"backend/{path}")
+        return self.files[path]
+
+    def describe(self, test_id: str) -> dict:
+        text = self.text(test_id.split("::")[0])
+        found = describe(text, test_id) if text is not None else None
+        return found or {"source": None, "assertions": []}
+
+    def test(self, test_id: str) -> dict:
+        return dict(test_id=test_id, **self.describe(test_id))
+
+    def undeletable(self, test_id: str) -> str | None:
+        path = PurePosixPath(test_id.split("::")[0])
+        if path.parts[0] != "tests" or path.name == "conftest.py":
+            return f"{path} is not a deletable test module"
+        text = self.text(str(path))
+        return f"{path} not found at the base commit" if text is None else undeletable(text, test_id)
+
+
+def _fixer_input(repo, commit: str, report: dict) -> dict:
+    sources = Sources(repo, commit)
+    return {
+        "candidates": [dict(c, **sources.describe(c["test_id"]),
+                            containers=[sources.test(t) for t in c.get("contained_by", [])])
+                       for c in report["candidates"]],
+        "weak_spots": [{"group": f"{PurePosixPath(w['module']).stem}.{w['function']}", **w}
+                       for w in report["weak_spots"]],
+    }
+
+
+def collect(ctx) -> int:
+    repo, args = ctx.repo, ctx.args
+    repo.require_clean()
+    branch = repo.branch()
+    protected = args.unattended or args.protected_only
+    ctx.state.reset()
+    if args.unattended:
+        repo.must_make("test")
+    ratchet = repo.cold_ratchet()
+    if not ratchet["ok"]:
+        raise Fail("the base fails the mutation ratchet, fix it before pruning:\n" + "\n".join(ratchet_lines(ratchet)))
+    mutants = repo.mutant_codes()
+    repo.must_make("test-candidates", *(["ARGS=--protected-only"] if protected else []))
+    report = json.loads((repo.backend / ".mutation" / "test-candidates.json").read_text())
+    commit = repo.head()
+    ctx.state.save("base.json", {
+        "mode": "unattended" if args.unattended else "interactive", "protected": protected, "commit": commit,
+        "branch": branch, "baseline": json.loads((repo.backend / "mutation_baseline.json").read_text()),
+        "mutants": mutants, "tests": repo.collected_tests(), "ratchet": ratchet,
+    })
+    fixer = _fixer_input(repo, commit, report)
+    path = ctx.state.save("fixer-input.json", fixer)
+    kind = "protected candidates" if protected else "candidates"
+    count = f"{len(fixer['candidates'])} {kind}" if fixer["candidates"] else f"no {kind}"
+    emit(f"{count}, {len(fixer['weak_spots'])} weak-spot groups → {path}")
+    return 0
+
+
+def _index(entries: list, key: str, expected: list, label: str, errors: list) -> dict:
+    """{key value: entry}; records missing, unknown and duplicate entries in errors."""
+    found: dict = {}
+    for entry in entries:
+        value = entry.get(key)
+        if value in found:
+            errors.append(f"{label} {value}: more than one entry")
+        elif value not in expected:
+            errors.append(f"{label} {value}: unknown, not in the input")
+        found[value] = entry
+    errors += [f"{label} {value}: no entry" for value in expected if value not in found]
+    return found
+
+
+def _blank(value) -> bool:
+    return not str(value or "").strip()
+
+
+def candidate_problems(tid: str, entry: dict, tests: set) -> list:
+    verdict, into = entry.get("verdict"), entry.get("into")
+    checks = [
+        (verdict not in CANDIDATE_VERDICTS, f"verdict {verdict!r} is not one of {sorted(CANDIDATE_VERDICTS)}"),
+        (verdict == "delete" and (into == tid or into not in tests), f"delete into {into} is not another collected test id"),
+        (verdict == "strengthen" and _blank(entry.get("assertion")), "strengthen names no assertion"),
+        (verdict != "keep" and _blank(entry.get("reason")), "no reason"),
+    ]
+    return [f"candidate {tid}: {message}" for failed, message in checks if failed]
+
+
+def group_problems(group: dict, entry: dict) -> list:
+    verdict, ids = entry.get("verdict"), entry.get("mutant_ids", group["mutant_ids"])
+    listed = isinstance(ids, list) and bool(ids)
+    checks = [
+        (verdict not in GROUP_VERDICTS, f"verdict {verdict!r} is not one of {sorted(GROUP_VERDICTS)}"),
+        (not listed, "mutant_ids must be a non-empty list"),
+        (_blank(entry.get("reason")), "no reason"),
+    ] + [(True, f"{m} is not one of its surviving mutants") for m in (ids if listed else []) if m not in group["mutant_ids"]]
+    return [f"weak spot {group['group']}: {message}" for failed, message in checks if failed]
+
+
+def _validated(fixer: dict, out: dict, tests: set) -> tuple[dict, dict]:
+    errors: list = []
+    cands = _index(out["candidates"], "test_id", [c["test_id"] for c in fixer["candidates"]], "candidate", errors)
+    spots = _index(out["weak_spots"], "group", [w["group"] for w in fixer["weak_spots"]], "weak spot", errors)
+    groups = {w["group"]: w for w in fixer["weak_spots"]}
+    for tid, entry in cands.items():
+        errors += candidate_problems(tid, entry, tests)
+    for name, entry in spots.items():
+        errors += group_problems(groups[name], entry) if name in groups else []
+    if errors:
+        raise BadInput("invalid fixer proposals:\n" + "\n".join(errors))
+    return cands, spots
+
+
+def _candidate_proposal(c: dict, entry: dict, sources: Sources) -> dict:
+    proposal = dict(entry, id=c["test_id"], kind=entry["verdict"],
+                    candidate={k: c[k] for k in ("test_id", "source", "assertions")})
+    if entry["verdict"] == "delete":
+        proposal["into"] = sources.test(entry["into"])
+    return proposal
+
+
+def review_input(ctx) -> int:
+    base = ctx.base()
+    fixer = ctx.state.load("fixer-input.json")
+    cands, spots = _validated(fixer, ctx.proposals(), set(base["tests"]))
+    sources = Sources(ctx.repo, base["commit"])
+    proposals = [_candidate_proposal(c, cands[c["test_id"]], sources)
+                 for c in fixer["candidates"] if cands[c["test_id"]]["verdict"] != "keep"]
+    proposals += [dict(spots[w["group"]], id=w["group"], kind=spots[w["group"]]["verdict"], module=w["module"],
+                       function=w["function"], mutant_ids=spots[w["group"]].get("mutant_ids", w["mutant_ids"]))
+                  for w in fixer["weak_spots"]]
+    path = ctx.state.save("review-input.json", {"proposals": proposals})
+    emit(f"{len(proposals)} proposals for the reviewer → {path}")
+    return 0
+
+
+def _skip_reason(tid: str, into: str, kept: list, sources: Sources) -> str | None:
+    for d in kept:
+        if d["test_id"] == into:
+            return f"its containing test {into} is deleted earlier in this batch"
+        if d["into"] == tid:
+            return f"it contains {d['test_id']}, deleted earlier in this batch"
+    return sources.undeletable(tid)
+
+
+def _whole_parametrize(kept: list, tests: list) -> tuple[list, list]:
+    """A parametrized case goes only with all its siblings: the gate refuses a parametrize-list edit."""
+    chosen = {d["test_id"] for d in kept}
+    deletions, skipped = [], []
+    for d in kept:
+        stem = d["test_id"].split("[")[0]
+        missing = [t for t in tests if t.split("[")[0] == stem and t not in chosen]
+        if "[" in d["test_id"] and missing:
+            skipped.append({"test_id": d["test_id"], "reason": "parametrized case: deleting it would edit the "
+                            f"parametrize list, and its siblings {', '.join(missing)} are not all accepted"})
+        else:
+            deletions.append(d)
+    return deletions, skipped
+
+
+def _settle(accepted: list, tests: list, sources: Sources) -> tuple[list, list]:
+    """Accepted deletions → (deletions, skipped): a test whose container goes, or that contains one that
+    goes, or the gate would refuse, or a parametrized case whose siblings stay, is skipped."""
+    kept, skipped = [], []
+    for proposal, review in accepted:
+        tid, into = proposal["test_id"], proposal["into"]["test_id"]
+        reason = _skip_reason(tid, into, kept, sources)
+        if reason:
+            skipped.append({"test_id": tid, "reason": reason})
+        else:
+            kept.append({"test_id": tid, "into": into, "reason": review["reason"]})
+    deletions, partial = _whole_parametrize(kept, tests)
+    return deletions, skipped + partial
+
+
+def _strengthen_item(proposal: dict, review: dict) -> dict:
+    item = {k: v for k, v in proposal.items() if k not in ("into", "verdict")}
+    return dict(item, kind="weak_spot" if "group" in proposal else "candidate",
+                fixer_reason=proposal.get("reason"), reason=review["reason"])
+
+
+def _render_batch(out: dict, mode: str) -> str:
+    lines = [f"Accepted batch ({mode})" + (": nothing is edited until a human approves and runs `apply`"
+                                           if mode == "interactive" else "")]
+    lines.append(f"Deletions ({len(out['deletions'])}):")
+    lines += [f"  - {d['test_id']} → contained by {d['into']}: {d['reason']}" for d in out["deletions"]]
+    lines.append(f"Strengthen ({len(out['strengthen'])}):")
+    lines += [f"  - [{s['kind']}] {s['id']}: {s.get('assertion') or ', '.join(s.get('mutant_ids', []))}: {s['reason']}"
+              for s in out["strengthen"]]
+    lines.append(f"Equivalent proposals ({len(out['equivalents'])}, never declared by test-prune):")
+    lines += [f"  - {e['group']}: {', '.join(e['mutant_ids'])}: {e['reason']}" for e in out["equivalents"]]
+    lines.append(f"Skipped ({len(out['skipped'])}):")
+    lines += [f"  - {s['test_id']}: {s['reason']}" for s in out["skipped"]]
+    lines.append(f"Rejected ({len(out['rejected'])}):")
+    lines += [f"  - {r['id']} [{r['kind']}]: {r['reason']}" for r in out["rejected"]]
+    return "\n".join(lines)
+
+
+def check_reviews(reviews: list, ids: list) -> dict:
+    errors: list = []
+    found = _index(reviews, "id", ids, "proposal", errors)
+    for pid, review in found.items():
+        if review.get("verdict") not in ("accept", "reject"):
+            errors.append(f"proposal {pid}: verdict {review.get('verdict')!r} is not accept or reject")
+        if not str(review.get("reason") or "").strip():
+            errors.append(f"proposal {pid}: no reason")
+    if errors:
+        raise BadInput("invalid reviews:\n" + "\n".join(errors))
+    return found
+
+
+def batch(ctx) -> int:
+    base = ctx.base()
+    proposals = ctx.state.load("review-input.json")["proposals"]
+    reviews = check_reviews(ctx.reviews(), [p["id"] for p in proposals])
+    out: dict = {"deletions": [], "strengthen": [], "equivalents": [], "rejected": [], "skipped": []}
+    accepted = []
+    for p in proposals:
+        review = reviews[p["id"]]
+        if review["verdict"] == "reject":
+            out["rejected"].append({"id": p["id"], "kind": p["kind"], "reason": review["reason"]})
+        elif p["kind"] == "delete":
+            accepted.append((p, review))
+        elif p["kind"] == "equivalent":
+            out["equivalents"].append({"group": p["group"], "mutant_ids": p["mutant_ids"], "reason": p["reason"],
+                                       "review": review["reason"]})
+        else:
+            out["strengthen"].append(_strengthen_item(p, review))
+    out["deletions"], out["skipped"] = _settle(accepted, base["tests"], Sources(ctx.repo, base["commit"]))
+    path = ctx.state.save("batch.json", out)
+    emit(f"{_render_batch(out, base['mode'])}\n→ {path}")
+    return 0
