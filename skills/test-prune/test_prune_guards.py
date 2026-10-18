@@ -308,7 +308,7 @@ def test_leaving_never_discards_a_change_the_run_did_not_make(target):
     mine, theirs = target.root / "backend/tests/test_rebalancer.py", target.root / "backend/services/rebalancer.py"
     target.git("checkout", "-q", "--detach")
     repo = Repo(target.root)
-    repo.write("backend/tests/test_rebalancer.py", mine.read_text() + "# the run's own edit\n")
+    repo.write({"backend/tests/test_rebalancer.py": mine.read_text() + "# the run's own edit\n"}, target.base)
 
     repo.leave_on("main", target.base)
     assert target.git("symbolic-ref", "--short", "HEAD").strip() == "main" and target.git("status", "--porcelain") == ""
@@ -553,27 +553,84 @@ def test_leaving_restores_a_file_whose_name_git_quotes(target):
     target.git("add", "--", name)
     target.git("commit", "-q", "-m", "a quoted name")
     target.git("checkout", "-q", "--detach")
-    repo = Repo(target.root)
-    repo.write(name, "")
+    repo, head = Repo(target.root), target.git("rev-parse", "main").strip()
+    repo.write({name: ""}, head)
 
-    repo.leave_on("main", target.git("rev-parse", "main").strip())
+    repo.leave_on("main", head)
 
     assert repo.stranded == "" and target.git("symbolic-ref", "--short", "HEAD").strip() == "main"
     assert "def test_x" in (target.root / name).read_text()
 
 
-def test_a_baseline_update_that_fails_midway_is_undone_on_leaving(target):
+def proven_strengthen(target):
     target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
     target.ok("strengthen-start")
     target.commit_test(COMPUTE, COMPUTE_TEST)
     target.ok("strengthen-verify")
-    fake_make(target, '$MAKE "$@"; exit 2', goal="mutation-baseline")
+    return target.root / "backend/mutation_baseline.json"
+
+
+def test_a_change_to_the_baseline_during_a_failed_update_is_kept(target):
+    baseline = proven_strengthen(target)
+    fake_make(target, f"echo ' ' >> '{baseline}'; exit 2", goal="mutation-baseline")
+    edited = baseline.read_text() + " \n"
 
     proc = target.run("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
 
     assert proc.returncode == 1 and "make mutation-baseline failed (exit 2)" in proc.stdout
-    assert "staying at" not in proc.stdout
-    assert_on_base(target)
+    assert baseline.read_text() == edited and "staying at" in proc.stdout
+    assert target.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "HEAD"
+    assert target.remote_branches() == {"main"}
+
+
+def test_a_baseline_deleted_by_a_failed_update_fails_the_status_without_a_traceback(target):
+    baseline = proven_strengthen(target)
+    fake_make(target, f"rm -f '{baseline}'; exit 2", goal="mutation-baseline")
+
+    proc = target.run("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    assert status["exit"] == 1 and status["commands"][-1]["command"] == "strengthen-finish"
+    assert status["commands"][-1]["exit"] == 1
+    assert not baseline.exists() and "staying at" in proc.stdout  # the run did not delete it: not restored
+
+
+def test_an_unexpected_error_is_reported_and_recorded(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    (target.state / "batch.json").write_text("{")
+
+    proc = target.run("prune")
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 1 and "Traceback" not in proc.stderr
+    assert "test-prune: unexpected JSONDecodeError" in proc.stdout
+    assert status["exit"] == 1 and status["reason"].startswith("test-prune: unexpected JSONDecodeError")
+
+
+def test_a_user_edit_during_a_passing_mutation_run_is_never_overwritten(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    edited = target.root / "backend/tests/test_concentration.py"
+    fake_make(target, f"$MAKE \"$@\"; rc=$?; echo '# my edit' >> '{edited}'; exit $rc", goal="mutation")
+
+    proc = target.run("prune")
+
+    assert proc.returncode == 1 and "# my edit" in edited.read_text()
+    assert "backend/tests/test_concentration.py changed during the run, not by test-prune" in proc.stdout
+    assert target.log("gh") == [] and target.remote_branches() == {"main"}
+    assert target.read_state("status.json")["exit"] == 1
+
+
+def test_a_failure_report_says_where_the_deletions_are(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    proc = target.run("prune", env={"FAKE_TEST_FAIL": "1"})
+    assert "## Deletions that passed the safety check, not committed (1)" in proc.stdout
+    assert "## Deleted tests" not in proc.stdout
+
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    proc = target.run("prune", env={"FAKE_GATE_FAIL": "1"})
+    assert f"## Deletions on the unpushed branch `{PRUNE_BRANCH}` (1)" in proc.stdout
+    assert "## Deleted tests" not in proc.stdout
 
 
 def test_an_exit_1_stays_open_after_the_command_passes():

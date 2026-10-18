@@ -269,10 +269,8 @@ def _lower_baseline(repo, base: dict) -> tuple[str, dict]:
     ratchet = repo.must_make("mutation-check")
     repo.must_make("test")
     repo.must_make("crap")
-    try:
-        repo.must_make("mutation-baseline")
-    finally:
-        repo.own(BASELINE)
+    repo.must_make("mutation-baseline")
+    repo.own(BASELINE)  # only once the target passed: after a failure its bytes are not provably the run's
     new = json.loads((repo.root / BASELINE).read_text())
     _guard_equivalents(repo, base, new)
     if repo.git("status", "--porcelain", "--", BASELINE).strip():
