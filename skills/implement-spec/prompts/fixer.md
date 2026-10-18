@@ -35,4 +35,5 @@ Write one JSON report at {report} that matches this schema:
 }
 ```
 
+Stop only processes you started and their child processes, by PID (for example the PID of a job you put in the background, or its process group). Never kill a process you did not start, and never use `pkill`, `killall` or a `kill` by name or pattern: other slots and sessions share the machine. If a process you did not start blocks you, report it in your concerns and do not kill it.
 Never run `git stash`, never reset, and never check out another branch: worktrees share one stash and one ref store.

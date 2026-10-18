@@ -150,7 +150,9 @@ class Run:
         at = driver_slots.head(slot)
         if at != commit:
             raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the gate did not run")
-        green, record = driver_gate.run(self.args.gate, slot, OUT / number, self.pr)
+        green, record, killed = driver_gate.run(self.args.gate, slot, OUT / number, self.pr)
+        for sentence in killed:
+            ledger(f"{_owner(number)}: {sentence}.")
 
         def count(state: dict) -> None:
             state["run"]["gates"] += 1

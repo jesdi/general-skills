@@ -83,7 +83,7 @@ Everything is under `.agent/`, which is never committed.
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |
 | `.agent/implement/<NN>/` | One folder for each ticket. |
 | `.agent/implement/<NN>/<role>-<K>.json`, `.log`, `.prompt.md` | The report, the log and the prompt of one agent. K is the fix round. |
-| `.agent/implement/<NN>/gate-<sha7>.log` | One gate record: start, commit, status, command, output, exit, the state after the command, end. |
+| `.agent/implement/<NN>/gate-<sha7>.log` | One gate record: start, commit, status, command, output, exit, the state after the command, end. A command that a signal ended (a negative exit), with the tree clean and HEAD unmoved, did not judge the commit: the driver runs it once more, that run overwrites the record, and the ledger says the gate was killed by the signal and runs again. A second signal leaves the record red. |
 | `.agent/implement/<NN>/findings-<K>.json` | The merged findings of the review after fix round K, or the red gate of round K. |
 | `.agent/implement/final/` | The same files for the end of run, and `pr-body.md`: the pr-writer's body, then the facts of the run. |
 | `.agent/implement/pycache/` | Compiled Python of the gate, kept out of the slots. |
@@ -109,6 +109,7 @@ A ticket is ready when each ticket in its **Blocked by** line is merged and no r
 Rules for each agent:
 
 - A call blocks until the agent ends. The driver does not poll.
+- An agent stops only the processes it started and their child processes, by PID, and never kills a process it did not start, nor uses `pkill`, `killall` or a `kill` by name or pattern: other slots and sessions share the machine. A process it did not start that blocks it goes into its concerns.
 - An agent gets one rerun: after a rejected report, after a timeout, or after it left the ticket branch. The rerun prompt is the first prompt plus the reason.
 - A report with status `BLOCKED` or `NEEDS_CONTEXT` blocks the ticket.
 - A BLOCKED ticket stops the tickets that it blocks. All other tickets run on.

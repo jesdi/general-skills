@@ -267,6 +267,16 @@ def test_every_prompt_ends_with_report_path_schema_and_the_never_rule(env, role,
     assert report in prompt
 
 
+@pytest.mark.parametrize("role", ["test-writer", "implementer", "fixer", "conflict", "reviewer", "final-reviewer",
+                                  "final-fixer", "rebase-conflict"])
+def test_each_role_that_runs_commands_stops_only_its_own_processes(role):
+    """Issue 101: a `pkill -f` of one slot killed the gate of another."""
+    text = (SKILL / f"prompts/{role}.md").read_text()
+    assert "Stop only processes you started and their child processes, by PID" in text
+    assert "Never kill a process you did not start, and never use `pkill`, `killall` or a `kill` by name" in text
+    assert "If a process you did not start blocks you, report it in your concerns and do not kill it." in text
+
+
 def test_no_report_is_a_violation_with_one_rerun_then_blocked(env):
     w = World(env, refactor=True)
     blocked(w.run({"implementer": [{}, {}, impl()]}))

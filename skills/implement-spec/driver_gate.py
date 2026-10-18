@@ -1,7 +1,8 @@
 """The gate: the repo's one check command, run by the driver on the commit it is about to trust.
 
 A gate record is `<folder>/gate-<first 7 hex of the commit>.log`. It is green only for exit 0 on a tree that is
-clean before the command and after it, with HEAD still on the commit.
+clean before the command and after it, with HEAD still on the commit. A command that a signal ended, on a clean tree
+with HEAD unmoved, did not judge the commit: it runs once more, and that run overwrites the record.
 """
 from __future__ import annotations
 
@@ -29,14 +30,9 @@ def record_path(folder: Path, commit: str) -> Path:
     return folder / f"gate-{commit[:7]}.log"
 
 
-def run(command: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Path]:
-    """Gate the HEAD of `slot`. Returns (green, the record)."""
-    commit = head(slot)
+def _attempt(command: str, slot: str, commit: str, record: Path, env: dict) -> tuple[int | str, str]:
+    """Run the command once into `record`. Returns (the exit code or "not run", the state after it)."""
     status = git(slot, "status", "--short").stdout
-    folder.mkdir(parents=True, exist_ok=True)
-    record = record_path(folder, commit)
-    # The cache of compiled Python stays out of the slot, so the gate leaves the tree clean.
-    env = dict(os.environ, IMPLEMENT_SPEC_BASE=pr_branch, PYTHONPYCACHEPREFIX=str(folder.parent.resolve() / "pycache"))
     with record.open("w") as out:
         out.write(f"start: {_now()}\ncommit: {commit}\nstatus: {'not clean' if status else 'clean'}\n")
         out.writelines(f"    {line}\n" for line in status.splitlines())
@@ -48,4 +44,20 @@ def run(command: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Pa
         ).returncode
         after = "not run" if status else _after(slot, commit)
         out.write(f"\nexit: {code}\nafter: {after}\nend: {_now()}\n")
-    return code == 0 and after == "clean", record
+    return code, after
+
+
+def run(command: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Path, list[str]]:
+    """Gate the HEAD of `slot`. Returns (green, the record, a ledger sentence per gate that a signal ended)."""
+    commit = head(slot)
+    folder.mkdir(parents=True, exist_ok=True)
+    record = record_path(folder, commit)
+    # The cache of compiled Python stays out of the slot, so the gate leaves the tree clean.
+    env = dict(os.environ, IMPLEMENT_SPEC_BASE=pr_branch, PYTHONPYCACHEPREFIX=str(folder.parent.resolve() / "pycache"))
+    code, after = _attempt(command, slot, commit, record, env)
+    killed = []
+    # A process outside the gate can kill it, as a `pkill -f` of another slot does: that run judged nothing.
+    if isinstance(code, int) and code < 0 and after == "clean":
+        killed.append(f"the gate of {commit[:7]} was killed by signal {-code} and runs again")
+        code, after = _attempt(command, slot, commit, record, env)
+    return code == 0 and after == "clean", record, killed
