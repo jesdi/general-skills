@@ -146,7 +146,8 @@ def test_red_line_absent_from_the_log_is_a_violation(world):
     shas, check, _ = world
     assert check("test-writer", writer(shas), start=shas["base"]) == []
     report = writer(shas, red=[{"test": "t", "line": "FAILED tests/test_export.py::test_rows - KeyError"}])
-    assert "red line not found in log" in check("test-writer", report, start=shas["base"])
+    assert check("test-writer", report, start=shas["base"]) == [
+        "red line not found in log: t: FAILED tests/test_export.py::test_rows - KeyError"]
 
 
 def test_reviewer_fields_and_mutation_proofs(world):
