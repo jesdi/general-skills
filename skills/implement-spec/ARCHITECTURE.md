@@ -19,7 +19,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_report.py` | Validation of one agent report against its schema, git and the agent's log |
 | `driver_review.py` | The locked-file check of a ticket's own tests, the routing of findings, mutation proofs |
 | `driver_merge.py` | Merges by git plumbing, the locked-file check of a landing, the move of the PR ref |
-| `driver_gate.py` | One run of the gate command and its record |
+| `driver_gate.py` | One gate of a commit: the command, once more when a signal ended it, and its record |
 | `driver_slots.py` | The worktrees that tickets run in, and the `git` helper |
 | `driver_state.py` | `state.json` (the resume contract) and the kernel lock |
 | `driver_names.py` | The names of one run: its ticket branches, its recovery ref and its lock file |
