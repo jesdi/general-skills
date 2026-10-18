@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 
 from prune_repo import KILLED, SURVIVING, BadInput, Fail, emit, ratchet_lines
-from prune_review import check_reviews
-from prune_runs import equivalents_section
+from prune_review import check_reviews, suggestion_lines
+from prune_runs import equivalents_section, suggestions_section
 from prune_source import test_sources
 
 TRAILER = "Test-Prune-Item"
@@ -35,9 +35,10 @@ def _detach_at_base(ctx, base: dict) -> None:
 
 def strengthen_start(ctx) -> int:
     repo, base = ctx.repo, ctx.base()
-    items = ctx.state.load("batch.json")["strengthen"]
+    out = ctx.state.load("batch.json")
+    items = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
     if not items:
-        emit("nothing to strengthen")
+        emit("\n".join(["nothing to strengthen"] + suggestion_lines(out)))
         return 0
     repo.require_clean()
     if base["mode"] == "unattended":
@@ -45,7 +46,7 @@ def strengthen_start(ctx) -> int:
     start = repo.head()
     work = [_work_item(i) for i in items]
     ctx.state.save("strengthen.json", {"start": start, "verified": False, "items": work,
-                                       "status": {i["id"]: "open" for i in work}})
+                                       "status": {i["id"]: "open" for i in work}, "closed": {}})
     path = ctx.state.save("strengthen-input.json", {"start": start, "items": work})
     emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one or more "
          f"commits per item, each touching only backend/tests/ and ending with the trailer `{TRAILER}: <item id>`.")
@@ -69,15 +70,26 @@ def commit_problems(sha: str, items: list, paths: list, known: set) -> list:
     return problems
 
 
-def _commits(repo, start: str, known: set) -> list:
-    """[(sha, item id)] since start; every commit must name a known item and touch only backend/tests/."""
+def reopened(history: list, closed: dict) -> list:
+    """Commits naming an item after test-prune closed it (reverted or rejected at the recorded commit)."""
+    position = {sha: i for i, (sha, _, _) in enumerate(history)}
+    return [f"{sha[:12]}: {items[0]} was closed at {closed[items[0]][:12]}; new commits for it are refused"
+            for i, (sha, items, _) in enumerate(history)
+            if len(items) == 1 and items[0] in closed and i > position.get(closed[items[0]], -1)]
+
+
+def _commits(repo, st: dict) -> list:
+    """[(sha, item id)] since start; every commit must name a known, open item and touch only backend/tests/."""
+    start = st["start"]
     if repo.run_git("merge-base", "--is-ancestor", start, "HEAD").returncode:
         raise BadInput(f"HEAD does not descend from the strengthen start {start}")
     errors = ["merge commits since the strengthen start"] if repo.git(
         "rev-list", "--min-parents=2", f"{start}..HEAD").strip() else []
     history = _history(repo, start)
+    known = {i["id"] for i in st["items"]}
     for sha, items, paths in history:
         errors += commit_problems(sha, items, paths, known)
+    errors += reopened(history, st["closed"])
     if errors:
         raise BadInput("strengthen commits rejected:\n" + "\n".join(errors))
     return [(sha, items[0]) for sha, items, _ in history]
@@ -94,13 +106,20 @@ def _revert(repo, item_id: str, commits: list, why: str) -> None:
              "-m", f"{TRAILER}: {item_id}")
 
 
+def _close(repo, st: dict, item_id: str, commits: list, status: str, why: str) -> None:
+    """Revert the item's commits and record where it closed: later commits for it are refused."""
+    _revert(repo, item_id, commits, why)
+    st["status"][item_id] = status
+    st["closed"][item_id] = repo.head()
+
+
 def item_proof(base_codes: dict, codes: dict, item: dict, has_commits: bool) -> dict:
-    """Per mutant id the base and head exit codes; proven when every id survived on the base and is
-    killed on the head, and the item has a commit."""
+    """Per mutant id the base and head exit codes; proven when the item names at least one id, every id
+    survived on the base and is killed on the head, and the item has a commit."""
     module = item.get("module")
     mutants = {m: {"base": base_codes.get(module, {}).get(m), "head": codes.get(module, {}).get(m)}
                for m in item["mutant_ids"]}
-    proven = has_commits and all(e["base"] in SURVIVING and e["head"] in KILLED for e in mutants.values())
+    proven = has_commits and bool(mutants) and all(e["base"] in SURVIVING and e["head"] in KILLED for e in mutants.values())
     return {"status": "proven" if proven else "unproven", "module": module, "mutants": mutants}
 
 
@@ -122,13 +141,13 @@ def _prove(ctx, base: dict, st: dict) -> dict:
     """Cold runs until every remaining item is proven; unproven items are reverted between runs."""
     path = ctx.state.path / "strengthen-proof.json"
     proof = json.loads(path.read_text())["items"] if path.exists() else {}
-    known = {i["id"] for i in st["items"]}
     while True:
-        commits = _commits(ctx.repo, st["start"], known)
+        commits = _commits(ctx.repo, st)
         failing = _judge(ctx, base, st, proof, commits)
         for item_id in failing:
-            _revert(ctx.repo, item_id, commits, "Its mutant ids are not all killed on the head while surviving on the base.")
-            st["status"][item_id] = proof[item_id]["status"] = "reverted"
+            _close(ctx.repo, st, item_id, commits, "reverted",
+                   "Its mutant ids are not all killed on the head while surviving on the base.")
+            proof[item_id]["status"] = "reverted"
         ctx.state.save("strengthen.json", st)
         ctx.state.save("strengthen-proof.json", {"start": st["start"], "head": ctx.repo.head(), "items": proof})
         if not failing:
@@ -192,7 +211,7 @@ def _test_lines(items: dict, accepted: list, tests: dict) -> list:
     return lines
 
 
-def _body(base: dict, st: dict, proof: dict, accepted: list, tests: dict, new: dict, ratchet: str, equivalents) -> str:
+def _body(base: dict, st: dict, proof: dict, accepted: list, tests: dict, new: dict, ratchet: str, out: dict) -> str:
     lines = [f"Strengthened tests from `{base['branch']}` at {base['commit'][:12]}, independent of the prune PR. "
              "Every mutant id listed survived the cold mutation run on the base and is killed by the cold run on "
              "this branch.", "", "## Changed tests", ""]
@@ -203,32 +222,38 @@ def _body(base: dict, st: dict, proof: dict, accepted: list, tests: dict, new: d
     lines += ["", "## Baseline survivors", ""]
     lines += [f"- {m}: {base['baseline'].get(m, {}).get('survivors', 'new')} → {e['survivors']}" for m, e in new.items()]
     lines += ["", "## Mutation ratchet", "", "```", ratchet.strip(), "```"]
-    return "\n".join(lines + equivalents_section(equivalents)) + "\n"
+    return "\n".join(lines + suggestions_section(out) + equivalents_section(out["equivalents"])) + "\n"
+
+
+def _finish_reviews(ctx, st: dict) -> dict:
+    """Preconditions: verified, clean, HEAD still the proven head, a new branch name, valid reviews."""
+    if not st["verified"]:
+        raise BadInput("run strengthen-verify first")
+    ctx.repo.require_clean()
+    proven_head = ctx.state.load("strengthen-proof.json")["head"]
+    if ctx.repo.head() != proven_head:
+        raise BadInput(f"HEAD moved since strengthen-verify proved {proven_head[:12]}: run strengthen-verify again")
+    if ctx.base()["mode"] == "unattended":
+        ctx.repo.require_new_branch(_branch(ctx))
+    return check_reviews(ctx.reviews(), [i for i, s in st["status"].items() if s == "proven"])
 
 
 def strengthen_finish(ctx) -> int:
     repo, base = ctx.repo, ctx.base()
     st = ctx.state.load("strengthen.json")
-    if not st["verified"]:
-        raise BadInput("run strengthen-verify first")
-    repo.require_clean()
-    reviews = check_reviews(ctx.reviews(), [i for i, s in st["status"].items() if s == "proven"])
     unattended = base["mode"] == "unattended"
-    if unattended:
-        repo.require_new_branch(_branch(ctx))
     try:
-        return _finish(ctx, base, st, reviews, unattended)
+        return _finish(ctx, base, st, _finish_reviews(ctx, st), unattended)
     finally:
         if unattended:
             repo.leave_on(base["branch"], base["commit"])
 
 
 def _keep_accepted(ctx, base: dict, st: dict, reviews: dict) -> tuple[dict, list]:
-    commits = _commits(ctx.repo, st["start"], {i["id"] for i in st["items"]})
+    commits = _commits(ctx.repo, st)
     for item_id, review in reviews.items():
         if review["verdict"] == "reject":
-            _revert(ctx.repo, item_id, commits, f"Rejected by the reviewer: {review['reason']}")
-            st["status"][item_id] = "rejected"
+            _close(ctx.repo, st, item_id, commits, "rejected", f"Rejected by the reviewer: {review['reason']}")
     proof = _prove(ctx, base, st)
     return proof, [i for i, s in st["status"].items() if s == "proven"]
 
@@ -257,7 +282,7 @@ def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
     ratchet, new = _lower_baseline(repo, base)
     commits = [(sha, items[0]) for sha, items, _ in _history(repo, st["start"]) if items]
     tests = {i: _item_tests(repo, commits, i) for i in accepted}
-    body = _body(base, st, proof, accepted, tests, new, ratchet, ctx.state.load("batch.json")["equivalents"])
+    body = _body(base, st, proof, accepted, tests, new, ratchet, ctx.state.load("batch.json"))
     if not unattended:
         emit(f"Strengthen commits kept on {repo.branch()}:\n\n{body}")
         return 0

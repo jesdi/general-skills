@@ -5,7 +5,7 @@ import json
 from pathlib import PurePosixPath
 
 from prune_repo import BadInput, Fail, emit, ratchet_lines
-from prune_source import describe, undeletable
+from prune_source import class_refusals, describe, undeletable
 
 CANDIDATE_VERDICTS = {"keep", "delete", "strengthen"}
 GROUP_VERDICTS = {"strengthen", "equivalent"}
@@ -29,6 +29,15 @@ class Sources:
 
     def test(self, test_id: str) -> dict:
         return dict(test_id=test_id, **self.describe(test_id))
+
+    def class_refusals(self, test_ids: list) -> dict:
+        by_file: dict = {}
+        for test_id in test_ids:
+            by_file.setdefault(test_id.split("::")[0], []).append(test_id)
+        refused: dict = {}
+        for path, ids in by_file.items():
+            refused.update(class_refusals(self.text(path), ids))
+        return refused
 
     def undeletable(self, test_id: str) -> str | None:
         path = PurePosixPath(test_id.split("::")[0])
@@ -117,18 +126,51 @@ def group_problems(group: dict, entry: dict) -> list:
     return [f"weak spot {group['group']}: {message}" for failed, message in checks if failed]
 
 
+def split_problems(name: str, entries: list) -> list:
+    """A group takes one entry, or one strengthen and one equivalent entry with disjoint, listed ids."""
+    if len(entries) == 1:
+        return []
+    verdicts = sorted(str(e.get("verdict")) for e in entries)
+    if verdicts != ["equivalent", "strengthen"]:
+        return [f"weak spot {name}: at most one strengthen and one equivalent entry, got {verdicts}"]
+    if not all(isinstance(e.get("mutant_ids"), list) for e in entries):
+        return [f"weak spot {name}: a split group lists mutant_ids in both entries"]
+    shared = set(entries[0]["mutant_ids"]) & set(entries[1]["mutant_ids"])
+    return [f"weak spot {name}: {', '.join(sorted(shared))} in both entries"] if shared else []
+
+
+def _group_entries(entries: list, groups: dict, errors: list) -> dict:
+    """{group: [entries]}; records unknown and missing groups and bad splits in errors."""
+    found: dict = {}
+    for entry in entries:
+        found.setdefault(entry.get("group"), []).append(entry)
+    errors += [f"weak spot {name}: unknown, not in the input" for name in found if name not in groups]
+    errors += [f"weak spot {name}: no entry" for name in groups if name not in found]
+    for name in [n for n in found if n in groups]:
+        errors += _entries_problems(groups[name], found[name])
+    return found
+
+
+def _entries_problems(group: dict, entries: list) -> list:
+    return split_problems(group["group"], entries) + [p for e in entries for p in group_problems(group, e)]
+
+
 def _validated(fixer: dict, out: dict, tests: set) -> tuple[dict, dict]:
     errors: list = []
     cands = _index(out["candidates"], "test_id", [c["test_id"] for c in fixer["candidates"]], "candidate", errors)
-    spots = _index(out["weak_spots"], "group", [w["group"] for w in fixer["weak_spots"]], "weak spot", errors)
-    groups = {w["group"]: w for w in fixer["weak_spots"]}
     for tid, entry in cands.items():
         errors += candidate_problems(tid, entry, tests)
-    for name, entry in spots.items():
-        errors += group_problems(groups[name], entry) if name in groups else []
+    spots = _group_entries(out["weak_spots"], {w["group"]: w for w in fixer["weak_spots"]}, errors)
     if errors:
         raise BadInput("invalid fixer proposals:\n" + "\n".join(errors))
     return cands, spots
+
+
+def _group_proposals(w: dict, entries: list) -> list:
+    """One proposal per entry; id = the group, or `<group>:<verdict>` when the group is split."""
+    return [dict(e, id=w["group"] if len(entries) == 1 else f"{w['group']}:{e['verdict']}", kind=e["verdict"],
+                 module=w["module"], function=w["function"], mutant_ids=e.get("mutant_ids", w["mutant_ids"]))
+            for e in entries]
 
 
 def _candidate_proposal(c: dict, entry: dict, sources: Sources) -> dict:
@@ -146,9 +188,7 @@ def review_input(ctx) -> int:
     sources = Sources(ctx.repo, base["commit"])
     proposals = [_candidate_proposal(c, cands[c["test_id"]], sources)
                  for c in fixer["candidates"] if cands[c["test_id"]]["verdict"] != "keep"]
-    proposals += [dict(spots[w["group"]], id=w["group"], kind=spots[w["group"]]["verdict"], module=w["module"],
-                       function=w["function"], mutant_ids=spots[w["group"]].get("mutant_ids", w["mutant_ids"]))
-                  for w in fixer["weak_spots"]]
+    proposals += [p for w in fixer["weak_spots"] for p in _group_proposals(w, spots[w["group"]])]
     path = ctx.state.save("review-input.json", {"proposals": proposals})
     emit(f"{len(proposals)} proposals for the reviewer → {path}")
     return 0
@@ -158,8 +198,6 @@ def _skip_reason(tid: str, into: str, kept: list, sources: Sources) -> str | Non
     for d in kept:
         if d["test_id"] == into:
             return f"its containing test {into} is deleted earlier in this batch"
-        if d["into"] == tid:
-            return f"it contains {d['test_id']}, deleted earlier in this batch"
     return sources.undeletable(tid)
 
 
@@ -179,8 +217,8 @@ def _whole_parametrize(kept: list, tests: list) -> tuple[list, list]:
 
 
 def _settle(accepted: list, tests: list, sources: Sources) -> tuple[list, list]:
-    """Accepted deletions → (deletions, skipped): a test whose container goes, or that contains one that
-    goes, or the gate would refuse, or a parametrized case whose siblings stay, is skipped."""
+    """Accepted deletions → (deletions, skipped): a test whose container goes, or the gate would refuse
+    (alone or with the rest of the batch), or a parametrized case whose siblings stay, is skipped."""
     kept, skipped = [], []
     for proposal, review in accepted:
         tid, into = proposal["test_id"], proposal["into"]["test_id"]
@@ -190,7 +228,9 @@ def _settle(accepted: list, tests: list, sources: Sources) -> tuple[list, list]:
         else:
             kept.append({"test_id": tid, "into": into, "reason": review["reason"]})
     deletions, partial = _whole_parametrize(kept, tests)
-    return deletions, skipped + partial
+    refused = sources.class_refusals([d["test_id"] for d in deletions])
+    return ([d for d in deletions if d["test_id"] not in refused],
+            skipped + partial + [{"test_id": t, "reason": r} for t, r in refused.items()])
 
 
 def _strengthen_item(proposal: dict, review: dict) -> dict:
@@ -199,14 +239,24 @@ def _strengthen_item(proposal: dict, review: dict) -> dict:
                 fixer_reason=proposal.get("reason"), reason=review["reason"])
 
 
+def suggestion_lines(out: dict) -> list:
+    """Accepted "strengthen with this assertion" verdicts on candidates: listed for a human, never applied."""
+    items = [i for i in out["strengthen"] if i["kind"] == "candidate"]
+    if not items:
+        return []
+    return [f"Strengthen suggestions for a human ({len(items)}, not applied by test-prune):"] + [
+        f"  - {i['id']}: add `{i['assertion']}`: {i['reason']}" for i in items]
+
+
 def _render_batch(out: dict, mode: str) -> str:
     lines = [f"Accepted batch ({mode})" + (": nothing is edited until a human approves and runs `apply`"
                                            if mode == "interactive" else "")]
     lines.append(f"Deletions ({len(out['deletions'])}):")
     lines += [f"  - {d['test_id']} → contained by {d['into']}: {d['reason']}" for d in out["deletions"]]
-    lines.append(f"Strengthen ({len(out['strengthen'])}):")
-    lines += [f"  - [{s['kind']}] {s['id']}: {s.get('assertion') or ', '.join(s.get('mutant_ids', []))}: {s['reason']}"
-              for s in out["strengthen"]]
+    spots = [i for i in out["strengthen"] if i["kind"] == "weak_spot"]
+    lines.append(f"Strengthen, weak spots for the strengthen agent ({len(spots)}):")
+    lines += [f"  - {s['id']}: {', '.join(s['mutant_ids'])}: {s['reason']}" for s in spots]
+    lines += suggestion_lines(out)
     lines.append(f"Equivalent proposals ({len(out['equivalents'])}, never declared by test-prune):")
     lines += [f"  - {e['group']}: {', '.join(e['mutant_ids'])}: {e['reason']}" for e in out["equivalents"]]
     lines.append(f"Skipped ({len(out['skipped'])}):")
