@@ -27,9 +27,16 @@ def _git(repo: str, *args: str, end: str = "\n") -> list[str]:
     return [line for line in out.split(end) if line]
 
 
+def _squash(text: str) -> str:
+    """Each run of whitespace other than a line break as one space."""
+    return re.sub(r"[^\S\n]+", " ", text)
+
+
 def _seen(line: str, log: str) -> bool:
-    # A stream-json log holds tool output as JSON strings, so the escaped form of the line counts too.
-    return line in log or json.dumps(line)[1:-1] in log
+    # A stream-json log holds tool output as JSON strings, so the escaped forms of the line count too: json.dumps
+    # escapes non-ASCII, the claude log keeps it raw. Spacing does not count: pytest pads some lines.
+    line, log = _squash(line.strip()), _squash(log)
+    return any(form in log for form in (line, json.dumps(line)[1:-1], json.dumps(line, ensure_ascii=False)[1:-1]))
 
 
 def _shas(report: dict) -> list[str]:
@@ -89,10 +96,11 @@ def _merged_errors(report: dict, context: dict) -> list[str]:
 
 def _proof_errors(report: dict, context: dict) -> list[str]:
     """Every claimed red line (a test-writer `red`, a reviewer `mutations`) is in the agent's log."""
-    lines = [r["line"] for r in report.get("red", [])] + [m["red"] for m in report.get("mutations", [])]
-    errors = []
-    if lines and not all(_seen(line, Path(context["log"]).read_text(errors="replace")) for line in lines):
-        errors.append(RED)
+    lines = ([(r["test"], r["line"]) for r in report.get("red", [])]
+             + [(m["test"], m["red"]) for m in report.get("mutations", [])])
+    log = Path(context["log"]).read_text(errors="replace") if lines else ""
+    errors = [f"{RED}: {test}: {line if len(line) <= 200 else line[:197] + '...'}"
+              for test, line in lines if not _seen(line, log)]
     if context.get("full") and "findings" in report and "mutations" not in report:
         errors.append("mutations: required in a full review")
     return errors

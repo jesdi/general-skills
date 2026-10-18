@@ -324,6 +324,7 @@ def test_red_line_missing_from_the_log_reruns_once_then_blocks(env, second_match
     proc = w.run(plan)
     second = w.calls("test-writer")[1]["prompt"]
     assert "red line not found in log" in second and "red line not found" not in w.calls("test-writer")[0]["prompt"]
+    assert f"red line not found in log: tests/test_export.py::test_rows: {RED}" in second
     if second_matches:
         ok(proc)
         assert len(w.calls("implementer")) == 1
@@ -331,6 +332,17 @@ def test_red_line_missing_from_the_log_reruns_once_then_blocks(env, second_match
         blocked(proc)
         assert len(w.calls("test-writer")) == 2 and not w.calls("implementer")
         assert any("01" in l and "BLOCKED" in l for l in w.ledger().splitlines()), w.ledger()
+
+
+@pytest.mark.parametrize("claimed, printed", [
+    ("E       assert 0 == 'rows'", "E           assert 0 == 'rows'"),  # pytest pads a parametrized test's lines
+    ("AssertionError: '12 UNP\u2212 EL' !~ /Resilience\\s*4\\.3/",  # a stream-json log keeps non-ASCII raw
+     '"text": "AssertionError: \'12 UNP\u2212 EL\' !~ /Resilience\\\\s*4\\\\.3/"')], ids=["spacing", "non-ascii"])
+def test_red_line_that_differs_from_the_log_only_in_spacing_or_escaping_is_seen(env, claimed, printed):
+    w = World(env)
+    writer = with_report(tw(0, printed + "\n"), red=[{"test": "tests/test_export.py::test_rows", "line": claimed}])
+    ok(w.run({"test-writer": [writer], "implementer": [impl()]}))
+    assert len(w.calls("test-writer")) == 1
 
 
 def test_implementer_report_with_no_new_commit_is_a_violation(env):
