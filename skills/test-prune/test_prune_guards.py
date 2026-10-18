@@ -7,6 +7,7 @@ import pytest
 
 from prune_harness import PRUNE, PRUNE_BRANCH, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
 from prune_repo import Fail, Repo
+from prune_runs import capped
 from test_prune_strengthen import COMPUTE, COMPUTE_TEST, DRIFT, DRIFT_TEST, IDS_7_9, strengthen_group, strengthen_pr
 
 CULPRIT = R + "test_sell_only_rebalance"  # sole killer of x_rebalance__mutmut_20..22
@@ -201,9 +202,11 @@ def test_a_rejected_proven_item_is_reverted_and_left_out_of_the_pr(target):
     assert "test_compute_trades_rounding" in source and "test_apply_drift_new" not in source
     body = strengthen_pr(target)
     assert drift_id not in body and "test_apply_drift_new" not in body
+    assert "✓ services/rebalancer.py: 18 survivors, baseline 20" in body  # make mutation-check ran
+    assert target.log("crap"), "strengthen-finish runs make crap"
 
 
-def test_finish_refuses_a_head_moved_since_the_proof_and_returns_to_the_base(target):
+def test_finish_refuses_a_head_moved_since_the_proof_and_stays_for_the_rerun(target):
     target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
     target.ok("strengthen-start")
     target.commit_test(COMPUTE, COMPUTE_TEST)
@@ -214,7 +217,8 @@ def test_finish_refuses_a_head_moved_since_the_proof_and_returns_to_the_base(tar
 
     assert proc.returncode == 2 and "strengthen-verify" in proc.stderr
     assert STRENGTHEN_BRANCH not in target.remote_branches() and target.pr_creates() == []
-    assert_on_base(target)
+    assert "test_unproven" in (target.root / "backend/tests/test_rebalancer.py").read_text()  # HEAD stayed
+    assert target.git("rev-parse", "main").strip() == target.base == target.remote_sha("main")
 
 
 def test_new_commits_for_a_reverted_item_are_refused(target):
@@ -237,8 +241,9 @@ def test_new_commits_for_a_reverted_item_are_refused(target):
 def test_every_command_records_its_status_for_the_headless_job(target):
     target.prepare([cand(case(1), unprotected=True)])
     target.ok("prune")
-    assert target.read_state("status.json") == {
-        "command": "prune", "exit": 0, "reason": "test-prune: no protected candidates; no branch, no PR"}
+    status = target.read_state("status.json")
+    assert status["exit"] == 0 and status["reason"] == "test-prune: no protected candidates; no branch, no PR"
+    assert [c["command"] for c in status["commands"]] == ["collect", "review-input", "batch", "prune"]
 
     target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
     proc = target.run("prune", env={"FAKE_GATE_FAIL": "1"})
@@ -257,9 +262,9 @@ def test_status_names_the_bad_input(target):
 
 # --- split weak-spot groups -------------------------------------------------------------
 
-def split_proposals(target, strengthen_ids, equivalent_ids):
+def split_proposals(target, strengthen_ids, equivalent_ids, second="equivalent"):
     proposals = target.proposals(groups={COMPUTE: strengthen_group(strengthen_ids)})
-    proposals["weak_spots"].append({"group": COMPUTE, "verdict": "equivalent", "mutant_ids": equivalent_ids,
+    proposals["weak_spots"].append({"group": COMPUTE, "verdict": second, "mutant_ids": equivalent_ids,
                                     "test": "tests/test_rebalancer.py", "reason": "the rounding mutant is unobservable"})
     return proposals
 
@@ -279,17 +284,146 @@ def test_a_group_splits_into_a_strengthen_and_an_equivalent_proposal(target):
     assert item["mutant_ids"] == IDS_7_9[:1] and item["kind"] == "weak_spot"
 
 
-@pytest.mark.parametrize("strengthen_ids, equivalent_ids, problem", [
-    (IDS_7_9, IDS_7_9[1:], "in both entries"),
-    (None, IDS_7_9[1:], "lists mutant_ids in both entries"),
+@pytest.mark.parametrize("strengthen_ids, equivalent_ids, second, problem", [
+    (IDS_7_9, IDS_7_9[1:], "equivalent", "in both entries"),
+    (None, IDS_7_9[1:], "equivalent", "lists mutant_ids in both entries"),
+    (IDS_7_9[:1], IDS_7_9[1:], "strengthen", "at most one strengthen and one equivalent entry"),
 ])
-def test_a_bad_split_exits_2_naming_the_group(target, strengthen_ids, equivalent_ids, problem):
+def test_a_bad_split_exits_2_naming_the_group(target, strengthen_ids, equivalent_ids, second, problem):
     target.set_candidates([cand(case(1))])
     target.ok("collect")
-    proposals = split_proposals(target, strengthen_ids or [], equivalent_ids)
+    proposals = split_proposals(target, strengthen_ids or [], equivalent_ids, second)
     if strengthen_ids is None:
         del proposals["weak_spots"][[w["group"] for w in proposals["weak_spots"]].index(COMPUTE)]["mutant_ids"]
 
     proc = target.review_input(proposals)
 
     assert proc.returncode == 2 and f"weak spot {COMPUTE}: " in proc.stderr and problem in proc.stderr
+
+
+# --- round 2 --------------------------------------------------------------------------
+
+def test_leaving_never_discards_a_change_the_run_did_not_make(target):
+    mine, theirs = target.root / "backend/tests/test_rebalancer.py", target.root / "backend/services/rebalancer.py"
+    target.git("checkout", "-q", "--detach")
+    mine.write_text(mine.read_text() + "# the run's own edit\n")
+    repo = Repo(target.root)
+
+    repo.leave_on("main", target.base, ["backend/tests/test_rebalancer.py"])
+    assert target.git("symbolic-ref", "--short", "HEAD").strip() == "main" and target.git("status", "--porcelain") == ""
+
+    target.git("checkout", "-q", "--detach")
+    theirs.write_text(theirs.read_text() + "# someone else's edit\n")
+    repo.leave_on("main", target.base, ["backend/tests/test_rebalancer.py"])
+    assert "someone else's edit" in theirs.read_text()
+    assert target.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "HEAD"
+
+
+def test_a_failed_finish_precondition_keeps_uncommitted_edits(target):
+    target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+    target.ok("strengthen-start")
+    target.commit_test(COMPUTE, COMPUTE_TEST)
+    target.ok("strengthen-verify")
+    path = target.root / "backend/tests/test_concentration.py"
+    path.write_text(path.read_text() + "# work in progress\n")
+
+    proc = target.run("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
+
+    assert proc.returncode == 2 and "test_concentration.py" in proc.stderr
+    assert "# work in progress" in path.read_text()
+
+
+def test_finish_reruns_after_bad_reviews(target):
+    target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+    target.ok("strengthen-start")
+    target.commit_test(COMPUTE, COMPUTE_TEST)
+    target.ok("strengthen-verify")
+    proven = target.read_state("strengthen-proof.json")["head"]
+    bad = target.tmp / "bad-reviews.json"
+    bad.write_text(json.dumps({"reviews": [{"id": COMPUTE, "verdict": "maybe", "reason": "unsure"}]}))
+
+    assert target.run("strengthen-finish", "--reviews", str(bad)).returncode == 2
+    assert target.git("rev-parse", "HEAD").strip() == proven
+
+    target.ok("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
+    assert STRENGTHEN_BRANCH in target.remote_branches()
+    assert_on_base(target)
+
+
+def test_the_status_keeps_the_worst_exit_while_strengthen_still_runs(target):
+    target.prepare([cand(case(1))], accept=[case(1), COMPUTE], deletions={case(1): REFERENCE},
+                   groups={COMPUTE: strengthen_group(IDS_7_9)})
+    assert target.run("prune", env={"FAKE_GATE_FAIL": "1"}).returncode == 1
+
+    target.ok("strengthen-start")
+
+    status = target.read_state("status.json")
+    assert status["exit"] == 1 and "prune-gate failed" in status["reason"]
+    assert [(c["command"], c["exit"]) for c in status["commands"][-2:]] == [("prune", 1), ("strengthen-start", 0)]
+
+
+def test_a_malformed_date_is_recorded_in_the_status(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+
+    proc = subprocess.run([sys.executable, str(PRUNE), "prune", "--state", str(target.state), "--date", "nope"],
+                          cwd=target.root, env=target.env(), capture_output=True, text=True)
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 2 and status["exit"] == 2 and "--date must be YYYY-MM-DD" in status["reason"]
+
+
+def test_the_cap_skips_a_family_that_does_not_fit_and_takes_later_ones():
+    singles = [{"test_id": f"tests/t.py::test_{i}", "into": "x"} for i in range(9)]
+    family = [{"test_id": f"tests/t.py::test_f[{i}]", "into": "x"} for i in range(3)]
+    last = [{"test_id": "tests/t.py::test_last", "into": "x"}]
+
+    take, left = capped(singles + family + last)
+
+    assert take == singles + last and left == family
+
+
+def test_a_family_larger_than_the_cap_is_skipped_in_unattended_batches(target):
+    from prune_review import over_cap
+    family = [{"test_id": f"tests/t.py::test_f[{i}]", "into": "x"} for i in range(12)]
+    single = [{"test_id": "tests/t.py::test_z", "into": "x"}]
+
+    kept, skipped = over_cap(family + single)
+
+    assert kept == single and len(skipped) == 12
+    assert skipped[0]["reason"] == "12 cases exceed the cap of 10"
+
+
+@pytest.mark.parametrize("addition, deleted", [
+    ("class TestRoundingMore(TestRounding):\n    pass\n", ["TestRounding::test_round_down"]),
+    ('def test_names_the_class():\n    assert "TestRounding"\n',
+     ["TestRounding::test_round_down", "TestRounding::test_round_half_up"]),
+])
+def test_a_test_in_a_class_named_elsewhere_is_skipped(target, addition, deleted):
+    path = target.root / "backend/tests/test_rebalancer.py"
+    path.write_text(path.read_text() + "\n\n" + addition)
+    target.git("commit", "-q", "-am", "name TestRounding elsewhere")
+    deletions = {R + d: R + "test_trade_size_is_decimal" for d in deleted}
+
+    target.prepare([cand(t, into) for t, into in deletions.items()], accept=list(deletions), deletions=deletions)
+
+    batch = target.read_state("batch.json")
+    assert batch["deletions"] == []
+    assert all("class TestRounding is subclassed or named" in s["reason"] for s in batch["skipped"])
+    assert sorted(s["test_id"] for s in batch["skipped"]) == sorted(deletions)
+
+
+def test_make_runs_without_pytest_addopts(tmp_path, monkeypatch):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "Makefile").write_text("show:\n\t@echo \"[$$PYTEST_ADDOPTS][$$KEEP_CACHE]\"\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k nothing")
+    monkeypatch.setenv("KEEP_CACHE", "1")
+
+    assert Repo(tmp_path).make("show").stdout.strip() == "[][]"
+
+
+def test_batch_prints_long_mutant_lists_shortened():
+    from prune_review import mutant_summary
+    ids = [f"x_f__mutmut_{i}" for i in range(1, 66)]
+
+    assert mutant_summary(ids) == "(65 mutants: " + ", ".join(ids[:5]) + " +60 more)"
+    assert mutant_summary(ids[:1]) == "(1 mutant: x_f__mutmut_1)"

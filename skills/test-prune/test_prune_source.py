@@ -58,15 +58,19 @@ def test_describe_lists_raises_blocks_and_misses_unknown_tests():
     assert describe(EDGES, "tests/t.py::TestNope::test_kept") is None
 
 
-def test_class_refusals_keep_classes_the_gate_keeps():
-    subclassed = "class TestBase:\n    def test_a(self):\n        assert 1\n\n\nclass TestChild(TestBase):\n    def test_c(self):\n        assert 3\n"
+def test_a_test_in_a_class_named_elsewhere_is_undeletable():
+    subclassed = "class TestBase:\n    def test_a(self):\n        assert 1\n\n    def test_b(self):\n        assert 2\n\n\nclass TestChild(TestBase):\n    def test_c(self):\n        assert 3\n"
     spelled = "class TestA:\n    def test_a(self):\n        assert 1\n\n\ndef test_b():\n    assert 'TestA'\n"
+
+    assert "class TestBase is subclassed" in undeletable(subclassed, "tests/t.py::TestBase::test_a")  # partial
+    assert "class TestA is subclassed or named" in undeletable(spelled, "tests/t.py::TestA::test_a")
+    assert undeletable(subclassed, "tests/t.py::TestChild::test_c") is None
+
+
+def test_class_refusals_keep_an_enclosing_class_non_empty():
     nested = "class TestOuter:\n    class TestInner:\n        def test_a(self):\n            assert 1\n"
     documented = 'class TestOuter:\n    """Doc."""\n\n    class TestInner:\n        def test_a(self):\n            assert 1\n'
-
-    assert "TestBase" in class_refusals(subclassed, ["tests/t.py::TestBase::test_a"])["tests/t.py::TestBase::test_a"]
-    assert "spells elsewhere" in class_refusals(spelled, ["tests/t.py::TestA::test_a"])["tests/t.py::TestA::test_a"]
     inner = "tests/t.py::TestOuter::TestInner::test_a"
+
     assert "leaves class TestOuter empty" in class_refusals(nested, [inner])[inner]
     assert class_refusals(documented, [inner]) == {}
-    assert class_refusals(subclassed, ["tests/t.py::TestChild::test_c"]) == {}
