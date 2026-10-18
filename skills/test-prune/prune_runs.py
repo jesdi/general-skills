@@ -2,7 +2,7 @@
 restore every culprit, then commit; unattended also branches, gates, pushes and opens the PR."""
 from __future__ import annotations
 
-from prune_repo import BadInput, emit, ratchet_lines
+from prune_repo import BadInput, Fail, emit, fenced, ratchet_lines
 from prune_source import delete_tests, split_id
 
 CAP = 10
@@ -27,7 +27,7 @@ class DeletionSet:
         targets = _targets(ids)
         for path in self.files:
             source = self.repo.show(self.commit, f"backend/{path}")
-            (self.repo.backend / path).write_text(delete_tests(source, targets[path]) if path in targets else source)
+            self.repo.write(f"backend/{path}", delete_tests(source, targets[path]) if path in targets else source)
 
 
 def families(ids) -> list:
@@ -202,8 +202,7 @@ def prune(ctx) -> int:
     try:
         return _prune_detached(ctx, base, out, branch)
     finally:
-        repo.leave_on(base["branch"], base["commit"],
-                      [f"backend/{path}" for path in _targets(d["test_id"] for d in out["deletions"])])
+        repo.leave_on(base["branch"], base["commit"])
 
 
 def _prune_detached(ctx, base: dict, out: dict, branch: str) -> int:
@@ -218,14 +217,23 @@ def _prune_detached(ctx, base: dict, out: dict, branch: str) -> int:
         emit("\n".join(["test-prune: the safety check restored every accepted deletion; no branch, no PR", ""]
                        + restored_lines(restored)))
         return 0
+    report = _deletions_report(kept, by_id, restored, left, ratchet)
+    try:
+        return _publish(ctx, base, out, branch, kept, report)
+    except Fail as exc:  # the job summary keeps what the safety check found
+        raise Fail("\n".join([f"{exc}", ""] + report)) from None
+
+
+def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report: list) -> int:
+    """make test, the commit, the branch, make prune-gate, then the push and the PR."""
+    repo = ctx.repo
     repo.must_make("test")
-    subject = _commit(repo, kept, by_id)
+    subject = _commit(repo, kept, {d["test_id"]: d for d in out["deletions"]})
     repo.git("branch", branch)
     gate = repo.make("prune-gate", f"BASE={base['commit']}", f"HEAD={branch}")
     gate_output = (gate.stdout + gate.stderr).strip()
-    report = _deletions_report(kept, by_id, restored, left, ratchet)
     if gate.returncode:
-        emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", gate_output, ""]
+        emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", fenced(gate_output), ""]
                        + report))
         return 1
     body = "\n".join([f"Weekly test prune from `{base['branch']}` at {base['commit'][:12]}. "

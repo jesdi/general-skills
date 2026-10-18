@@ -248,10 +248,10 @@ def strengthen_finish(ctx) -> int:
         raise  # HEAD stays at the proven head: fix the input and rerun
     except BaseException:
         if unattended:
-            repo.leave_on(base["branch"], base["commit"], [BASELINE])
+            repo.leave_on(base["branch"], base["commit"])
         raise
     if unattended:
-        repo.leave_on(base["branch"], base["commit"], [BASELINE])
+        repo.leave_on(base["branch"], base["commit"])
     return code
 
 
@@ -269,7 +269,10 @@ def _lower_baseline(repo, base: dict) -> tuple[str, dict]:
     ratchet = repo.must_make("mutation-check")
     repo.must_make("test")
     repo.must_make("crap")
-    repo.must_make("mutation-baseline")
+    try:
+        repo.must_make("mutation-baseline")
+    finally:
+        repo.own(BASELINE)
     new = json.loads((repo.root / BASELINE).read_text())
     _guard_equivalents(repo, base, new)
     if repo.git("status", "--porcelain", "--", BASELINE).strip():

@@ -1,5 +1,6 @@
 """Bisect order, parametrize families, branch and ref guards, failure paths and the run status."""
 import json
+import shutil
 import subprocess
 import sys
 
@@ -306,16 +307,17 @@ def test_a_bad_split_exits_2_naming_the_group(target, strengthen_ids, equivalent
 def test_leaving_never_discards_a_change_the_run_did_not_make(target):
     mine, theirs = target.root / "backend/tests/test_rebalancer.py", target.root / "backend/services/rebalancer.py"
     target.git("checkout", "-q", "--detach")
-    mine.write_text(mine.read_text() + "# the run's own edit\n")
     repo = Repo(target.root)
+    repo.write("backend/tests/test_rebalancer.py", mine.read_text() + "# the run's own edit\n")
 
-    repo.leave_on("main", target.base, ["backend/tests/test_rebalancer.py"])
+    repo.leave_on("main", target.base)
     assert target.git("symbolic-ref", "--short", "HEAD").strip() == "main" and target.git("status", "--porcelain") == ""
 
     target.git("checkout", "-q", "--detach")
     theirs.write_text(theirs.read_text() + "# someone else's edit\n")
-    repo.leave_on("main", target.base, ["backend/tests/test_rebalancer.py"])
-    assert "someone else's edit" in theirs.read_text()
+    repo.leave_on("main", target.base)
+    assert "someone else's edit" in theirs.read_text() and "someone else" not in repo.stranded
+    assert "backend/services/rebalancer.py" in repo.stranded
     assert target.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "HEAD"
 
 
@@ -469,3 +471,106 @@ def test_an_old_or_malformed_status_never_crashes_a_command(target, old):
     status = target.read_state("status.json")
     assert status["exit"] == 0 and [c["command"] for c in status["commands"]] == ["status", "prune"]
     assert "started fresh" in status["commands"][0]["reason"]
+
+
+# --- round 3 --------------------------------------------------------------------------
+
+def fake_make(target, script, goal="test"):
+    """A `make` first on PATH that runs `script` (sh, $MAKE is the real make) for `make <goal>`."""
+    path = target.bin / "make"
+    path.write_text(f"#!/bin/sh\nMAKE={shutil.which('make')}\ncase \" $* \" in *\" {goal} \"*)\n{script}\n;; esac\n"
+                    "exec $MAKE \"$@\"\n")
+    path.chmod(0o755)
+
+
+def test_an_exit_2_clears_once_the_same_command_passes(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    bad = target.tmp / "bad.json"
+    bad.write_text("{}")
+    assert target.run("batch", "--reviews", str(bad)).returncode == 2
+    target.ok("batch", "--reviews", str(target.reviews([case(1)])))
+
+    target.ok("prune")
+
+    status = target.read_state("status.json")
+    assert status["exit"] == 0 and status["reason"].startswith("Opened ")
+    assert [(c["command"], c["exit"]) for c in status["commands"][-3:]] == [("batch", 2), ("batch", 0), ("prune", 0)]
+
+
+def test_a_failed_make_test_reports_one_line_and_the_end_of_its_output(target, tmp_path):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    fake_make(target, "for i in $(seq 1 100); do echo \"DeprecationWarning noise $i\"; done\n"
+                      "echo 'FAILED app-chained-targets.test.ts: timed out'; exit 2")
+    summary = tmp_path / "summary.md"
+
+    proc = target.run("prune", env={"GITHUB_STEP_SUMMARY": str(summary)})
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 1 and status["reason"] == "test-prune: make test failed (exit 2)"
+    for text in (proc.stdout, summary.read_text()):
+        assert "FAILED app-chained-targets.test.ts: timed out" in text and "noise 72" in text
+        assert "noise 71\n" not in text
+        assert "## Mutation ratchet (cold run on this branch)" in text and "services/concentration.py" in text
+    assert_on_base(target)
+
+
+def test_leaving_keeps_a_user_edit_to_a_file_the_run_wrote(target, tmp_path):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    edited = target.root / "backend/tests/test_concentration.py"
+    fake_make(target, f"echo '# my edit' >> '{edited}'; exit 2")
+    summary = tmp_path / "summary.md"
+
+    proc = target.run("prune", env={"GITHUB_STEP_SUMMARY": str(summary)})
+
+    assert proc.returncode == 1 and "# my edit" in edited.read_text()
+    assert target.git("rev-parse", "--abbrev-ref", "HEAD").strip() == "HEAD"
+    assert target.git("rev-parse", "main").strip() == target.base
+    for text in (proc.stdout, summary.read_text()):
+        assert "staying at" in text and "backend/tests/test_concentration.py" in text
+
+
+def test_staying_off_the_base_branch_fails_a_passing_command(target, tmp_path):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    foreign = target.root / "backend/services/concentration.py"
+    gh = target.bin / "gh"
+    gh.rename(target.bin / "real-gh")
+    gh.write_text(f"#!/bin/sh\necho '# foreign' >> '{foreign}'\nexec '{target.bin / 'real-gh'}' \"$@\"\n")
+    gh.chmod(0o755)
+    summary = tmp_path / "summary.md"
+
+    proc = target.run("prune", env={"GITHUB_STEP_SUMMARY": str(summary)})
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 1 and len(target.pr_creates()) == 1 and "# foreign" in foreign.read_text()
+    assert status["exit"] == 1 and status["reason"].startswith("test-prune: staying at ")
+    assert "backend/services/concentration.py" in status["reason"]
+    assert "staying at" in proc.stdout and "staying at" in summary.read_text()
+
+
+def test_leaving_restores_a_file_whose_name_git_quotes(target):
+    name = 'backend/tests/test_a "quoted" name.py'
+    (target.root / name).write_text("def test_x():\n    assert 1\n")
+    target.git("add", "--", name)
+    target.git("commit", "-q", "-m", "a quoted name")
+    target.git("checkout", "-q", "--detach")
+    repo = Repo(target.root)
+    repo.write(name, "")
+
+    repo.leave_on("main", target.git("rev-parse", "main").strip())
+
+    assert repo.stranded == "" and target.git("symbolic-ref", "--short", "HEAD").strip() == "main"
+    assert "def test_x" in (target.root / name).read_text()
+
+
+def test_a_baseline_update_that_fails_midway_is_undone_on_leaving(target):
+    target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+    target.ok("strengthen-start")
+    target.commit_test(COMPUTE, COMPUTE_TEST)
+    target.ok("strengthen-verify")
+    fake_make(target, '$MAKE "$@"; exit 2', goal="mutation-baseline")
+
+    proc = target.run("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
+
+    assert proc.returncode == 1 and "make mutation-baseline failed (exit 2)" in proc.stdout
+    assert "staying at" not in proc.stdout
+    assert_on_base(target)

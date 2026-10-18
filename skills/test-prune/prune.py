@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prune_repo import LAST_SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
+from prune_repo import SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
 from prune_review import batch, collect, review_input
 from prune_runs import apply, prune
 from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
@@ -76,15 +76,22 @@ class Context:
 
 
 def _run(ctx: Context) -> tuple[int, str]:
+    """The command's exit code and the summary its status reason comes from. Staying off the base branch
+    (leave_on found changes the run did not make) is reported and fails a command that would pass."""
     try:
         ctx.validate()
-        return COMMANDS[ctx.args.command](ctx), LAST_SUMMARY[0]
+        code, summary = COMMANDS[ctx.args.command](ctx), "\n\n".join(SUMMARY)
     except BadInput as exc:
         print(f"test-prune: {exc}", file=sys.stderr)
-        return 2, f"test-prune: {exc}"
+        code, summary = 2, f"test-prune: {exc}"
     except Fail as exc:
         emit(f"test-prune: {exc}")
-        return 1, f"test-prune: {exc}"
+        code, summary = 1, f"test-prune: {exc}"
+    if ctx.repo.stranded:
+        emit(ctx.repo.stranded)
+        if code == 0:
+            code, summary = 1, ctx.repo.stranded
+    return code, summary
 
 
 STALE = {"command": "status", "exit": 0, "reason": "previous status.json unreadable or in an old format; started fresh"}
@@ -95,18 +102,27 @@ def _current(previous) -> bool:
             and isinstance(previous.get("reason"), str) and isinstance(previous.get("commands"), list))
 
 
+def _open(commands: list) -> list:
+    """The entries that still fail the run: every exit 1, and every exit 2 its command has not since
+    passed (on exit 2 the session fixes the input and reruns the command)."""
+    return [c for i, c in enumerate(commands) if c["exit"] == 1 or c["exit"] == 2 and not any(
+        later["command"] == c["command"] and later["exit"] == 0 for later in commands[i + 1:])]
+
+
 def run_status(previous, command: str, code: int, summary: str) -> dict:
-    """The run's status, sticky across commands: the highest exit code seen and its reason, plus every
-    command in order. `collect` starts a new run; a missing, malformed or old-format status starts fresh
-    (noted in the list) rather than failing the command."""
+    """The run's status, sticky across commands: the highest exit code still open and its reason (the
+    latest on a tie), plus every command in order. `collect` starts a new run; a missing, malformed or
+    old-format status starts fresh (noted in the list) rather than failing the command."""
     reason = next((line for line in summary.splitlines() if line.strip()), "")
-    entry = {"command": command, "exit": code, "reason": reason}
     if command == "collect" or previous is None:
-        previous = {"exit": 0, "reason": "", "commands": []}
+        commands = []
     elif not _current(previous):
-        previous = {"exit": 0, "reason": "", "commands": [STALE]}
-    worst = entry if code >= previous["exit"] else {"exit": previous["exit"], "reason": previous["reason"]}
-    return {"exit": worst["exit"], "reason": worst["reason"], "commands": previous["commands"] + [entry]}
+        commands = [STALE]
+    else:
+        commands = previous["commands"]
+    commands = commands + [{"command": command, "exit": code, "reason": reason}]
+    worst = max(reversed(_open(commands)), key=lambda c: c["exit"], default={"exit": 0, "reason": reason})
+    return {"exit": worst["exit"], "reason": worst["reason"], "commands": commands}
 
 
 def _record(ctx: Context, code: int, summary: str) -> None:

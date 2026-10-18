@@ -6,7 +6,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 # mutmut's status_by_exit_code, as check_mutation.py reads it.
@@ -26,12 +25,13 @@ class BadInput(Exception):
     """Invalid input or an unmet precondition: exit 2."""
 
 
-LAST_SUMMARY = [""]
+SUMMARY: list = []
 
 
 def emit(text: str) -> None:
-    """Print a run summary; also append it to the GitHub job summary when there is one."""
-    LAST_SUMMARY[0] = text
+    """Print a run summary; also append it to the GitHub job summary when there is one. Every summary a
+    command emits is kept in SUMMARY, in order."""
+    SUMMARY.append(text)
     print(text, flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -39,8 +39,12 @@ def emit(text: str) -> None:
             f.write(text.rstrip("\n") + "\n\n")
 
 
-def tail(text: str, lines: int = 60) -> str:
+def tail(text: str, lines: int = 30) -> str:
     return "\n".join(text.splitlines()[-lines:])
+
+
+def fenced(text: str) -> str:
+    return f"```\n{text.strip()}\n```"
 
 
 def parse_ratchet(output: str, returncode: int) -> dict:
@@ -53,7 +57,7 @@ def parse_ratchet(output: str, returncode: int) -> dict:
             if match.re is _FAILED:
                 failed.append(match.group(1))
     if returncode and not failed:
-        raise Fail(f"make mutation-check failed without a survivor count:\n{tail(output)}")
+        raise Fail(f"make mutation-check failed without a survivor count (exit {returncode})\n\n{fenced(tail(output))}")
     return {"ok": not returncode, "output": output, "modules": modules, "failed": failed}
 
 
@@ -68,6 +72,8 @@ class Repo:
             raise BadInput(f"not inside a git repository: {cwd}")
         self.root = Path(proc.stdout.strip())
         self.backend = self.root / "backend"
+        self.written: dict[str, bytes] = {}  # path → the bytes this run last wrote there
+        self.stranded = ""  # why leave_on stayed off the base branch, when it did
 
     # --- git -------------------------------------------------------------------------
     def run_git(self, *args: str) -> subprocess.CompletedProcess:
@@ -95,8 +101,18 @@ class Repo:
             raise BadInput("HEAD is detached: check out the base branch first")
         return proc.stdout.strip()
 
+    def dirty(self) -> list[str]:
+        """Paths with tracked changes, from `git status --porcelain -z` (unquoted; a rename gives its new path)."""
+        fields, paths = self.git("status", "--porcelain", "-z", "--untracked-files=no").split("\0"), []
+        while fields and fields[0]:
+            entry = fields.pop(0)
+            paths.append(entry[3:])
+            if entry[0] in "RC":
+                fields.pop(0)
+        return paths
+
     def require_clean(self) -> None:
-        dirty = self.git("status", "--porcelain", "--untracked-files=no").splitlines()
+        dirty = self.dirty()
         if dirty:
             raise BadInput("tracked changes in the working tree, commit or discard them first:\n"
                            + "\n".join(dirty))
@@ -123,14 +139,34 @@ class Repo:
             raise Fail(f"gh pr create failed: {proc.stderr.strip()}")
         return proc.stdout.strip()
 
-    def leave_on(self, branch: str, commit: str, owned=()) -> None:
-        """Back on the base branch, undoing only the run's own edits (owned paths). A tracked change the
-        run did not make is never discarded: HEAD then stays where it is. The base ref must not move."""
-        dirty = [line[3:] for line in self.git("status", "--porcelain", "--untracked-files=no").splitlines()]
-        foreign = [path for path in dirty if path not in set(owned)]
+    def write(self, path: str, text: str) -> None:
+        """Write a file of the run (path relative to the repo root) and remember what was written."""
+        (self.root / path).write_text(text)
+        self.own(path)
+
+    def own(self, path: str) -> None:
+        """Remember the current content of path as the run's own: leave_on may restore it."""
+        self.written[path] = (self.root / path).read_bytes()
+
+    def _ours(self, path: str, commit: str) -> bool:
+        """The change at path is the run's: the file holds what the run last wrote, or the base content."""
+        try:
+            current = (self.root / path).read_bytes()
+        except OSError:
+            return False
+        return path in self.written and (current == self.written[path]
+                                         or self.run_git("diff", "--quiet", commit, "--", path).returncode == 0)
+
+    def leave_on(self, branch: str, commit: str) -> None:
+        """Back on the base branch, undoing only the run's own edits (files still holding what the run
+        wrote). Any other tracked change is never discarded: HEAD then stays where it is and `stranded`
+        says why (the command then fails). The base ref must not move."""
+        dirty = self.dirty()
+        foreign = [path for path in dirty if not self._ours(path, commit)]
         if foreign:
-            print(f"test-prune: staying at {self.head()[:12]}, not on {branch}: tracked changes test-prune did "
-                  f"not make: {', '.join(foreign)}", file=sys.stderr)
+            self.stranded = (f"test-prune: staying at {self.head()[:12]}, not on {branch}: tracked changes "
+                             f"test-prune did not make: {', '.join(foreign)}; keep or discard them, then "
+                             f"`git checkout {branch}`")
         else:
             if dirty:
                 self.git("checkout", "-q", "HEAD", "--", *dirty)
@@ -148,7 +184,7 @@ class Repo:
     def must_make(self, target: str, *assigns: str) -> str:
         proc = self.make(target, *assigns)
         if proc.returncode:
-            raise Fail(f"make {target} failed:\n{tail(proc.stdout + proc.stderr)}")
+            raise Fail(f"make {target} failed (exit {proc.returncode})\n\n{fenced(tail(proc.stdout + proc.stderr))}")
         return proc.stdout
 
     def cold_mutation(self) -> None:
