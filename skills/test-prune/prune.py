@@ -14,7 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prune_repo import FULL_DIR, SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
+from prune_repo import BadInput, Fail, Repo, State, read_agent_json
 from prune_review import batch, collect, review_input
 from prune_runs import apply, prune
 from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
@@ -26,12 +26,23 @@ COMMANDS = {
 }
 
 
-def build_parser():
+class Parser(argparse.ArgumentParser):
+    """An argument error raises BadInput (exit 2, recorded in the run status) instead of exiting."""
+
+    def error(self, message):
+        raise BadInput(f"{self.prog}: {message}")
+
+
+def _common():
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--state", help="run state directory (default: <git dir>/test-prune)")
     common.add_argument("--date", help="branch date YYYY-MM-DD (default: today, UTC)")
+    return common
 
-    parser = argparse.ArgumentParser(prog="prune.py", description=__doc__)
+
+def build_parser():
+    common = _common()
+    parser = Parser(prog="prune.py", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     collect_cmd = sub.add_parser("collect", parents=[common])
@@ -56,7 +67,7 @@ class Context:
         self.repo = Repo(Path.cwd())
         self.state = State(Path(args.state).resolve() if args.state else self.repo.git_dir() / "test-prune")
         self.date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        FULL_DIR[0] = self.state.path
+        self.finished = False  # the run is complete: the strengthen loop ended (set by its commands)
 
     def validate(self) -> None:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date):
@@ -81,75 +92,92 @@ def _run(ctx: Context) -> tuple[int, str]:
     (leave_on found changes the run did not make) is reported and fails a command that would pass."""
     try:
         ctx.validate()
-        code, summary = COMMANDS[ctx.args.command](ctx), "\n\n".join(SUMMARY)
+        code, summary = COMMANDS[ctx.args.command](ctx), "\n\n".join(ctx.state.summaries)
     except BadInput as exc:
         print(f"test-prune: {exc}", file=sys.stderr)
         code, summary = 2, f"test-prune: {exc}"
     except Fail as exc:
-        emit(f"test-prune: {exc}")
+        ctx.state.emit(f"test-prune: {exc}")
         code, summary = 1, f"test-prune: {exc}"
     except Exception as exc:  # a bug or an operational surprise still fails the run in status.json
         summary = f"test-prune: unexpected {type(exc).__name__}: {exc}"
-        emit(summary)
+        ctx.state.emit(summary)
         code = 1
     if ctx.repo.stranded:
-        emit(ctx.repo.stranded)
+        ctx.state.emit(ctx.repo.stranded)
         if code == 0:
             code, summary = 1, ctx.repo.stranded
     return code, summary
 
 
-STALE = {"command": "status", "exit": 0, "reason": "previous status.json unreadable or in an old format; started fresh"}
-
-
-def _current(previous) -> bool:
-    return (isinstance(previous, dict) and isinstance(previous.get("exit"), int)
-            and isinstance(previous.get("reason"), str) and isinstance(previous.get("commands"), list))
+RUN = "run"  # the marker entry an unattended run stays red on until it finishes
+INCOMPLETE = "test-prune: run incomplete: the strengthen loop has not finished"
 
 
 def _open(commands: list) -> list:
-    """The entries that still fail the run: every exit 1, and every exit 2 its command has not since
-    passed (on exit 2 the session fixes the input and reruns the command)."""
-    return [c for i, c in enumerate(commands) if c["exit"] == 1 or c["exit"] == 2 and not any(
-        later["command"] == c["command"] and later["exit"] == 0 for later in commands[i + 1:])]
+    """The entries that still fail the run: every exit 1 but the run marker, and every exit 2 (or the run
+    marker) its command has not since passed. On exit 2 the session fixes the input and reruns the
+    command; the run marker passes when the strengthen loop ends."""
+    def clears(c: dict) -> bool:
+        return c["exit"] == 2 or c["command"] == RUN
+    return [c for i, c in enumerate(commands) if c["exit"] and not (clears(c) and any(
+        later["command"] == c["command"] and later["exit"] == 0 for later in commands[i + 1:]))]
 
 
-def run_status(previous, command: str, code: int, summary: str) -> dict:
+def run_status(previous, command: str, code: int, summary: str, extra=()) -> dict:
     """The run's status, sticky across commands: the highest exit code still open and its reason (the
-    latest on a tie), plus every command in order. `collect` starts a new run; a missing, malformed or
-    old-format status starts fresh (noted in the list) rather than failing the command."""
+    latest on a tie), plus every command in order, then the extra entries. `collect` starts a new run; a
+    missing or unreadable status starts fresh rather than failing the command."""
     reason = next((line for line in summary.splitlines() if line.strip()), "")
-    if command == "collect" or previous is None:
-        commands = []
-    elif not _current(previous):
-        commands = [STALE]
-    else:
-        commands = previous["commands"]
-    commands = commands + [{"command": command, "exit": code, "reason": reason}]
+    commands = previous.get("commands") if isinstance(previous, dict) and command != "collect" else None
+    commands = (commands if isinstance(commands, list) else []) + [{"command": command, "exit": code, "reason": reason}]
+    commands += list(extra)
     worst = max(reversed(_open(commands)), key=lambda c: c["exit"], default={"exit": 0, "reason": reason})
     return {"exit": worst["exit"], "reason": worst["reason"], "commands": commands}
 
 
-def _record(ctx: Context, code: int, summary: str) -> None:
-    if not ctx.state.path.is_dir():
+def _record(state: State, command: str, code: int, summary: str, extra=()) -> None:
+    """Add the command to <state>/status.json, when the state dir is the run's (see State.owned)."""
+    if not state.owned():
         return
-    path = ctx.state.path / "status.json"
+    path = state.path / "status.json"
     try:
         previous = json.loads(path.read_text()) if path.exists() else None
     except (OSError, ValueError):
-        previous = "unreadable"
-    ctx.state.save("status.json", run_status(previous, ctx.args.command, code, summary))
+        previous = None
+    state.save("status.json", run_status(previous, command, code, summary, extra))
+
+
+def _markers(ctx: Context) -> list:
+    """The run marker: opened by an unattended collect, passed when the strengthen loop ends."""
+    if ctx.args.command == "collect" and ctx.args.unattended:
+        return [{"command": RUN, "exit": 1, "reason": INCOMPLETE}]
+    return [{"command": RUN, "exit": 0, "reason": "run finished"}] if ctx.finished else []
+
+
+def _record_bad_arguments(argv, exc: BadInput) -> None:
+    """An argument error is recorded as exit 2 when the command and the state dir can still be told."""
+    command = next((a for a in argv if a in COMMANDS), None)
+    known, _ = _common().parse_known_args(argv)
+    try:
+        path = Path(known.state).resolve() if known.state else Repo(Path.cwd()).git_dir() / "test-prune"
+    except BadInput:
+        return
+    if command:
+        _record(State(path), command, 2, f"test-prune: {exc}")
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    argv = sys.argv[1:] if argv is None else argv
     try:
+        args = build_parser().parse_args(argv)
         ctx = Context(args)
     except BadInput as exc:
         print(f"test-prune: {exc}", file=sys.stderr)
+        _record_bad_arguments(argv, exc)
         return 2
     code, summary = _run(ctx)
-    _record(ctx, code, summary)
+    _record(ctx.state, args.command, code, summary, _markers(ctx))
     return code
 
 

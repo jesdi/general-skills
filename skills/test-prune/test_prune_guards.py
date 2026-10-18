@@ -8,7 +8,7 @@ import pytest
 
 from prune_harness import PRUNE, PRUNE_BRANCH, arg, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
 from prune_repo import Fail, Repo
-from prune_runs import capped
+from prune_review import cap
 from test_prune_strengthen import (COMPUTE, COMPUTE_TEST, DRIFT, DRIFT_TEST, EQUIVALENT_ID, HERFINDAHL, IDS_7_9,
                                    strengthen, strengthen_group, strengthen_pr)
 
@@ -244,8 +244,12 @@ def test_every_command_records_its_status_for_the_headless_job(target):
     target.prepare([cand(case(1), unprotected=True)])
     target.ok("prune")
     status = target.read_state("status.json")
-    assert status["exit"] == 0 and status["reason"] == "test-prune: no protected candidates; no branch, no PR"
-    assert [c["command"] for c in status["commands"]] == ["collect", "review-input", "batch", "prune"]
+    assert status["exit"] == 1 and status["reason"] == "test-prune: run incomplete: the strengthen loop has not finished"
+    target.ok("strengthen-start")
+    status = target.read_state("status.json")
+    assert status["exit"] == 0 and status["reason"].startswith("nothing to strengthen")
+    assert [c["command"] for c in status["commands"]] == ["collect", "run", "review-input", "batch", "prune",
+                                                         "strengthen-start", "run"]
 
     target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
     proc = target.run("prune", env={"FAKE_GATE_FAIL": "1"})
@@ -380,20 +384,12 @@ def test_the_cap_skips_a_family_that_does_not_fit_and_takes_later_ones():
     family = [{"test_id": f"tests/t.py::test_f[{i}]", "into": "x"} for i in range(3)]
     last = [{"test_id": "tests/t.py::test_last", "into": "x"}]
 
-    take, left = capped(singles + family + last)
+    big = [{"test_id": f"tests/t.py::test_big[{i}]", "into": "x"} for i in range(11)]
+
+    take, left, over = cap(big + singles + family + last)
 
     assert take == singles + last and left == family
-
-
-def test_a_family_larger_than_the_cap_is_skipped_in_unattended_batches(target):
-    from prune_review import over_cap
-    family = [{"test_id": f"tests/t.py::test_f[{i}]", "into": "x"} for i in range(12)]
-    single = [{"test_id": "tests/t.py::test_z", "into": "x"}]
-
-    kept, skipped = over_cap(family + single)
-
-    assert kept == single and len(skipped) == 12
-    assert skipped[0]["reason"] == "12 cases exceed the cap of 10"
+    assert [o["test_id"] for o in over] == [d["test_id"] for d in big]
 
 
 @pytest.mark.parametrize("addition, deleted", [
@@ -470,8 +466,7 @@ def test_an_old_or_malformed_status_never_crashes_a_command(target, old):
 
     assert proc.returncode == 0 and "Traceback" not in proc.stderr
     status = target.read_state("status.json")
-    assert status["exit"] == 0 and [c["command"] for c in status["commands"]] == ["status", "prune"]
-    assert "started fresh" in status["commands"][0]["reason"]
+    assert status["exit"] == 0 and [c["command"] for c in status["commands"]] == ["prune"]  # treated as missing
 
 
 # --- round 3 --------------------------------------------------------------------------
@@ -492,10 +487,12 @@ def test_an_exit_2_clears_once_the_same_command_passes(target):
     target.ok("batch", "--reviews", str(target.reviews([case(1)])))
 
     target.ok("prune")
+    target.ok("strengthen-start")
 
     status = target.read_state("status.json")
-    assert status["exit"] == 0 and status["reason"].startswith("Opened ")
-    assert [(c["command"], c["exit"]) for c in status["commands"][-3:]] == [("batch", 2), ("batch", 0), ("prune", 0)]
+    assert status["exit"] == 0
+    assert [(c["command"], c["exit"]) for c in status["commands"][-5:]] == [
+        ("batch", 2), ("batch", 0), ("prune", 0), ("strengthen-start", 0), ("run", 0)]
 
 
 def test_a_failed_make_test_reports_one_line_and_the_end_of_its_output(target, tmp_path):
@@ -740,3 +737,67 @@ def test_apply_keeps_a_user_edit_when_it_puts_the_test_files_back(target):
     assert proc.returncode == 1 and "# my edit" in edited.read_text()
     assert "backend/tests/test_concentration.py changed during the run, not by test-prune" in proc.stdout
     assert "make test failed (exit 2)" in target.read_state("status.json")["reason"]
+
+
+# --- final review -----------------------------------------------------------------------
+
+def test_collect_refuses_a_state_dir_that_is_not_a_run_s(target):
+    notes = target.tmp / "notes"
+    notes.mkdir()
+    (notes / "mine.txt").write_text("keep me\n")
+    target.set_candidates([cand(case(1))])
+
+    proc = subprocess.run([sys.executable, str(PRUNE), "collect", "--state", str(notes), "--date", "2026-10-17"],
+                          cwd=target.root, env=target.env(), capture_output=True, text=True)
+
+    assert proc.returncode == 2 and "refusing to use" in proc.stderr
+    assert sorted(p.name for p in notes.iterdir()) == ["mine.txt"] and target.log("mutation") == []
+
+
+def test_collect_resets_only_the_run_s_own_files(target):
+    target.prepare([cand(case(1), unprotected=True)])
+    (target.state / "notes.txt").write_text("mine\n")
+
+    target.ok("collect", "--unattended")
+
+    assert (target.state / "notes.txt").read_text() == "mine\n"
+    assert not (target.state / "batch.json").exists()
+
+
+def test_a_run_that_stops_after_collect_stays_red(target):
+    target.set_candidates([cand(case(1))])
+
+    target.ok("collect", "--unattended")
+
+    status = target.read_state("status.json")
+    assert status["exit"] == 1 and "run incomplete" in status["reason"]
+
+
+def test_an_argument_error_is_recorded_as_exit_2(target):
+    target.set_candidates([cand(case(1))])
+    target.ok("collect", "--unattended")
+
+    proc = target.run("batch")
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 2 and "--reviews" in proc.stderr
+    assert status["exit"] == 2 and status["commands"][-1]["command"] == "batch" and "--reviews" in status["reason"]
+
+
+def test_a_finish_without_rejections_runs_no_extra_cold_proof(target):
+    proven_strengthen(target)
+    runs = len(target.log("mutation"))
+
+    target.ok("strengthen-finish", "--reviews", str(target.reviews([COMPUTE], ids=[COMPUTE])))
+
+    assert len(target.log("mutation")) == runs
+    assert target.read_state("status.json")["exit"] == 0
+
+
+def test_a_failed_gate_lands_in_the_job_summary(target, tmp_path):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+    summary = tmp_path / "summary.md"
+
+    assert target.run("prune", env={"FAKE_GATE_FAIL": "1", "GITHUB_STEP_SUMMARY": str(summary)}).returncode == 1
+
+    assert "Prune gate FAILED at point 1" in summary.read_text()

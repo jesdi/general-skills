@@ -25,8 +25,6 @@ class BadInput(Exception):
     """Invalid input or an unmet precondition: exit 2."""
 
 
-SUMMARY: list = []
-FULL_DIR: list = [None]  # where a summary over LIMIT keeps its full text (the state dir)
 LIMIT = 60_000  # characters per PR body or summary block; GitHub refuses a PR body over 65,536
 
 
@@ -39,19 +37,6 @@ def capped(text: str, full: Path, limit: int = LIMIT) -> str:
     note = f"\n\n… truncated, full text in {full}\n"
     cut = text[:limit - len(note) - 4]
     return cut + ("\n```" if cut.count("```") % 2 else "") + note
-
-
-def emit(text: str) -> None:
-    """Print a run summary; also append it to the GitHub job summary when there is one. Every summary a
-    command emits is kept in SUMMARY, in order; one over LIMIT is cut, its full text kept in FULL_DIR."""
-    if FULL_DIR[0] is not None:
-        text = capped(text, FULL_DIR[0] / f"summary-{len(SUMMARY) + 1}.md")
-    SUMMARY.append(text)
-    print(text, flush=True)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a") as f:
-            f.write(text.rstrip("\n") + "\n\n")
 
 
 def tail(text: str, lines: int = 30) -> str:
@@ -132,11 +117,33 @@ class Repo:
             raise BadInput("tracked changes in the working tree, commit or discard them first:\n"
                            + "\n".join(dirty))
 
+    def require_at(self, base: dict, command: str) -> None:
+        """A clean tree on the collected branch at the collected commit."""
+        self.require_clean()
+        if self.branch() != base["branch"] or self.head() != base["commit"]:
+            raise BadInput(f"{command} runs on {base['branch']} at the collected commit {base['commit']}; "
+                           "check it out, or collect again after moving it")
+
+    def detach_at(self, base: dict, new_branch: str, command: str) -> None:
+        """require_at, an unmoved base ref and a branch name still free, then HEAD detached at the base
+        commit: the base branch is never written."""
+        self.require_at(base, command)
+        self.require_new_branch(new_branch)
+        self.git("checkout", "-q", "--detach", base["commit"])
+
     def require_new_branch(self, name: str) -> None:
         local = self.run_git("rev-parse", "--verify", "-q", f"refs/heads/{name}").returncode == 0
         remote = bool(self.git("ls-remote", "--heads", "origin", name).strip())
         if local or remote:
             raise BadInput(f"branch {name} already exists {'locally' if local else 'on origin'}")
+
+    @staticmethod
+    def test_path(rel: str) -> str:
+        """The repo path of a backend-relative test path (`tests/x.py` → `backend/tests/x.py`)."""
+        return f"backend/{rel}"
+
+    def show_test(self, commit: str, rel: str) -> str | None:
+        return self.show(commit, self.test_path(rel))
 
     def show(self, commit: str, path: str) -> str | None:
         proc = self.run_git("show", f"{commit}:{path}")
@@ -238,12 +245,46 @@ class Repo:
 
 
 class State:
+    """The run state directory, and the summaries a command emits."""
+
+    FILES = ("base.json", "status.json", "fixer-input.json", "review-input.json", "batch.json", "strengthen.json",
+             "strengthen-input.json", "strengthen-proof.json", "prune-pr.md", "prune-pr-full.md", "strengthen-pr.md",
+             "strengthen-pr-full.md", "prune-gate.log")
+    MARKERS = ("base.json", "status.json")
+
     def __init__(self, path: Path):
         self.path = path
+        self.summaries: list = []
+
+    def _files(self) -> list:
+        return [self.path / name for name in self.FILES] + sorted(self.path.glob("summary-*.md"))
+
+    def owned(self) -> bool:
+        """The directory is this run's to write: empty, or holding a run's marker file."""
+        return self.path.is_dir() and (not any(self.path.iterdir())
+                                       or any((self.path / m).exists() for m in self.MARKERS))
 
     def reset(self) -> None:
-        shutil.rmtree(self.path, ignore_errors=True)
-        self.path.mkdir(parents=True)
+        """Start a new run: delete the files a run writes, never anything else, and refuse a non-empty
+        directory that is not a run's."""
+        if self.path.exists() and not self.owned():
+            raise BadInput(f"refusing to use {self.path} as the run state: it is not empty and holds no "
+                           f"{' or '.join(self.MARKERS)}; pass an empty or new --state")
+        for path in self._files():
+            if path.exists():
+                path.unlink()
+        self.path.mkdir(parents=True, exist_ok=True)
+
+    def emit(self, text: str) -> None:
+        """Print a run summary; also append it to the GitHub job summary when there is one. Every summary is
+        kept in summaries, in order; one over LIMIT is cut, its full text kept in the state dir."""
+        text = capped(text, self.path / f"summary-{len(self.summaries) + 1}.md")
+        self.summaries.append(text)
+        print(text, flush=True)
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a") as f:
+                f.write(text.rstrip("\n") + "\n\n")
 
     def load(self, name: str) -> dict:
         path = self.path / name
