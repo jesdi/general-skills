@@ -22,6 +22,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import driver_agents
@@ -41,12 +42,34 @@ ROUNDS = 2  # the full review and the scoped one after the fix batch
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
 
 
-def pr_skill() -> Path | None:
-    """The SKILL.md of the pr skill, which the PR body follows: next to this skill, else in the skill folder of the
-    Claude home or of the shared home of Codex and OpenCode."""
+def _installed(name: str) -> Path | None:
+    """The SKILL.md of a skill: next to this skill, else in the skill folder of the Claude home or of the shared
+    home of Codex and OpenCode."""
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     homes = (driver_agents.SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
-    return next((home / "pr" / "SKILL.md" for home in homes if (home / "pr" / "SKILL.md").is_file()), None)
+    return next((home / name / "SKILL.md" for home in homes if (home / name / "SKILL.md").is_file()), None)
+
+
+def pr_skill() -> Path | None:
+    """The SKILL.md of the pr skill, which the PR body follows."""
+    return _installed("pr")
+
+
+def pr_risk_skill() -> Path | None:
+    """The SKILL.md of the pr-risk skill, which parses and validates the merge-risk block of the PR body."""
+    return _installed("pr-risk")
+
+
+PR_RISK_INSTALL = "`npx skills add jesdi/general-skills --skill pr-risk`"
+
+
+def _risk_errors(method: Path, body: str) -> str:
+    """The errors of the merge-risk block of `body` as `pr-risk` names them, or "" when the block is valid."""
+    checked = OUT / FINAL / "pr-risk-check.md"
+    checked.write_text(body)
+    done = subprocess.run([sys.executable, str(method.parent / "merge_risk.py"), "validate", str(checked)],
+                          capture_output=True, text=True)
+    return (done.stdout + done.stderr).strip() if done.returncode else ""
 
 
 def _has_origin() -> bool:
@@ -62,6 +85,9 @@ def precondition_errors(push: bool) -> list[str]:
     if push and not pr_skill():
         errors.append("the pr skill is missing: the PR body follows it; install it with "
                       "`npx skills add mattpocock/skills --skill pr`, or run without --push and --unattended")
+    if push and not pr_risk_skill():
+        errors.append(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
+                      f"{PR_RISK_INSTALL}, or run without --push and --unattended")
     if push and not _has_origin():
         errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
                       "add the remote, or run without them to stop before the push")
@@ -433,18 +459,31 @@ def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
 
 def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
     """Write the PR body: what the pr-writer wrote with the method of the pr skill, then the facts of the run. A body
-    written for the reviewed tip is kept, so a PR that failed to open costs no second agent."""
+    written for the reviewed tip is kept when its merge-risk block still validates, so a PR that failed to open costs
+    no second agent."""
     body, tip = OUT / FINAL / "pr-body.md", final["reviewed"]
-    if final["body"] == tip and body.is_file():
+    method, risk, facts = pr_skill(), pr_risk_skill(), _facts(run, final, tickets)
+    if final["body"] == tip and body.is_file() and risk and not _risk_errors(risk, body.read_text()):
         return body
-    method, facts = pr_skill(), _facts(run, final, tickets)
     if not method:
         raise Blocked("the pr skill is missing: the PR body follows it; install it with "
                       "`npx skills add mattpocock/skills --skill pr`")
+    if not risk:
+        raise Blocked(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
+                      f"{PR_RISK_INSTALL}")
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(OUT / FINAL, tip)), "pr_skill": str(method), "facts": facts}
-    with during("the PR body"):
-        report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent("pr-writer", FINAL, ".", values))
+              "gate": str(driver_gate.record_path(OUT / FINAL, tip)), "pr_skill": str(method),
+              "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
+    for round_ in range(2):  # the pr-writer gets one more run with the errors of the block
+        with during("the PR body"):
+            report = run.read_only(FINAL, ".", run.pr, tip,
+                                   lambda: run.agent("pr-writer", FINAL, ".", values, fix_round=round_))
+        if not (errors := _risk_errors(risk, report["body"])):
+            break
+        values["risk_errors"] = (f"Your previous body has an invalid merge-risk block. Fix it with the pr-risk "
+                                 f"skill; its errors:\n{errors}\n")
+    else:
+        raise Blocked(f"the merge-risk block of the PR body is invalid after a second run of the pr-writer: {errors}")
     body.write_text(f"{report['body'].strip()}\n\n{facts}")
     run.state.update(lambda state: state["run"]["final"].update(body=tip))
     return body
