@@ -47,6 +47,10 @@ When a push succeeded but `gh pr create` failed (exit 1, the branch is on origin
 open the PR by hand from `<state>/prune-pr.md` or `<state>/strengthen-pr.md` after fixing `gh`;
 rerunning the command refuses because the branch exists.
 
+**A run needs a checkout dedicated to it** for its whole duration: the CI checkout, or a worktree.
+If anything else edits a file there mid-run, the run stops with exit 1 rather than overwrite it,
+and nothing is lost; races beyond that check are out of scope.
+
 **Runtime.** Each cold `make mutation` takes about 30 minutes on a real repo, and a run makes
 several (collect, every bisect step, each strengthen proof). Run long commands with a timeout of
 an hour or more, or in the background, and wait for them.
@@ -61,8 +65,10 @@ an hour or more, or in the background, and wait for them.
   and one from `chore/test-strengthen-<date>`, both from the base commit. The base branch stays
   where it was. A merge is the human's approval, so the run ends with open PRs. Leaving the detached
   HEAD, a command restores only the files that still hold what it wrote; any other tracked change,
-  including your edit to one of those files mid-run, keeps HEAD detached and untouched, is named in
-  the summary, and fails the command (exit 1). Keep or discard the change, then check out the base
+  including an edit to one of those files mid-run or a baseline left by a failed
+  `make mutation-baseline`, keeps HEAD detached and untouched, is named in the summary, and fails
+  the command (exit 1). An unexpected error is reported as `test-prune: unexpected <Type>: <msg>`,
+  exit 1. Keep or discard the change, then check out the base
   branch.
 
 Two kinds of accepted proposal reach a human only: equivalent mutants (the skill writes no
@@ -118,7 +124,8 @@ PR body and the job summary carry them.
    - Unattended: `prune` applies the first 10, runs the safety check, `make test`, commits,
      runs `make prune-gate` and, only when it passes, pushes the branch and opens the PR. When a
      step after the safety check fails, its summary still carries the safety-check result
-     (deletions, restored tests, ratchet lines).
+     (restored tests, ratchet lines), headed by where the deletions are: not committed, or on the
+     unpushed (or pushed, PR-less) branch.
 
 **Safety check** (inside `apply` and `prune`): a cold mutation run plus `make mutation-check`
 on the batch; when a module gains survivors it bisects (a parametrized test is one unit), restores each culprit and reports it by
