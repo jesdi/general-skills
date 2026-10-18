@@ -574,3 +574,16 @@ def test_a_baseline_update_that_fails_midway_is_undone_on_leaving(target):
     assert proc.returncode == 1 and "make mutation-baseline failed (exit 2)" in proc.stdout
     assert "staying at" not in proc.stdout
     assert_on_base(target)
+
+
+def test_an_exit_1_stays_open_after_the_command_passes():
+    from prune import run_status
+    status = None
+    for command, code in [("collect", 0), ("prune", 1), ("prune", 0), ("batch", 2), ("strengthen-start", 0)]:
+        status = run_status(status, command, code, f"{command} said {code}")
+
+    assert status["exit"] == 2 and status["reason"] == "batch said 2"
+    status = run_status(status, "batch", 0, "batch said 0")
+    assert status["exit"] == 1 and status["reason"] == "prune said 1"
+    status = run_status(status, "strengthen-finish", 1, "strengthen-finish said 1")
+    assert status["exit"] == 1 and status["reason"] == "strengthen-finish said 1"  # the latest on a tie
