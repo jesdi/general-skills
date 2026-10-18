@@ -12,7 +12,7 @@ from pathlib import Path
 SURVIVING = {0, 5, 33}
 KILLED = {1, 3}
 PUSHABLE = re.compile(r"^chore/test-(prune|strengthen)-\d{4}-\d{2}-\d{2}$")
-DROPPED_ENV = {"KEEP_CACHE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL"}
+DROPPED_ENV = {"KEEP_CACHE", "MAKEFLAGS", "MFLAGS", "MAKELEVEL", "PYTEST_ADDOPTS"}
 _FAILED = re.compile(r"✗ (\S+): (\d+) survivors > baseline (\d+)")
 _PASSED = re.compile(r"✓ (\S+): (\d+) survivors, baseline (\d+)")
 
@@ -25,8 +25,12 @@ class BadInput(Exception):
     """Invalid input or an unmet precondition: exit 2."""
 
 
+LAST_SUMMARY = [""]
+
+
 def emit(text: str) -> None:
     """Print a run summary; also append it to the GitHub job summary when there is one."""
+    LAST_SUMMARY[0] = text
     print(text, flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
@@ -178,7 +182,6 @@ class State:
         return json.loads(path.read_text())
 
     def save(self, name: str, data: dict) -> Path:
-        path = self.path / name
         return self.save_text(name, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
 
     def save_text(self, name: str, text: str) -> Path:

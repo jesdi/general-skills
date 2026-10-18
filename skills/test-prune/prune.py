@@ -13,7 +13,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prune_repo import BadInput, Fail, Repo, State, emit, read_agent_json
+from prune_repo import LAST_SUMMARY, BadInput, Fail, Repo, State, emit, read_agent_json
 from prune_review import batch, collect, review_input
 from prune_runs import apply, prune
 from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
@@ -61,7 +61,7 @@ class Context:
     def base(self, mode: str | None = None) -> dict:
         base = self.state.load("base.json")
         if mode and base["mode"] != mode:
-            raise BadInput(f"`{self.args.command}` needs a {mode} run; this run was collected {base['mode']}")
+            raise BadInput(f"`{self.args.command}` runs only in {mode} mode; this run was collected in {base['mode']} mode")
         return base
 
     def reviews(self) -> list:
@@ -72,16 +72,31 @@ class Context:
                 "weak_spots": read_agent_json(self.args.proposals, "weak_spots")}
 
 
+def _run(ctx: Context | None, args) -> tuple[int, str]:
+    try:
+        if ctx is None:
+            ctx = Context(args)
+        code = COMMANDS[args.command](ctx)
+        return code, LAST_SUMMARY[0]
+    except BadInput as exc:
+        print(f"test-prune: {exc}", file=sys.stderr)
+        return 2, f"test-prune: {exc}"
+    except Fail as exc:
+        emit(f"test-prune: {exc}")
+        return 1, f"test-prune: {exc}"
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
-        return COMMANDS[args.command](Context(args))
-    except BadInput as exc:
-        print(f"test-prune: {exc}", file=sys.stderr)
-        return 2
-    except Fail as exc:
-        emit(f"test-prune: {exc}")
-        return 1
+        ctx = Context(args)
+    except BadInput:
+        ctx = None
+    code, summary = _run(ctx, args)
+    if ctx is not None and ctx.state.path.is_dir():
+        reason = next((line for line in summary.splitlines() if line.strip()), "")
+        ctx.state.save("status.json", {"command": args.command, "exit": code, "reason": reason})
+    return code
 
 
 if __name__ == "__main__":

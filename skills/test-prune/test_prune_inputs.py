@@ -5,7 +5,7 @@ import pytest
 
 from prune_repo import BadInput, Fail, parse_ratchet, read_agent_json
 from prune_review import candidate_problems, group_problems
-from prune_strengthen import changed_tests, commit_problems, item_proof
+from prune_strengthen import changed_tests, commit_problems, item_proof, reopened
 
 TESTS = {"tests/t.py::a", "tests/t.py::b"}
 
@@ -83,3 +83,15 @@ def test_a_ratchet_failure_without_survivor_counts_is_operational():
         parse_ratchet("  ✗ services/x.py: no mutmut results, run 'make mutation'\n", 1)
     ratchet = parse_ratchet("  ✗ services/x.py: 23 survivors > baseline 20 (score 1.00)\n", 1)
     assert ratchet["failed"] == ["services/x.py"] and ratchet["modules"]["services/x.py"] == [23, 20]
+
+
+def test_an_item_without_mutant_ids_is_never_proven():
+    assert item_proof({}, {}, {"module": None, "mutant_ids": []}, True)["status"] == "unproven"
+
+
+def test_commits_after_an_item_closed_are_reopenings():
+    history = [("a" * 40, ["m.f"], []), ("b" * 40, ["m.f"], []), ("c" * 40, ["m.f"], []), ("d" * 40, ["m.g"], [])]
+
+    (problem,) = reopened(history, {"m.f": "b" * 40})
+    assert problem.startswith("cccccccccccc: m.f was closed")
+    assert reopened(history, {"m.g": "start"}) and not reopened(history, {})
