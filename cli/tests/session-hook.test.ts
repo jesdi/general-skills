@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,44 +110,62 @@ describe('session-update.sh', () => {
     const calls = join(ctx.home, 'npx-calls');
     await writeFile(join(bin, 'npx'), `#!/bin/sh\necho "$PWD: $@" >> '${calls}'\n`);
     await chmod(join(bin, 'npx'), 0o755);
-    const run = (input = '{}') => {
-      execFileSync('sh', [join(ctx.home, '.my-skills', '.session-update.sh')], {
-        cwd: ctx.project,
-        env: { HOME: ctx.home, PATH: `${bin}:/usr/bin:/bin` },
-        input,
+    // Async, with a timeout: `execFileSync` with a large `input` can leave the child's stdin
+    // open on macOS, and then the script and the blocked worker wait for each other forever.
+    const run = (input = '{}') =>
+      new Promise<void>((resolve, reject) => {
+        const child = spawn('sh', [join(ctx.home, '.my-skills', '.session-update.sh')], {
+          cwd: ctx.project,
+          env: { HOME: ctx.home, PATH: `${bin}:/usr/bin:/bin` },
+        });
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error('session-update.sh did not exit within 3 s'));
+        }, 3000);
+        const fail = (err: Error) => {
+          clearTimeout(timer);
+          reject(err);
+        };
+        child.on('error', fail);
+        // EPIPE lands here when the script exits before it reads its input.
+        child.stdin.on('error', fail);
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          if (code === 0) resolve();
+          else reject(new Error(`session-update.sh exited with ${code}`));
+        });
+        child.stdin.end(input);
       });
-    };
-    const callCount = async () => {
-      // The update runs in the background: give it a moment to record the call.
-      await new Promise((r) => setTimeout(r, 300));
-      return existsSync(calls) ? (await readFile(calls, 'utf8')).trim().split('\n').length : 0;
-    };
-    return { ctx, calls, run, callCount };
+    const callCount = async () =>
+      existsSync(calls) ? (await readFile(calls, 'utf8')).trim().split('\n').length : 0;
+    // The update runs in the background: wait until it records the call, however slow the machine.
+    const expectCalls = (n: number) => expect.poll(callCount, { timeout: 3000 }).toBe(n);
+    return { ctx, calls, run, expectCalls };
   }
 
   it('updates the global skills on the first session, outside the project, with the latest CLI', async () => {
-    const { ctx, calls, run, callCount } = await setup();
-    run();
-    expect(await callCount()).toBe(1);
+    const { ctx, calls, run, expectCalls } = await setup();
+    await run();
+    await expectCalls(1);
     const [cwd, args] = (await readFile(calls, 'utf8')).trim().split(': ');
     expect(await realpath(cwd)).toBe(await realpath(join(ctx.home, '.my-skills')));
     expect(args).toBe('-y @jesdi/skills-cli@latest session-update');
   });
 
   it('reads its hook input to the end, so the runner never writes to a closed pipe', async () => {
-    const { run, callCount } = await setup();
+    const { run, expectCalls } = await setup();
     // More than a pipe buffer: a script that exits before it reads makes this write fail with EPIPE.
-    run(JSON.stringify({ transcript: 'x'.repeat(1 << 20) }));
-    expect(await callCount()).toBe(1);
+    await run(JSON.stringify({ transcript: 'x'.repeat(1 << 20) }));
+    await expectCalls(1);
   });
 
   it('checks on every session, even when the daily update stamp is recent', async () => {
-    const { ctx, run, callCount } = await setup();
-    run();
-    await callCount();
-    run();
-    expect(await callCount()).toBe(2);
-    run();
-    expect(await callCount()).toBe(3);
+    const { ctx, run, expectCalls } = await setup();
+    await run();
+    await expectCalls(1);
+    await run();
+    await expectCalls(2);
+    await run();
+    await expectCalls(3);
   });
 });
