@@ -122,6 +122,44 @@ def _marked(body: list[ast.stmt], scope: tuple[str, ...], floor: int, targets: s
             yield from _marked(node.body, scope + (node.name,), node.body[0].lineno - 1, targets)
 
 
+def _removed_classes(body: list[ast.stmt], scope: tuple[str, ...], parent, targets: set):
+    """(class, its scope, enclosing class or None) for every class the deletion removes whole."""
+    for node in body:
+        if isinstance(node, ast.ClassDef) and _whole_class(node, scope + (node.name,), targets):
+            yield node, scope, parent
+        elif isinstance(node, ast.ClassDef):
+            yield from _removed_classes(node.body, scope + (node.name,), node, targets)
+
+
+def _leaves_empty(parent: ast.ClassDef, scope: tuple[str, ...], targets: set) -> bool:
+    """Whether deleting targets leaves the class with no statement at all."""
+    def removed(m: ast.stmt) -> bool:
+        if isinstance(m, FUNCS):
+            return (scope, m.name) in targets
+        return isinstance(m, ast.ClassDef) and _whole_class(m, scope + (m.name,), targets)
+    return all(removed(m) for m in parent.body)
+
+
+def class_refusals(source: str, test_ids: list) -> dict:
+    """{test id: reason} for tests whose deletion together removes a class the prune gate keeps (its name
+    is read or spelled outside it, e.g. a subclass) or that would leave its enclosing class empty."""
+    tree = ast.parse(source)
+    targets = {split_id(t)[1:] for t in test_ids}
+    uses = _uses(tree)[0]
+    out: dict = {}
+    for node, scope, parent in _removed_classes(tree.body, (), None, targets):
+        start, end = _span(node)
+        path = scope + (node.name,)
+        reason = None
+        if uses.get(node.name, set()) - set(range(start, end + 1)):
+            reason = f"deleting it removes class {node.name}, whose name the file reads or spells elsewhere"
+        elif parent is not None and _leaves_empty(parent, scope, targets):
+            reason = f"deleting it removes class {node.name} and leaves class {parent.name} empty"
+        if reason:
+            out.update({t: reason for t in test_ids if split_id(t)[1][:len(path)] == path})
+    return out
+
+
 def _with_surroundings(lines: list[str], start: int, end: int, floor: int) -> set[int]:
     """The statement's lines, the comment lines directly above, the blank lines before those; when
     that reaches the class header or the file start, the blank lines after instead."""
