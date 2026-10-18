@@ -43,6 +43,10 @@ End a headless session by reporting that `reason` as the final line. The session
 job's exit code: ticket 24's CI job reads `<state>/status.json` after the session and fails the
 job when `exit` is not 0. Nothing to do is exit 0.
 
+PR bodies and summary blocks stay under 60,000 characters (GitHub refuses a PR body over 65,536):
+a longer one is cut with a line `… truncated, full text in <state>/<file>`. The prune PR carries
+the gate's report (its ratchet block and verdict); the gate's full log is `<state>/prune-gate.log`.
+
 When a push succeeded but `gh pr create` failed (exit 1, the branch is on origin with no PR),
 open the PR by hand from `<state>/prune-pr.md` or `<state>/strengthen-pr.md` after fixing `gh`;
 rerunning the command refuses because the branch exists.
