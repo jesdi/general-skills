@@ -8,6 +8,7 @@ The script owns every git, make and file operation; the agents only write JSON o
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from datetime import datetime, timezone
@@ -55,6 +56,8 @@ class Context:
         self.repo = Repo(Path.cwd())
         self.state = State(Path(args.state).resolve() if args.state else self.repo.git_dir() / "test-prune")
         self.date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def validate(self) -> None:
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date):
             raise BadInput(f"--date must be YYYY-MM-DD, got {self.date!r}")
 
@@ -72,12 +75,10 @@ class Context:
                 "weak_spots": read_agent_json(self.args.proposals, "weak_spots")}
 
 
-def _run(ctx: Context | None, args) -> tuple[int, str]:
+def _run(ctx: Context) -> tuple[int, str]:
     try:
-        if ctx is None:
-            ctx = Context(args)
-        code = COMMANDS[args.command](ctx)
-        return code, LAST_SUMMARY[0]
+        ctx.validate()
+        return COMMANDS[ctx.args.command](ctx), LAST_SUMMARY[0]
     except BadInput as exc:
         print(f"test-prune: {exc}", file=sys.stderr)
         return 2, f"test-prune: {exc}"
@@ -86,16 +87,33 @@ def _run(ctx: Context | None, args) -> tuple[int, str]:
         return 1, f"test-prune: {exc}"
 
 
+def run_status(previous: dict | None, command: str, code: int, summary: str) -> dict:
+    """The run's status, sticky across commands: the highest exit code seen and its reason, plus every
+    command in order. `collect` starts a new run."""
+    reason = next((line for line in summary.splitlines() if line.strip()), "")
+    entry = {"command": command, "exit": code, "reason": reason}
+    previous = previous if previous and command != "collect" else {"exit": 0, "commands": []}
+    worst = entry if code >= previous["exit"] else {"exit": previous["exit"], "reason": previous["reason"]}
+    return {"exit": worst["exit"], "reason": worst["reason"], "commands": previous["commands"] + [entry]}
+
+
+def _record(ctx: Context, code: int, summary: str) -> None:
+    if not ctx.state.path.is_dir():
+        return
+    path = ctx.state.path / "status.json"
+    previous = json.loads(path.read_text()) if path.exists() else None
+    ctx.state.save("status.json", run_status(previous, ctx.args.command, code, summary))
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         ctx = Context(args)
-    except BadInput:
-        ctx = None
-    code, summary = _run(ctx, args)
-    if ctx is not None and ctx.state.path.is_dir():
-        reason = next((line for line in summary.splitlines() if line.strip()), "")
-        ctx.state.save("status.json", {"command": args.command, "exit": code, "reason": reason})
+    except BadInput as exc:
+        print(f"test-prune: {exc}", file=sys.stderr)
+        return 2
+    code, summary = _run(ctx)
+    _record(ctx, code, summary)
     return code
 
 
