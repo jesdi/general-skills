@@ -15,6 +15,9 @@ command = (payload.get("tool_input") or {}).get("command") or ""
 start_cwd = payload.get("cwd") or "."
 
 
+LITERAL = "\0"  # stands for a `$` the shell passes through unexpanded
+
+
 def skip_quoted(s, i):
     """i is just past an opening quote; return the index past the closing one."""
     q = s[i - 1]
@@ -44,10 +47,40 @@ def skip_subst(s, i):
     return i
 
 
-def parse(s):
+def skip_tick(s, i):
+    """i is just past an opening backtick; return the index past the closing one."""
+    while i < len(s) and s[i] != "`":
+        i += 2 if s[i] == "\\" else 1
+    return i + 1
+
+
+def substitution(s, i, j):
+    """The command inside the substitution s[i:j]; a backtick body has its `\\$`, `\\`` and `\\\\` escapes removed."""
+    if s[i] == "$":
+        return s[i + 2:j - 1]
+    return re.sub(r"\\([$`\\])", r"\1", s[i + 1:j - 1])
+
+
+def expansions(s, where):
+    """Commands run by the substitutions in unquoted heredoc text s."""
+    out, k = [], 0
+    s = re.sub(r"\\\n|(\\.)", lambda m: m.group(1) or "", s, flags=re.S)  # line continuations vanish first
+    while k < len(s):
+        if s[k] == "\\":
+            k += 2
+        elif s.startswith("$(", k) or s[k] == "`":
+            e = skip_subst(s, k) if s[k] == "$" else skip_tick(s, k + 1)
+            out += parse(substitution(s, k, e), where)
+            k = e
+        else:
+            k += 1
+    return out
+
+
+def parse(s, where):
     """Split into (words, dir) commands: POSIX-ish words with `$(...)` kept raw inside its word, and
     dir the directory left by `cd`s in the command's subshell scope."""
-    out, words, cur, i, where = [], [], None, 0, start_cwd
+    out, words, cur, i = [], [], None, 0
     directories, heredocs = [], []
 
     def end_word():
@@ -71,7 +104,7 @@ def parse(s):
             if args[:1] == ["--"]:
                 args = args[1:]
             if args:
-                where = os.path.join(where, os.path.expanduser(args[0]))
+                where = os.path.join(where, os.path.expanduser(args[0].replace(LITERAL, "$")))
         elif words:
             out.append((words, where))
         words = []
@@ -80,27 +113,29 @@ def parse(s):
         c, base = s[i], cur or ""
         if s.startswith("\\\n", i):
             i += 2
-        elif s.startswith("$(", i):
-            j = skip_subst(s, i)
+        elif s.startswith("$(", i) or c == "`":
+            j = skip_subst(s, i) if c == "$" else skip_tick(s, i + 1)
+            out += parse(substitution(s, i, j), where)
             cur, i = base + s[i:j], j
-        elif c == "'":
+        elif c == "'":  # literal: mask `$` so a body of `$(cat f)` is not mistaken for a substitution
             j = skip_quoted(s, i + 1)
-            cur, i = base + s[i + 1:j - 1], j
+            cur, i = base + s[i + 1:j - 1].replace("$", LITERAL), j
         elif c == '"':  # a `$(...)` inside stays raw: its quotes must not end this string
             k, inner = i + 1, ""
             while k < len(s) and s[k] != '"':
-                if s.startswith("$(", k):
-                    e = skip_subst(s, k)
+                if s.startswith("$(", k) or s[k] == "`":
+                    e = skip_subst(s, k) if s[k] == "$" else skip_tick(s, k + 1)
+                    out += parse(substitution(s, k, e), where)
                     inner, k = inner + s[k:e], e
                 elif s.startswith("\\\n", k):
                     k += 2
                 elif s[k] == "\\" and s[k + 1:k + 2] in ('"', "\\", "$", "`"):
-                    inner, k = inner + s[k + 1], k + 2
+                    inner, k = inner + (LITERAL if s[k + 1] == "$" else s[k + 1]), k + 2
                 else:
                     inner, k = inner + s[k], k + 1
             cur, i = base + inner, k + 1
         elif c == "\\":
-            cur, i = base + s[i + 1:i + 2], i + 2
+            cur, i = base + s[i + 1:i + 2].replace("$", LITERAL), i + 2
         elif c in " \t":
             end_word()
             i += 1
@@ -110,7 +145,7 @@ def parse(s):
             h = re.match(r'''<<(-?)[ \t]*((?:[^\s;|&()<>"'\\]|'[^']*'|"(?:\\.|[^"\\])*"|\\.)+)''', s[i:])
             if h:
                 end_word()
-                heredocs.append((shlex.split(h.group(2))[0], bool(h.group(1))))
+                heredocs.append((shlex.split(h.group(2))[0], bool(h.group(1)), h.group(2) == shlex.split(h.group(2))[0], where))
                 i += h.end()
             else:
                 cur, i = base + c, i + 1
@@ -122,13 +157,16 @@ def parse(s):
             elif c == ")" and directories:
                 where = directories.pop()
             elif c == "\n":
-                for delimiter, strip_tabs in heredocs:
+                for delimiter, strip_tabs, expands, started in heredocs:
+                    body = i
                     while i < len(s):
                         j = s.find("\n", i)
                         j = len(s) if j < 0 else j
                         line, i = s[i:j], min(j + 1, len(s))
                         if (line.lstrip("\t") if strip_tabs else line) == delimiter:
                             break
+                    if expands:  # an unquoted delimiter leaves the body's substitutions live
+                        out += expansions(s[body:i], started)  # runs before the line's cd
                 heredocs.clear()
         else:
             cur, i = base + c, i + 1
@@ -157,7 +195,7 @@ def creation_args(words):
 
 
 creations = []
-for words, cwd in parse(command):
+for words, cwd in parse(command, start_cwd):
     args = creation_args(words)
     if args is not None:
         creations.append((args, cwd))
@@ -203,6 +241,8 @@ def check(args, cwd):
     if body is None and body_file is None:
         deny(BODY_SOURCE_REQUIRED)
 
+    body_file = body_file and body_file.replace(LITERAL, "$")
+
     def read(path):
         with open(os.path.join(cwd, os.path.expanduser(path))) as f:
             return f.read()
@@ -218,7 +258,7 @@ def check(args, cwd):
             elif m:
                 text = read(m.group(3).strip("'\""))
             else:
-                text = body
+                text = body.replace(LITERAL, "$")
     except OSError as e:
         deny(f"cannot read the PR body ({e.strerror}: {e.filename}); pass --body-file with a file that exists. "
              "Write the body with /pr, then /pr-risk.")
