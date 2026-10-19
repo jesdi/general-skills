@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 
-from prune_repo import Fail, fenced, ratchet_lines
+from prune_repo import Fail, capped, fenced, ratchet_lines
 from prune_review import CAP, equivalents_section, suggestions_section
 from prune_source import delete_tests, families, targets
 
 _CHECK_LINE = re.compile(r"^(  [✓✗•!] |      \S|    ↑)")
 _VERDICT = re.compile(r"^Prune gate (PASSED|FAILED|ERROR)")
+_VERDICT_LINE = re.compile(r"^  [✓✗] ")
+GATE_LIMIT = 20_000  # the gate section's share of a PR body: a cut stays inside it
 
 
 def _check_block(lines: list) -> list:
@@ -26,15 +28,19 @@ def _check_block(lines: list) -> list:
     return lines[start:ends[-1] + 1]
 
 
-def gate_report(output: str) -> str:
-    """The prune gate's own report out of its whole log (the real gate prints its cold mutmut run): the
-    `make mutation-check` block it printed and everything from its verdict on. No verdict found: the
-    log's last 30 lines."""
-    lines = output.splitlines()
+def gate_report(stdout: str, stderr: str = "") -> str:
+    """The prune gate's own report out of its stdout (the real gate also prints its cold mutmut run, and
+    mutmut's children warn on stderr): its verdict line with the indented ✓/✗ lines right after it, then
+    the `make mutation-check` block it printed (verdict first: a cut for size keeps it). No verdict on
+    stdout: the last 30 lines of both streams."""
+    lines = stdout.splitlines()
     verdicts = [i for i, line in enumerate(lines) if _VERDICT.match(line)]
     if not verdicts:
-        return "\n".join(lines[-30:])
-    return "\n".join(_check_block(lines[:verdicts[-1]]) + lines[verdicts[-1]:])
+        return "\n".join((stdout + stderr).splitlines()[-30:])
+    end = verdicts[-1] + 1
+    while end < len(lines) and _VERDICT_LINE.match(lines[end]):
+        end += 1
+    return "\n".join(lines[verdicts[-1]:end] + _check_block(lines[:verdicts[-1]]))
 
 
 class DeletionSet:
@@ -217,7 +223,8 @@ def _publish(ctx, base: dict, out: dict, branch: str, kept: list, report) -> int
     repo.git("branch", branch)
     gate = repo.make("prune-gate", f"BASE={base['commit']}", f"HEAD={branch}")
     log = ctx.state.save_text("prune-gate.log", gate.stdout + gate.stderr)
-    gate_output = f"{fenced(gate_report(gate.stdout + gate.stderr))}\n\nThe gate's report; its full log is in `{log}`."
+    report_text = capped(gate_report(gate.stdout, gate.stderr), ctx.state.path / "prune-gate-report.md", GATE_LIMIT)
+    gate_output = f"{fenced(report_text)}\n\nThe gate's report; its full log is in `{log}`."
     if gate.returncode:
         ctx.state.emit("\n".join([f"test-prune: make prune-gate failed on {branch}; nothing pushed, no PR", "", gate_output, ""]
                        + report(f"Deletions on the unpushed branch `{branch}`")))

@@ -249,7 +249,7 @@ class State:
 
     FILES = ("base.json", "status.json", "fixer-input.json", "review-input.json", "batch.json", "strengthen.json",
              "strengthen-input.json", "strengthen-proof.json", "prune-pr.md", "prune-pr-full.md", "strengthen-pr.md",
-             "strengthen-pr-full.md", "prune-gate.log")
+             "strengthen-pr-full.md", "prune-gate.log", "prune-gate-report.md")
     MARKER = ".test-prune-state"  # written by reset: the only proof a directory is a run's
 
     def __init__(self, path: Path):

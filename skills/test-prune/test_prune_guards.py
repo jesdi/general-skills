@@ -702,7 +702,7 @@ def test_the_gate_report_keeps_the_ratchet_block_and_the_verdict():
              "Mutation ratchet FAILED."]
     verdict = ["Prune gate FAILED at point 4:", "  ✗ the mutation ratchet check failed (output above)"]
 
-    assert gate_report("\n".join(noise + check + noise[:3] + verdict)) == "\n".join(check + verdict)
+    assert gate_report("\n".join(noise + check + noise[:3] + verdict)) == "\n".join(verdict + check)
     assert gate_report("\n".join(noise + verdict)) == "\n".join(verdict)
     assert gate_report("\n".join(noise)) == "\n".join(noise[-30:])
 
@@ -838,3 +838,34 @@ def test_a_status_json_alone_does_not_make_a_dir_a_run_s(target):
 
     assert proc.returncode == 2 and "refusing to use" in proc.stderr
     assert (notes / "status.json").read_text() == '{"mine": true}\n' and sorted(notes.iterdir()) == [notes / "status.json"]
+
+
+def test_gate_warnings_on_stderr_never_crowd_out_the_later_sections(target):
+    target.prepare([cand(case(1))], accept=[case(1), HERFINDAHL], deletions={case(1): REFERENCE},
+                   groups={HERFINDAHL: {"verdict": "equivalent", "mutant_ids": [EQUIVALENT_ID],
+                                        "test": "tests/test_concentration.py", "reason": "never empty"}})
+    fake_make(target, "echo 'Mutation results from commit abc123'\n"
+                      "echo '  ✗ services/concentration.py: 9 survivors > baseline 2 (score 10.00)'\n"
+                      "for i in $(seq 1 3000); do echo \"      x_herfindahl__mutmut_$i\"; done\n"
+                      "echo 'Mutation ratchet FAILED.'\n"
+                      '$MAKE "$@"; rc=$?\n'
+                      "for i in $(seq 1 3000); do echo \"db.py:93: DeprecationWarning: utcnow $i\" >&2; done\n"
+                      "exit $rc", goal="prune-gate")
+
+    proc = target.run("prune")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    body = prune_pr(target)
+    gate, after = body.split("## Prune gate", 1)[1].split("## Equivalent proposals", 1)
+    assert "Prune gate PASSED: 1 deleted tests" in gate
+    assert "DeprecationWarning" not in body and f"… truncated, full text in {target.state / 'prune-gate-report.md'}" in gate
+    assert EQUIVALENT_ID in after and "truncated" not in after and len(body) < 60_000
+    assert "DeprecationWarning: utcnow 3000" in (target.state / "prune-gate.log").read_text()
+
+
+def test_the_gate_verdict_block_ends_at_its_last_indented_line():
+    from prune_runs import gate_report
+    stdout = "noise\nPrune gate PASSED: 1 deleted tests, all protected by the ratchet\n  ✓ tests/t.py::test_a\nlate noise\n"
+
+    assert gate_report(stdout, "warning\n") == "Prune gate PASSED: 1 deleted tests, all protected by the ratchet\n  ✓ tests/t.py::test_a"
+    assert gate_report("no verdict\n", "Prune gate ERROR: collection failed\n").endswith("Prune gate ERROR: collection failed")
