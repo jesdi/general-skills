@@ -562,6 +562,7 @@ def test_leaving_restores_a_file_whose_name_git_quotes(target):
 
 def proven_strengthen(target):
     target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+    target.ok("prune")  # nothing to prune: the strengthen loop follows, as in a real run
     target.ok("strengthen-start")
     target.commit_test(COMPUTE, COMPUTE_TEST)
     target.ok("strengthen-verify")
@@ -801,3 +802,39 @@ def test_a_failed_gate_lands_in_the_job_summary(target, tmp_path):
     assert target.run("prune", env={"FAKE_GATE_FAIL": "1", "GITHUB_STEP_SUMMARY": str(summary)}).returncode == 1
 
     assert "Prune gate FAILED at point 1" in summary.read_text()
+
+
+
+def test_a_bare_date_is_recorded_as_exit_2(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+
+    proc = subprocess.run([sys.executable, str(PRUNE), "batch", "--state", str(target.state), "--date"],
+                          cwd=target.root, env=target.env(), capture_output=True, text=True)
+
+    status = target.read_state("status.json")
+    assert proc.returncode == 2 and proc.stderr.count("--date") == 1 and "Traceback" not in proc.stderr
+    assert status["exit"] == 2 and status["commands"][-1]["command"] == "batch"
+
+
+def test_the_run_finishes_only_after_prune_ran(target):
+    target.prepare([cand(case(1))], accept=[case(1)], deletions={case(1): REFERENCE})
+
+    assert "nothing to strengthen" in target.ok("strengthen-start").stdout
+    assert target.read_state("status.json")["exit"] == 1
+
+    target.ok("prune")
+    target.ok("strengthen-start")
+    assert target.read_state("status.json")["exit"] == 0
+
+
+def test_a_status_json_alone_does_not_make_a_dir_a_run_s(target):
+    notes = target.tmp / "notes"
+    notes.mkdir()
+    (notes / "status.json").write_text('{"mine": true}\n')
+    target.set_candidates([cand(case(1))])
+
+    proc = subprocess.run([sys.executable, str(PRUNE), "collect", "--state", str(notes), "--date", "2026-10-17"],
+                          cwd=target.root, env=target.env(), capture_output=True, text=True)
+
+    assert proc.returncode == 2 and "refusing to use" in proc.stderr
+    assert (notes / "status.json").read_text() == '{"mine": true}\n' and sorted(notes.iterdir()) == [notes / "status.json"]
