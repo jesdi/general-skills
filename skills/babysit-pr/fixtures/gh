@@ -11,10 +11,17 @@ State is the JSON file $GH_FAKE_STATE:
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
   statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
   required_checks  [name] returned as branch protection contexts of any branch
+  reviews    [{id, user: {login}, state, body, submitted_at}]  (optional)
+  commits    [{sha, date}] oldest first, date = commit time (optional)
+  threads    [{user: {login}, resolved}] review threads (optional)
+  Comments may carry `editor` ({login}) and `last_edited_at` (GraphQL `editor` / `lastEditedAt`).
+  page_size  GraphQL connections return this many nodes per page (cursor = offset); default all
+  threads may carry `more_comments` (true: the thread has comments beyond the page read)
   hidden_until_post  comment ids missing from comment lists until the first comment is posted
              (a race: the other session posts after our first read)
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
-Supported: `gh api` (user, issues/N, pulls/N, issues/N/comments, issues/comments/ID,
+Supported: `gh api` (user, pulls/N/reviews, pulls/N/comments (review comments, always empty),
+pulls/N/commits, `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
 issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
 """
 import json
@@ -132,6 +139,47 @@ def api(args):
         return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
                      "user": {"login": st["user"]},
                      "head": {"sha": st.get("head_sha", "head1")}}, jq, include)
+    if re.fullmatch(rf"pulls/{n}/reviews", path) and method == "GET":
+        log(False)
+        return emit([{"id": r["id"], "user": r["user"], "state": r["state"], "body": r.get("body", ""),
+                      "submitted_at": r["submitted_at"]} for r in st.get("reviews", [])], jq, include)
+    if re.fullmatch(rf"pulls/{n}/comments", path) and method == "GET":
+        log(False); return emit([], jq, include)
+    if re.fullmatch(rf"pulls/{n}/commits", path) and method == "GET":
+        log(False)
+        return emit([{"sha": c["sha"], "commit": {"committer": {"date": c["date"]}}}
+                     for c in st.get("commits", [])], jq, include)
+    if path == "graphql":
+        log(False)
+        q = fields.get("query", "")
+        def pick(node, sel):  # only the fields the query selects, as the real API does
+            if isinstance(node, dict):
+                return {k: pick(v, sel) for k, v in node.items() if re.search(rf"\b{k}\b", sel)}
+            if isinstance(node, list):
+                return [pick(v, sel) for v in node]
+            return node
+        every = {
+            "comments": [{"databaseId": c["id"], "author": c["user"], "editor": c.get("editor"),
+                          "lastEditedAt": c.get("last_edited_at"), "createdAt": c["created_at"],
+                          "body": c["body"]} for c in visible()],
+            "reviews": [{"databaseId": r["id"], "author": r["user"], "state": r["state"],
+                         "body": r.get("body", ""), "submittedAt": r["submitted_at"],
+                         "editor": r.get("editor"), "lastEditedAt": r.get("last_edited_at")}
+                        for r in st.get("reviews", [])],
+            "reviewThreads": [{"isResolved": t["resolved"], "comments": {"nodes": [{"author": t["user"], "createdAt": t.get("created_at")}],
+                                                                         "pageInfo": {"hasNextPage": t.get("more_comments", False), "endCursor": None}}}
+                              for t in st.get("threads", [])],
+            "commits": [{"commit": {"oid": c["sha"], "committedDate": c["date"]}}
+                        for c in st.get("commits", [])]}
+        m = re.search(r"pullRequest\([^)]*\)\s*\{\s*(\w+)", q)
+        name = m.group(1) if m else None
+        if name not in every:
+            die("graphql query selects no known connection", False)
+        size, start = st.get("page_size") or len(every[name]) or 1, int(fields.get("after") or 0)
+        end = start + size
+        page = {"nodes": pick(every[name][start:end], q),
+                "pageInfo": {"hasNextPage": end < len(every[name]), "endCursor": str(end)}}
+        return emit({"data": {"repository": {"pullRequest": {name: page}}}}, jq, include)
     if m := re.fullmatch(r"commits/([^/]+)/check-runs", path):
         log(False)
         runs = st.get("check_runs", {}).get(m.group(1), [])
