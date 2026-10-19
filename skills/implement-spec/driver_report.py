@@ -2,7 +2,7 @@
 
 context: repo (slot path), branch, start (HEAD when the role started), log, full (a full review: no fix range), locked,
   correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
-  restore_red (the gate is red on the commit of that restore),
+  restore_red (the gate is red on the commit of that restore), findings (the titles a correction gets),
   owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip)."""
 from __future__ import annotations
 
@@ -81,7 +81,8 @@ def _correction_errors(report: dict, context: dict) -> list[str]:
         errors.append("the gate is red on the restore commit, so a restored file fails with the code of this ticket: "
                       "update that file and list it in `locked`, or report BLOCKED with a concern that starts with "
                       "`locked test contradicts spec:`")
-    return errors
+    return errors + [f"not_addressed: {item['finding']} is not the title of a finding of this correction"
+                     for item in report.get("not_addressed", []) if item["finding"] not in context.get("findings", [])]
 
 
 def _merged_errors(report: dict, context: dict) -> list[str]:
