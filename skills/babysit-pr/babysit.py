@@ -187,8 +187,8 @@ def round_cmd(*args, **kw):
 
 
 def round_locked(verb, repo, number, session, check, error, op=None):
-    if verb == "start" and not op:
-        fail("round start needs --op (reuse the same ID on retries)")
+    if not op:
+        fail(f"round {verb} needs --op (reuse the same ID on retries)")
     pr, c = own_lease(repo, number, session)
     user = pr.user()
     rounds, sigs, halt = round_state(c)
@@ -208,11 +208,9 @@ def round_locked(verb, repo, number, session, check, error, op=None):
         print(f"round {rounds + 1}")
         return
     sig = signature(check, error)
-    failure_round = rounds
-    if op:
-        failure_round = dict((o, n) for n, o in round_ops(c)).get(f"{session} {op}")
-        if failure_round is None:
-            fail("record-failure --op must name its originating round start")
+    failure_round = dict((o, n) for n, o in round_ops(c)).get(f"{session} {op}")
+    if failure_round is None:
+        fail("record-failure --op must name its originating round start")
     if (failure_round, sig) in sigs:
         return  # response lost, including a retry after a later round started
     if any(s == sig and n != failure_round for n, s in sigs):
@@ -240,14 +238,15 @@ def load_seen(pr):
         return {}
 
 
-def first_seen(pr, key, now):
-    """GitHub gives a queued check no timestamp: remember when we first saw it (GitHub time)."""
+def first_seen(pr, key, now, since=None):
+    """Earliest pending time of a check: when we first saw it (GitHub time), or its created_at if earlier."""
     with locked():
         seen = load_seen(pr)
-        if key not in seen:
+        earliest = iso(min(now, since) if since else now)
+        if key not in seen or earliest < seen[key]:  # an earlier created_at learned later still counts
             prefix = key.rsplit("#", 1)[0] + "#"  # only the current head commit's entries matter
             seen = {k: v for k, v in seen.items() if k.startswith(prefix)}
-            seen[key] = iso(now)
+            seen[key] = earliest if key not in seen else min(earliest, seen[key])
             body = SEEN + json.dumps(seen)
             c = seen_comment(pr)
             pr.write_comment(c["id"], body) if c else pr.post(body)
@@ -279,7 +278,7 @@ def checks_cmd(repo, number, wait):
     elif pending_runs or pending_statuses:
         # Observe every pending item, even when an earlier one is already stalled.
         times = [pending_since(pr, f"{repo}#{sha}#run:{r.get('id', r['name'])}",
-                               r.get("started_at"), now) for r in pending_runs]
+                               min(filter(None, (r.get("started_at"), r.get("created_at"))), default=None), now) for r in pending_runs]
         times += [pending_since(pr, f"{repo}#{sha}#status:{s['context']}",
                                 s.get("created_at"), now) for s in pending_statuses]
         print("CI stalled" if now - min(times) >= timedelta(minutes=wait) else "pending")
@@ -299,8 +298,7 @@ def reset_terminal_statuses(pr, prefix, statuses):
 
 def pending_since(pr, key, timestamp, now):
     """Keep queued time through a running transition, without sharing it across runs."""
-    first = first_seen(pr, key, now)
-    return min(first, parse(timestamp)) if timestamp else first
+    return first_seen(pr, key, now, parse(timestamp) if timestamp else None)
 
 
 def confirm(pr, comment):
