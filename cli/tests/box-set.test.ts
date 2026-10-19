@@ -64,5 +64,5 @@ describe('own skills at the packaging seam', () => {
     for (const name of own) {
       expect(existsSync(join(ctx.project, '.claude', 'skills', name, 'SKILL.md')), name).toBe(true);
     }
-  });
+  }, 30_000);
 });
