@@ -124,13 +124,18 @@ def _open(commands: list) -> list:
         later["command"] == c["command"] and later["exit"] == 0 for later in commands[i + 1:]))]
 
 
+def _earlier(previous, command: str) -> list:
+    """The run's commands so far: none for `collect` (a new run) or a missing or unreadable status."""
+    commands = previous.get("commands") if isinstance(previous, dict) and command != "collect" else None
+    return commands if isinstance(commands, list) else []
+
+
 def run_status(previous, command: str, code: int, summary: str, extra=()) -> dict:
     """The run's status, sticky across commands: the highest exit code still open and its reason (the
     latest on a tie), plus every command in order, then the extra entries. `collect` starts a new run; a
     missing or unreadable status starts fresh rather than failing the command."""
     reason = next((line for line in summary.splitlines() if line.strip()), "")
-    commands = previous.get("commands") if isinstance(previous, dict) and command != "collect" else None
-    commands = (commands if isinstance(commands, list) else []) + [{"command": command, "exit": code, "reason": reason}]
+    commands = _earlier(previous, command) + [{"command": command, "exit": code, "reason": reason}]
     ran_prune = any(c["command"] == "prune" for c in commands)
     commands += [e for e in extra if e["exit"] or ran_prune]  # the run finishes only after prune ran
     worst = max(reversed(_open(commands)), key=lambda c: c["exit"], default={"exit": 0, "reason": reason})
