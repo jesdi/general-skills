@@ -8,6 +8,7 @@ clock. Among valid lease comments the lowest comment id holds the lease; the lab
 import argparse
 import json
 import re
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -201,6 +202,34 @@ def lease(verb, repo, number, session, host):
         pr.label(add=["babysitting"], remove=["needs-human"])
 
 
+def git(*args, ok=(0,)):
+    p = subprocess.run(["git", *args], text=True, capture_output=True)
+    if p.returncode not in ok:
+        fail(f"git {' '.join(args)} failed: {p.stderr.strip()}")
+    return p
+
+
+def update_plan(base):
+    """Dry-run a base update with merge-tree: no worktree, index, HEAD or ref change."""
+    compare = f"origin/{base}"
+    branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    head = git("rev-parse", "HEAD").stdout.strip()
+    out = {"compare": compare, "branch": branch}
+    if git("merge-base", "--is-ancestor", compare, "HEAD", ok=(0, 1)).returncode == 0:
+        return {**out, "plan": "none"}
+    force = shlex.join(["git", "push", f"--force-with-lease={branch}:{head}", "origin", branch])
+    mt = git("merge-tree", "--write-tree", "--name-only", "-z", "--no-messages", "HEAD", compare, ok=(0, 1))
+    files = [f for f in mt.stdout.split("\0")[1:] if f] if mt.returncode else []
+    if not files:
+        return {**out, "plan": "rebase", "push": force}
+    mb = git("merge-base", "HEAD", compare).stdout.strip()
+    # Rebase replays each branch commit that touches a conflicting file: one conflict stop per commit.
+    touching = git("--literal-pathspecs", "rev-list", f"{mb}..HEAD", "--", *files).stdout.split()
+    if len(touching) >= 3:
+        return {**out, "plan": "merge", "push": shlex.join(["git", "push", "origin", branch])}
+    return {**out, "plan": "rebase-with-conflict", "files": files, "push": force}
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -208,7 +237,12 @@ def main():
     lp.add_argument("verb", choices=["acquire", "renew", "check", "release"])
     for a in ("repo", "pr", "session", "host"):
         lp.add_argument(f"--{a}", required=True)
+    up = sub.add_parser("update-plan")
+    up.add_argument("--base", required=True)
     a = ap.parse_args()
+    if a.cmd == "update-plan":
+        print(json.dumps(update_plan(a.base)))
+        return
     lease(a.verb, a.repo, a.pr, a.session, a.host)
 
 
