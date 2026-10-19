@@ -59,10 +59,14 @@ os.execv(str(Path(__file__).with_name("gh-real")), sys.argv)
 
 
 def start(w, verb, session, prefix, match):
+    # These election races model separate hosts. Same-host writers serialize on
+    # the home-directory lock, so each simulated host needs its own home.
+    home = w.home.parent / f"home-{session}"
+    home.mkdir(exist_ok=True)
     return subprocess.Popen(
         [sys.executable, str(SCRIPT), "lease", verb, "--repo", "jesdi/demo",
          "--pr", "58", "--session", session, "--host", "mac2"],
-        cwd=w.project, env={**w.env, "GH_PAUSE_PREFIX": str(prefix),
+        cwd=w.project, env={**w.env, "HOME": str(home), "GH_PAUSE_PREFIX": str(prefix),
                             "GH_PAUSE_MATCH": json.dumps(match)},
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 

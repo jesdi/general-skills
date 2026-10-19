@@ -6,6 +6,7 @@ gh user. Expiry is judged against GitHub's clock (the `Date` header of `gh api -
 clock. Among valid lease comments the lowest comment id holds the lease; the label is not the lock.
 """
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import subprocess
 import tempfile
 import time
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -25,6 +27,11 @@ INSTALL = "npx @jesdi/skills-cli install pr-risk"
 PR_RISK_DIRS = (".my-skills/pr-risk", ".agents/skills/pr-risk", ".claude/skills/pr-risk")
 CLAIM_PENDING = "<!-- babysit-pr claim: pending -->\n"
 CLAIM_HELD = "<!-- babysit-pr claim: held -->\n"
+MAX_ROUNDS = 5
+HANDOFF = re.compile(r"\A## 🧑 Needs human: (.*)")
+NEW_BUDGET = ("5 fix rounds", "same failure twice")
+SEEN = "<!-- babysit-pr seen -->\n"
+PASS = {"success", "neutral", "skipped"}
 
 
 def fail(msg):
@@ -118,9 +125,182 @@ def inherited_state(comments, user):
     # Pending claims (including ended losers and crashed attempts) never own history.
     history = [l for l in leases(comments, user, include_ended=True)
                if CLAIM_PENDING not in l[4]["body"]]
-    if not history:
+    if not history or budget_spent(comments, user, history[-1][0]):
         return "rounds: 0\n"
     return rest_of(history[-1][4]).replace(CLAIM_HELD, "")
+
+
+def budget_spent(comments, user, after_id):
+    """The owner's latest handoff newer than the last lease ended the budget (rounds or repeat)."""
+    handoffs = [(c["id"], m[1].strip()) for c in comments if c["user"]["login"] == user
+                and (m := HANDOFF.match(c["body"]))]
+    return bool(handoffs) and max(handoffs)[0] > after_id and max(handoffs)[1] in NEW_BUDGET
+
+
+def signature(check, error):
+    error = re.sub(r"/tmp/\S+", "<tmp>", error)
+    error = re.sub(r"\b0x[0-9a-f]+\b|\b[0-9a-f]{7,}\b|\d+", "<n>", error, flags=re.I)
+    return f"{check}: {' '.join(error.split())}"
+
+
+def round_state(comment):
+    """(rounds, [(round, signature)], halt reason) kept after the marker line of a lease comment."""
+    rest = rest_of(comment)
+    rounds = int(re.search(r"^rounds: (\d+)", rest, re.M)[1])
+    sigs = [(int(m[1] or 0), m[2]) for m in re.finditer(r"^signature: (?:r(\d+) )?(.*)$", rest, re.M)]
+    halt = re.search(r"^halt: (.*)$", rest, re.M)
+    return rounds, sigs, halt[1] if halt else None
+
+
+def save_round_state(pr, comment, rounds, sigs, halt, ops=()):
+    body = comment["body"].split("\n", 1)[0] + "\n" + ("ended\n" if is_ended(comment) else "")
+    held = CLAIM_HELD if CLAIM_HELD in comment["body"] else ""
+    lines = [f"rounds: {rounds}"] + [f"op: {n} {o}" for n, o in ops] + [f"signature: r{n} {s}" for n, s in sigs]
+    return pr.write_comment(comment["id"], body + held + "\n".join(lines + ([f"halt: {halt}"] if halt else [])) + "\n")
+
+
+def round_ops(comment):
+    """[(round, op)]: every start operation of this budget, so a late retry of an old one is recognised."""
+    return [(int(m[1]), m[2]) for m in re.finditer(r"^op: (\d+) (.+)$", rest_of(comment), re.M)]
+
+
+def own_lease(repo, number, session):
+    require_pr_risk()
+    pr = Pr(repo, number)
+    top = holder(leases(pr.comments(), pr.user()), pr.now())
+    if top is None or top[1] != session:
+        fail(f"{session} does not hold the lease")
+    return pr, top[4]
+
+
+@contextmanager
+def locked():
+    """Serialize read-modify-write of babysit state on this host."""
+    with open(Path.home() / ".babysit-pr.lock", "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def round_cmd(*args, **kw):
+    with locked():
+        round_locked(*args, **kw)
+
+
+def round_locked(verb, repo, number, session, check, error, op=None):
+    if verb == "start" and not op:
+        fail("round start needs --op (reuse the same ID on retries)")
+    pr, c = own_lease(repo, number, session)
+    user = pr.user()
+    rounds, sigs, halt = round_state(c)
+    if verb == "start":
+        op = f"{session} {op}"  # ops are scoped to their session
+        done = dict((o, n) for n, o in round_ops(c))
+        if op in done:  # retry of a start whose answer was lost: finish its renewal, spend nothing
+            extend(pr, c, session, LEASE.match(c["body"])[2], pr.now() + TTL, user)
+            print(f"round {done[op]}")
+            return
+        if halt:
+            fail(halt)
+        if rounds >= MAX_ROUNDS:
+            fail("5 fix rounds")
+        c = save_round_state(pr, c, rounds + 1, sigs, halt, round_ops(c) + [(rounds + 1, op)])
+        extend(pr, c, session, LEASE.match(c["body"])[2], pr.now() + TTL, user)
+        print(f"round {rounds + 1}")
+        return
+    sig = signature(check, error)
+    failure_round = rounds
+    if op:
+        failure_round = dict((o, n) for n, o in round_ops(c)).get(f"{session} {op}")
+        if failure_round is None:
+            fail("record-failure --op must name its originating round start")
+    if (failure_round, sig) in sigs:
+        return  # response lost, including a retry after a later round started
+    if any(s == sig and n != failure_round for n, s in sigs):
+        save_round_state(pr, c, rounds, sigs, "same failure twice", round_ops(c))
+        own_lease(repo, number, session)
+        fail("same failure twice")
+    sigs.append((failure_round, sig))
+    save_round_state(pr, c, rounds, sigs, halt, round_ops(c))
+    # A PATCH can cross expiry on another host. Never acknowledge that write
+    # from the pre-PATCH lease snapshot: the new holder may already own history.
+    own_lease(repo, number, session)
+
+
+def seen_comment(pr):
+    """The owner's shared comment of first sightings, so the stall bound survives host changes."""
+    user = pr.user()
+    return next((c for c in pr.comments() if c["user"]["login"] == user and c["body"].startswith(SEEN)), None)
+
+
+def load_seen(pr):
+    c = seen_comment(pr)
+    try:
+        return json.loads(c["body"][len(SEEN):]) if c else {}
+    except ValueError:  # damaged: start over
+        return {}
+
+
+def first_seen(pr, key, now):
+    """GitHub gives a queued check no timestamp: remember when we first saw it (GitHub time)."""
+    with locked():
+        seen = load_seen(pr)
+        if key not in seen:
+            prefix = key.rsplit("#", 1)[0] + "#"  # only the current head commit's entries matter
+            seen = {k: v for k, v in seen.items() if k.startswith(prefix)}
+            seen[key] = iso(now)
+            body = SEEN + json.dumps(seen)
+            c = seen_comment(pr)
+            pr.write_comment(c["id"], body) if c else pr.post(body)
+    return parse(seen[key])
+
+
+def checks_cmd(repo, number, wait):
+    pr = Pr(repo, number)
+    sha = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))["head"]["sha"]
+    out = gh("api", "--paginate", f"{pr.repo}/commits/{sha}/check-runs", "--jq", ".check_runs[] | tojson")
+    runs = [json.loads(l) for l in out.splitlines() if l]
+    now = pr.now()
+    red = any(r["status"] == "completed" and r["conclusion"] not in PASS for r in runs)
+    # Commit statuses are separate from check runs. Newest first, so the first per context is current.
+    latest = {}
+    out = gh("api", "--paginate", f"{pr.repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
+    for line in out.splitlines():
+        if line:
+            status = json.loads(line)
+            latest.setdefault(status["context"], status)
+    reset_terminal_statuses(pr, f"{repo}#{sha}#status:", latest)
+    red = red or any(s["state"] in ("failure", "error") for s in latest.values())
+    pending_runs = [r for r in runs if r["status"] != "completed"]
+    pending_statuses = [s for s in latest.values() if s["state"] == "pending"]
+    if not runs and not latest:
+        print("no checks")
+    elif red:
+        print("red")
+    elif pending_runs or pending_statuses:
+        # Observe every pending item, even when an earlier one is already stalled.
+        times = [pending_since(pr, f"{repo}#{sha}#run:{r.get('id', r['name'])}",
+                               r.get("started_at"), now) for r in pending_runs]
+        times += [pending_since(pr, f"{repo}#{sha}#status:{s['context']}",
+                                s.get("created_at"), now) for s in pending_statuses]
+        print("CI stalled" if now - min(times) >= timedelta(minutes=wait) else "pending")
+    else:
+        print("green")
+
+
+def reset_terminal_statuses(pr, prefix, statuses):
+    """Only a terminal observation ends a context's continuous pending interval."""
+    terminal = {prefix + name for name, s in statuses.items() if s["state"] != "pending"}
+    with locked():
+        seen = load_seen(pr)
+        if terminal.intersection(seen):
+            c = seen_comment(pr)
+            pr.write_comment(c["id"], SEEN + json.dumps({k: v for k, v in seen.items() if k not in terminal}))
+
+
+def pending_since(pr, key, timestamp, now):
+    """Keep queued time through a running transition, without sharing it across runs."""
+    first = first_seen(pr, key, now)
+    return min(first, parse(timestamp)) if timestamp else first
 
 
 def confirm(pr, comment):
@@ -154,7 +334,18 @@ def require_pr_risk():
         fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
+def renew(repo, number, session):
+    pr, c = own_lease(repo, number, session)
+    extend(pr, c, session, LEASE.match(c["body"])[2], pr.now() + TTL, pr.user())
+
+
 def lease(verb, repo, number, session, host):
+    # Every lease-body writer reads its snapshot inside the same lock as rounds.
+    with locked():
+        return lease_locked(verb, repo, number, session, host)
+
+
+def lease_locked(verb, repo, number, session, host):
     require_pr_risk()
     pr = Pr(repo, number)
     user = pr.user()
@@ -168,10 +359,7 @@ def lease(verb, repo, number, session, host):
         if not mine:
             fail(f"{session} does not hold the lease" + (f" (babysat by {top[2]})" if top else ""))
     elif verb == "renew":
-        if not mine:
-            fail(f"{session} does not hold the lease")
-        c = top[4]
-        extend(pr, c, session, top[2], now + TTL, user)
+        return renew(repo, number, session)
     elif verb == "release":
         for l in found:
             if l[1] == session:
@@ -196,11 +384,16 @@ def lease(verb, repo, number, session, host):
             if winner is None or winner[0] != c["id"]:
                 end(pr, c)
                 fail(f"already babysat by {winner[2] if winner else 'another session'}")
+            # The initial read can predate a final write by the old holder.
+            # Inherit after publishing our claim, which fences successful old
+            # writers via their post-write lease check, before confirming ours.
+            carried = inherited_state(pr.comments(), user)
+            c = pr.write_comment(c["id"], c["body"].split("\n", 1)[0] + "\n" + CLAIM_PENDING + carried)
             confirm(pr, c)
             # Publish and elect our claim before touching expired comments. A
             # renewal that completed before our post wins the fresh election;
             # one racing this cleanup sees our claim in its own post-write check.
-            for l in found:
+            for l in leases(pr.comments(), user):
                 if l[0] != c["id"] and l[3] <= now:
                     end(pr, l[4])
         pr.label(add=["babysitting"], remove=["needs-human"])
@@ -340,6 +533,17 @@ def main():
     lp.add_argument("verb", choices=["acquire", "renew", "check", "release"])
     for a in ("repo", "pr", "session", "host"):
         lp.add_argument(f"--{a}", required=True)
+    cp = sub.add_parser("checks")
+    cp.add_argument("--repo", required=True)
+    cp.add_argument("--pr", required=True)
+    cp.add_argument("--wait-minutes", type=int, required=True)
+    rp = sub.add_parser("round")
+    rp.add_argument("verb", choices=["start", "record-failure"])
+    for a in ("repo", "pr", "session", "host"):
+        rp.add_argument(f"--{a}", required=True)
+    rp.add_argument("--check")
+    rp.add_argument("--error")
+    rp.add_argument("--op", help="stable round start ID; record-failure reuses its originating start ID on retries")
     jp = sub.add_parser("judge")
     for a in ("body", "base", "head"):
         jp.add_argument(f"--{a}", required=True)
@@ -347,13 +551,18 @@ def main():
     up = sub.add_parser("update-plan")
     up.add_argument("--base", required=True)
     a = ap.parse_args()
-    if a.cmd == "judge":
+    if a.cmd == "checks":
+        checks_cmd(a.repo, a.pr, a.wait_minutes)
+    elif a.cmd == "round":
+        if a.verb == "record-failure" and not (a.check and a.error):
+            ap.error("record-failure needs --check and --error")
+        round_cmd(a.verb, a.repo, a.pr, a.session, a.check, a.error, a.op)
+    elif a.cmd == "judge":
         print(json.dumps(judge(a.base, a.head, a.body, a.agent)))
-        return
-    if a.cmd == "update-plan":
+    elif a.cmd == "update-plan":
         print(json.dumps(update_plan(a.base)))
-        return
-    lease(a.verb, a.repo, a.pr, a.session, a.host)
+    else:
+        lease(a.verb, a.repo, a.pr, a.session, a.host)
 
 
 if __name__ == "__main__":

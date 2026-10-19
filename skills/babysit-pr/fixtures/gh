@@ -7,11 +7,15 @@ State is the JSON file $GH_FAKE_STATE:
   next_id    id of the next comment posted
   comments   [{id, user: {login}, body, created_at, updated_at}]
   labels     [name]
+  head_sha   head commit of every PR (default "head1")
+  check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
+  statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
+  required_checks  [name] returned as branch protection contexts of any branch
   hidden_until_post  comment ids missing from comment lists until the first comment is posted
              (a race: the other session posts after our first read)
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
 Supported: `gh api` (user, issues/N, pulls/N, issues/N/comments, issues/comments/ID,
-issues/N/labels[/NAME]; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
+issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
 """
 import json
 import os
@@ -126,7 +130,18 @@ def api(args):
     if m := re.fullmatch(rf"(?:issues|pulls)/{n}", path) and method == "GET":
         log(False)
         return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
-                     "user": {"login": st["user"]}}, jq, include)
+                     "user": {"login": st["user"]},
+                     "head": {"sha": st.get("head_sha", "head1")}}, jq, include)
+    if m := re.fullmatch(r"commits/([^/]+)/check-runs", path):
+        log(False)
+        runs = st.get("check_runs", {}).get(m.group(1), [])
+        return emit({"total_count": len(runs), "check_runs": runs}, jq, include)
+    if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
+        log(False)
+        return emit(st.get("statuses", {}).get(m.group(1), []), jq, include)
+    if re.fullmatch(r"branches/[^/]+/protection/required_status_checks", path):
+        log(False)
+        return emit({"strict": False, "contexts": st.get("required_checks", [])}, jq, include)
     if re.fullmatch(rf"issues/{n}/comments", path):
         if method == "GET":
             log(False); return emit(visible(), jq, include)
