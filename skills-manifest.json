@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-19T09:42:49.911Z",
+  "generatedAt": "2026-10-19T10:48:11.958Z",
   "skills": [
     {
       "name": "backlog",
@@ -79,6 +79,12 @@
       "version": "0.1.1",
       "hash": "sha256-e8204e4c6f05e2721a20d9ac3f72b8ff84a2854647688bb9bf057312b53a59f4",
       "description": "One interactive HTML page for a plan review or a questionnaire, built from a fixed template. Use when a pipeline session must deliver a plan review or a questionnaire as an interactive page the console shows."
+    },
+    {
+      "name": "test-prune",
+      "version": "0.1.0",
+      "hash": "sha256-84743bfc41613291debeacd1ef47a1d3982df7635efa39fc727f5525659761cd",
+      "description": "Mutation-guided test pruning: a fixer proposes deleting redundant tests and strengthening weak ones, an independent reviewer accepts or rejects each proposal, and prune.py applies the accepted batch behind a cold mutation run and the ratchet. Use when the user says \"prune tests\", \"test-prune\", \"mutation test pruning\" or \"strengthen weak tests\", or when a scheduled job runs it with `--unattended`."
     },
     {
       "name": "to-openspec",
