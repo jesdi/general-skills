@@ -291,9 +291,11 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
     for _ in range(2):
         prompt.write_text(text)
         report.unlink(missing_ok=True)
+        Path(driver_agents.last_message(report)).unlink(missing_ok=True)
         start = time.monotonic()
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
+        driver_agents.settle_report(report)
         error, rerun_lines = _rejection(role, code, minutes, report, context, alone, detached)
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:

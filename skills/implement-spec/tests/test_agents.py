@@ -211,6 +211,29 @@ def test_reviewing_roles_launch_codex_exec_read_only(env, role):
     assert value_after(argv, "--model", "-m") == "gpt-sol"
 
 
+@pytest.mark.parametrize("writes", ["file", "message"])
+def test_a_read_only_codex_report_is_the_file_it_wrote_else_its_last_message(env, writes):
+    # A read-only sandbox can still let the agent write its report; codex then writes the last message to the -o file.
+    w = World(env, refactor=True, correctness=["openai/gpt-sol@medium"])
+    report = {"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": []}
+    (w.tmp / "bin/codex").write_text(f"""#!{sys.executable}
+import re, sys
+from pathlib import Path
+prompt, argv = sys.stdin.read(), sys.argv[1:]
+last = Path(argv[argv.index("-o") + 1])
+if "implement-spec preflight" in prompt:
+    last.write_text("OK")
+elif {writes!r} == "file":
+    Path(re.search(r"JSON report at (\\S+?)\\.? ", prompt).group(1)).write_text({json.dumps(report)!r})
+    last.write_text("Wrote and validated the report.\\n")
+else:
+    last.write_text({json.dumps(report)!r})
+""")
+    ok(w.run(None, "--only", "correctness", runner=False))
+    assert json.loads((w.repo / ".agent/implement/01/correctness-0.json").read_text()) == report
+    assert "correctness ran on openai/gpt-sol@medium" in w.ledger() and "report accepted" in w.ledger()
+
+
 @pytest.mark.parametrize("entry", ["claude-opus-5@medium", "anthropic/claude-opus-5@medium"])
 def test_claude_entry_launches_claude_p_and_bare_means_anthropic(env, entry):
     w = World(env, refactor=True, implementer=[entry])
