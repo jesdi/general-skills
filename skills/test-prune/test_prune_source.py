@@ -1,5 +1,6 @@
 """Deletion-shape edges the fixture repo does not reach, checked in-process (prune_source)."""
 from prune_source import class_refusals, delete_tests, describe, undeletable
+from prune_source import test_sources as sources
 
 EDGES = '''"""Edges."""
 import os
@@ -74,3 +75,10 @@ def test_class_refusals_keep_an_enclosing_class_non_empty():
 
     assert "leaves class TestOuter empty" in class_refusals(nested, [inner])[inner]
     assert class_refusals(documented, [inner]) == {}
+
+
+def test_a_new_parametrize_case_changes_the_test_source():
+    before = "@pytest.mark.parametrize('x', [1])\ndef test_x(x):\n    assert x\n"
+    after = before.replace("[1]", "[1, 2]")
+
+    assert sources(before)["test_x"] != sources(after)["test_x"]

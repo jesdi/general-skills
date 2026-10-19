@@ -223,11 +223,13 @@ def delete_tests(source: str, targets: set[tuple[tuple[str, ...], str]]) -> str:
 def test_sources(source: str) -> dict[str, str]:
     """`[Class::]name` → source of every test function in the file."""
     out: dict[str, str] = {}
+    lines = source.splitlines()
 
     def walk(body: list[ast.stmt], prefix: str) -> None:
         for node in body:
             if isinstance(node, FUNCS) and node.name.startswith("test"):
-                out[prefix + node.name] = ast.get_source_segment(source, node) or ""
+                start, end = _span(node)
+                out[prefix + node.name] = "\n".join(lines[start - 1:end])
             elif isinstance(node, ast.ClassDef):
                 walk(node.body, f"{prefix}{node.name}::")
 
