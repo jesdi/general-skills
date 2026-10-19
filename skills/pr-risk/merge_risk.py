@@ -9,8 +9,8 @@ import re
 import subprocess
 import sys
 
-CATEGORIES = ["docs", "tests", "ci", "deps", "config", "schema/migration", "auth/security",
-              "public-api", "infra", "money", "data-delete", "ui", "logic"]
+from merge_policy import CATEGORIES, DEFAULT_PATHS, POLICY_FILE, git, load_policy  # noqa: F401
+
 ENUMS = {
     "door": ["one-way", "two-way"],
     "blast_radius": ["isolated", "module", "service", "consumers"],
@@ -54,77 +54,110 @@ def split_inline(value):
     return parts
 
 
+def quoted_reason_error(v):
+    """Why a quoted reason is malformed or empty, else None."""
+    if len(v) < 2 or v[-1] != v[0] or v[0] in v[1:-1]:
+        return f"malformed quoted reason: {v}"
+    return None if v[1:-1].strip() else "empty reason"
+
+
 def reason_error(v):
     """Why a reason is not a plain or fully quoted scalar, else None."""
     if not v:
         return "empty reason"
     if v[0] in "\"'":
-        if len(v) < 2 or v[-1] != v[0] or v[0] in v[1:-1]:
-            return f"malformed quoted reason: {v}"
-        return "empty reason" if not v[1:-1].strip() else None
+        return quoted_reason_error(v)
     if v[0] in "[{-" or re.search(r":(\s|$)", v):
         return f"unsupported reason form: {v}"
     return None
 
 
-def add_reason(fields, errors, v):
-    err = reason_error(v)
-    if err:
-        errors.append(err)
-    else:
-        fields["reasons"].append(unquote(v))
+def enum_errors(fields):
+    """One error per enum field whose value is not allowed."""
+    return [f"{k}: {fields[k]!r} is not one of {' | '.join(allowed)}"
+            for k, allowed in ENUMS.items() if k in fields and fields[k] not in allowed]
+
+
+class Block:
+    """Fields and errors collected while reading one merge-risk block."""
+
+    def __init__(self):
+        self.fields, self.errors, self.in_reasons = {}, [], False
+
+    def add_reason(self, v):
+        """Add one reason, or record why it is not a plain or quoted scalar."""
+        err = reason_error(v)
+        if err:
+            self.errors.append(err)
+        else:
+            self.fields["reasons"].append(unquote(v))
+
+    def add_reasons_key(self, value):
+        """Handle `reasons:`: an inline list, or empty before `- item` lines."""
+        self.fields["reasons"] = []
+        if value.startswith("[") and value.endswith("]"):
+            for v in split_inline(value[1:-1]):
+                self.add_reason(v)
+        elif value:
+            self.errors.append("reasons must be a `- item` list or an inline list")
+
+    def add_touches_key(self, value):
+        """Handle `touches:`: it must be an inline list without empty elements."""
+        if not (value.startswith("[") and value.endswith("]")):
+            self.fields["touches"] = []
+            self.errors.append("touches must be an inline list like [docs, tests]")
+            return
+        items = split_inline(value[1:-1]) if value[1:-1].strip() else []
+        self.fields["touches"] = items
+        if "" in items:
+            self.errors.append("touches has an empty element")
+
+    def add_key(self, key, value):
+        """Store one `key: value` pair, or record an unknown or duplicate key."""
+        self.in_reasons = key == "reasons"
+        if key not in KEYS:
+            self.errors.append(f"unknown key: {key}")
+        elif key in self.fields:
+            self.errors.append(f"duplicate key: {key}")
+        elif key == "reasons":
+            self.add_reasons_key(value)
+        elif key == "touches":
+            self.add_touches_key(value)
+        else:
+            self.fields[key] = unquote(value)
+
+    def add_line(self, raw):
+        """Route one source line to a `- item` reason, a `key: value` pair, or an error."""
+        line = strip_comment(raw)
+        if not line.strip():
+            return
+        item = re.match(r"^\s+-\s+(.*)$", line)
+        if item and self.in_reasons:
+            return self.add_reason(item.group(1).strip())
+        m = re.match(r"^([a-z_]+):[ \t]*(.*)$", line)
+        if m:
+            self.add_key(m.group(1), m.group(2).strip())
+        else:
+            self.errors.append(f"unsupported line: {line.strip()}")
+
+    def validate(self):
+        """Append errors for missing keys, bad enum values, unknown categories, empty reasons."""
+        fields = self.fields
+        self.errors += [f"missing key: {k}" for k in KEYS if k not in fields]
+        self.errors += enum_errors(fields)
+        self.errors += [f"unknown category: {c}" for c in fields.get("touches", [])
+                        if c and c not in CATEGORIES]
+        if "reasons" in fields and not fields["reasons"]:
+            self.errors.append("reasons must have at least one item")
 
 
 def parse_block(text):
     """Return (fields, errors) for the inside of one block."""
-    fields, errors, in_reasons = {}, [], False
+    block = Block()
     for raw in text.splitlines():
-        line = strip_comment(raw)
-        if not line.strip():
-            continue
-        item = re.match(r"^\s+-\s+(.*)$", line)
-        if item and in_reasons:
-            add_reason(fields, errors, item.group(1).strip())
-            continue
-        m = re.match(r"^([a-z_]+):[ \t]*(.*)$", line)
-        if not m:
-            errors.append(f"unsupported line: {line.strip()}")
-            continue
-        key, value = m.group(1), m.group(2).strip()
-        in_reasons = key == "reasons"
-        if key not in KEYS:
-            errors.append(f"unknown key: {key}")
-        elif key in fields:
-            errors.append(f"duplicate key: {key}")
-        elif key == "reasons":
-            fields[key] = []
-            if value.startswith("[") and value.endswith("]"):
-                for v in split_inline(value[1:-1]):
-                    add_reason(fields, errors, v)
-            elif value:
-                errors.append("reasons must be a `- item` list or an inline list")
-        elif key == "touches":
-            if value.startswith("[") and value.endswith("]"):
-                fields[key] = split_inline(value[1:-1]) if value[1:-1].strip() else []
-                if "" in fields[key]:
-                    errors.append("touches has an empty element")
-            else:
-                fields[key] = []
-                errors.append("touches must be an inline list like [docs, tests]")
-        else:
-            fields[key] = unquote(value)
-    for key in KEYS:
-        if key not in fields:
-            errors.append(f"missing key: {key}")
-    for key, allowed in ENUMS.items():
-        if key in fields and fields[key] not in allowed:
-            errors.append(f"{key}: {fields[key]!r} is not one of {' | '.join(allowed)}")
-    for c in fields.get("touches", []):
-        if c and c not in CATEGORIES:
-            errors.append(f"unknown category: {c}")
-    if "reasons" in fields and not fields["reasons"]:
-        errors.append("reasons must have at least one item")
-    return fields, errors
+        block.add_line(raw)
+    block.validate()
+    return block.fields, block.errors
 
 
 def parse(body):
@@ -138,76 +171,6 @@ def parse(body):
     out = {k: fields.get(k) for k in KEYS}
     out["errors"] = errors
     return out
-
-
-POLICY_FILE = ".merge-risk.json"
-LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "poetry.lock",
-             "uv.lock", "Pipfile.lock", "Cargo.lock", "Gemfile.lock", "go.sum", "composer.lock"]
-DEFAULT_PATHS = {
-    "docs": ["docs/**", "README*", "*.md"],
-    "tests": ["tests/**", "**/test_*.py", "**/*_test.py", "**/*.test.*", "**/*.spec.*"],
-    "ci": [".github/workflows/**"],
-    "deps": [f"**/{n}" for n in LOCKFILES],
-    "config": [POLICY_FILE],
-    "schema/migration": ["**/migrations/**"],
-    "infra": ["**/Dockerfile*"],
-    "logic": ["**/SKILL.md", "**/AGENTS.md", "**/CLAUDE.md", "**/prompts/**"],
-}
-DEFAULT_POLICY = {"agentMerge": False, "paths": {}, "mergeMethod": None,
-                  "judgeMaxLines": 1500, "waitMinutes": 60,
-                  "alwaysHuman": ["schema/migration", "auth/security", "money", "data-delete",
-                                  "infra"]}
-
-
-def is_int(v):
-    return isinstance(v, int) and not isinstance(v, bool)
-
-
-def is_str_list(v):
-    return isinstance(v, list) and all(isinstance(x, str) for x in v)
-
-
-POLICY_TYPES = {
-    "agentMerge": lambda v: isinstance(v, bool),
-    "alwaysHuman": lambda v: is_str_list(v) and all(c in CATEGORIES for c in v),
-    "paths": lambda v: isinstance(v, dict) and all(
-        c in CATEGORIES and is_str_list(g) for c, g in v.items()),
-    "mergeMethod": lambda v: v in ("rebase", "merge", "squash"),
-    "judgeMaxLines": is_int,
-    "waitMinutes": is_int,
-}
-
-
-def git(*args, check=True):
-    p = subprocess.run(["git", *args], text=True, capture_output=True)
-    if check and p.returncode:
-        raise SystemExit(f"git {' '.join(args)}: {p.stderr.strip()}")
-    return p
-
-
-def load_policy(base):
-    """Policy from the base commit, never the PR head. Returns (policy, errors)."""
-    p = git("show", f"{base}:{POLICY_FILE}", check=False)
-    if p.returncode:
-        return dict(DEFAULT_POLICY), []
-    try:
-        raw = json.loads(p.stdout)
-    except ValueError:
-        return dict(DEFAULT_POLICY), ["policy: invalid JSON"]
-    if not isinstance(raw, dict):
-        return dict(DEFAULT_POLICY), ["policy: not an object"]
-    policy, errors = dict(DEFAULT_POLICY), []
-    for key, value in raw.items():
-        if key not in POLICY_TYPES:
-            errors.append(f"policy: unknown key {key}")
-        elif not POLICY_TYPES[key](value):
-            errors.append(f"policy: wrong type for {key}")
-        elif key == "paths" and any(
-                "[" in g or "]" in g for globs in value.values() for g in globs):
-            errors.append("policy: unsupported glob syntax in paths")
-        else:
-            policy[key] = value
-    return policy, errors
 
 
 def glob_re(glob):
@@ -263,25 +226,25 @@ def diff_stats(base, head, policy):
     return cats, counted, unknown, policy_changed
 
 
-def gate(body, base, head):
-    block = parse(body)
-    base = git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
-    policy, reasons = load_policy(base)
-    cats, counted, unknown, policy_changed = diff_stats(base, head, policy)
-    touches = set()
+def block_reasons(block, cats):
+    """Reasons from the parsed merge-risk block, given the categories the diff touches."""
     if "no merge-risk block" in block["errors"]:
-        reasons.append("no merge-risk block")
-    elif block["errors"]:
-        reasons += [f"invalid block: {e}" for e in block["errors"]]
-    else:
-        touches = set(block["touches"])
-        if block["door"] == "one-way":
-            reasons.append("door one-way")
-        if block["rollback"] != "revert":
-            reasons.append(f"rollback {block['rollback']}")
-        reasons += [f"diff touches {c}, not in touches" for c in sorted(cats - touches)]
-    if not policy["agentMerge"]:
-        reasons.append("agentMerge is off")
+        return ["no merge-risk block"]
+    if block["errors"]:
+        return [f"invalid block: {e}" for e in block["errors"]]
+    reasons = []
+    if block["door"] == "one-way":
+        reasons.append("door one-way")
+    if block["rollback"] != "revert":
+        reasons.append(f"rollback {block['rollback']}")
+    return reasons + [f"diff touches {c}, not in touches"
+                      for c in sorted(cats - set(block["touches"]))]
+
+
+def diff_reasons(policy, touches, stats):
+    """Reasons from the policy and the diff stats."""
+    cats, counted, unknown, policy_changed = stats
+    reasons = [] if policy["agentMerge"] else ["agentMerge is off"]
     reasons += [f"{c} is always human" for c in sorted(touches | cats)
                 if c in policy["alwaysHuman"]]
     if policy_changed:
@@ -289,12 +252,28 @@ def gate(body, base, head):
     reasons += [f"unknown line count: {p}" for p in unknown]
     if counted > policy["judgeMaxLines"]:
         reasons.append(f"{counted} counted lines > {policy['judgeMaxLines']}")
+    return reasons
+
+
+def gate(body, base, head):
+    block = parse(body)
+    base = git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
+    policy, reasons = load_policy(base)
+    stats = diff_stats(base, head, policy)
+    cats, counted = stats[0], stats[1]
+    reasons += block_reasons(block, cats)
+    touches = set(block["touches"]) if not block["errors"] else set()
+    reasons += diff_reasons(policy, touches, stats)
     return {"verdict": "human" if reasons else "auto", "reasons": reasons,
             "categories": sorted(cats), "countedLines": counted}
 
 
+def is_gate_call(argv):
+    return len(argv) == 8 and argv[1] == "gate" and argv[2::2] == ["--body", "--base", "--head"]
+
+
 def main(argv):
-    if len(argv) == 8 and argv[1] == "gate" and argv[2::2] == ["--body", "--base", "--head"]:
+    if is_gate_call(argv):
         with open(argv[3]) as f:
             print(json.dumps(gate(f.read(), argv[5], argv[7])))
         return 0
@@ -306,8 +285,7 @@ def main(argv):
     if argv[1] == "parse":
         print(json.dumps(result))
         return 0
-    for e in result["errors"]:
-        print(e)
+    print(*result["errors"], sep="\n", end="\n" if result["errors"] else "")
     return 1 if result["errors"] else 0
 
 
