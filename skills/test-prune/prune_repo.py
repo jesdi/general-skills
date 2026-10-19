@@ -250,7 +250,7 @@ class State:
     FILES = ("base.json", "status.json", "fixer-input.json", "review-input.json", "batch.json", "strengthen.json",
              "strengthen-input.json", "strengthen-proof.json", "prune-pr.md", "prune-pr-full.md", "strengthen-pr.md",
              "strengthen-pr-full.md", "prune-gate.log")
-    MARKERS = ("base.json", "status.json")
+    MARKER = ".test-prune-state"  # written by reset: the only proof a directory is a run's
 
     def __init__(self, path: Path):
         self.path = path
@@ -260,20 +260,20 @@ class State:
         return [self.path / name for name in self.FILES] + sorted(self.path.glob("summary-*.md"))
 
     def owned(self) -> bool:
-        """The directory is this run's to write: empty, or holding a run's marker file."""
-        return self.path.is_dir() and (not any(self.path.iterdir())
-                                       or any((self.path / m).exists() for m in self.MARKERS))
+        """The directory is a run's to write: empty, or holding the marker reset writes."""
+        return self.path.is_dir() and (not any(self.path.iterdir()) or (self.path / self.MARKER).is_file())
 
     def reset(self) -> None:
         """Start a new run: delete the files a run writes, never anything else, and refuse a non-empty
         directory that is not a run's."""
         if self.path.exists() and not self.owned():
-            raise BadInput(f"refusing to use {self.path} as the run state: it is not empty and holds no "
-                           f"{' or '.join(self.MARKERS)}; pass an empty or new --state")
+            raise BadInput(f"refusing to use {self.path} as the run state: it is not empty and was not made by "
+                           f"test-prune (no {self.MARKER}); pass an empty or new --state")
         for path in self._files():
             if path.exists():
                 path.unlink()
         self.path.mkdir(parents=True, exist_ok=True)
+        (self.path / self.MARKER).write_text("test-prune run state; collect deletes only the files a run writes\n")
 
     def emit(self, text: str) -> None:
         """Print a run summary; also append it to the GitHub job summary when there is one. Every summary is

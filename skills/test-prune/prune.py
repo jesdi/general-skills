@@ -34,7 +34,7 @@ class Parser(argparse.ArgumentParser):
 
 
 def _common():
-    common = argparse.ArgumentParser(add_help=False)
+    common = Parser(add_help=False)
     common.add_argument("--state", help="run state directory (default: <git dir>/test-prune)")
     common.add_argument("--date", help="branch date YYYY-MM-DD (default: today, UTC)")
     return common
@@ -131,7 +131,8 @@ def run_status(previous, command: str, code: int, summary: str, extra=()) -> dic
     reason = next((line for line in summary.splitlines() if line.strip()), "")
     commands = previous.get("commands") if isinstance(previous, dict) and command != "collect" else None
     commands = (commands if isinstance(commands, list) else []) + [{"command": command, "exit": code, "reason": reason}]
-    commands += list(extra)
+    ran_prune = any(c["command"] == "prune" for c in commands)
+    commands += [e for e in extra if e["exit"] or ran_prune]  # the run finishes only after prune ran
     worst = max(reversed(_open(commands)), key=lambda c: c["exit"], default={"exit": 0, "reason": reason})
     return {"exit": worst["exit"], "reason": worst["reason"], "commands": commands}
 
@@ -149,18 +150,29 @@ def _record(state: State, command: str, code: int, summary: str, extra=()) -> No
 
 
 def _markers(ctx: Context) -> list:
-    """The run marker: opened by an unattended collect, passed when the strengthen loop ends."""
+    """The run marker: opened by an unattended collect, passed when the strengthen loop ends after
+    prune ran (see run_status)."""
     if ctx.args.command == "collect" and ctx.args.unattended:
         return [{"command": RUN, "exit": 1, "reason": INCOMPLETE}]
     return [{"command": RUN, "exit": 0, "reason": "run finished"}] if ctx.finished else []
 
 
+def _state_arg(argv) -> str | None:
+    """The --state value, read off argv without a parser (the arguments just failed to parse)."""
+    for i, arg in enumerate(argv):
+        if arg == "--state" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--state="):
+            return arg[len("--state="):]
+    return None
+
+
 def _record_bad_arguments(argv, exc: BadInput) -> None:
     """An argument error is recorded as exit 2 when the command and the state dir can still be told."""
     command = next((a for a in argv if a in COMMANDS), None)
-    known, _ = _common().parse_known_args(argv)
+    state = _state_arg(argv)
     try:
-        path = Path(known.state).resolve() if known.state else Repo(Path.cwd()).git_dir() / "test-prune"
+        path = Path(state).resolve() if state else Repo(Path.cwd()).git_dir() / "test-prune"
     except BadInput:
         return
     if command:
