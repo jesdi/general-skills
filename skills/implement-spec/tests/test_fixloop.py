@@ -24,10 +24,13 @@ from test_walk import impl, plan, tw
 class Inside(test_review.Review):
     """The rig of test_review with the driver called in this process."""
 
+    command = "{gate}"  # the gate command; `{gate}` is the rig's gate script
+
     def run(self, steps, *extra, parallel="2", watch=False):
         (self.rig / "plan.json").write_text(json.dumps(steps))
-        args = ["--tickets", ".agent/tickets", "--gate", str(self.rig / "gate"), "--spec", "specs/csv/spec.md",
-                "--models", str(self.models), "--runner", str(self.rig / "run-agent"), "--parallel", parallel, *extra]
+        args = ["--tickets", ".agent/tickets", "--gate", self.command.format(gate=self.rig / "gate"), "--spec",
+                "specs/csv/spec.md", "--models", str(self.models), "--runner", str(self.rig / "run-agent"), "--parallel",
+                parallel, *extra]
         here = os.getcwd()
         os.chdir(self.repo)
         try:
@@ -534,28 +537,40 @@ def test_a_red_gate_on_the_implementer_commit_starts_fix_round_1_with_the_record
     assert [gate["commit"] for gate in rig.gates()].count(tip) == 1 and not rig.led("killed by signal")
 
 
-def killed(rig, subject, times):
-    """The rig's gate, ended by SIGTERM on its first `times` runs on the commit with `subject`, as a `pkill -f` of
-    another slot ends it (issue 101). A killed run logs nothing into `<rig>/gates/`."""
+def killed(rig, subject, times, end="os.kill(os.getpid(), signal.SIGTERM)"):
+    """The rig's gate, ended by `end` (SIGTERM by default) on its first `times` runs on the commit with `subject`, as a
+    `pkill -f` of another slot ends it (issue 101). A killed run logs nothing into `<rig>/gates/`."""
     gate, real = rig.rig / "gate", rig.rig / "real-gate"
     gate.rename(real)
     gate.write_text(f"""#!{sys.executable}
-import os, signal, subprocess
+import os, signal, subprocess, sys
 from pathlib import Path
 kills = Path(__file__).with_name("kills")
 subject = subprocess.run(["git", "log", "-1", "--format=%s"], capture_output=True, text=True).stdout.strip()
 if subject == {subject!r} and len(kills.read_text() if kills.exists() else "") < {times}:
     with kills.open("a") as file:
         file.write("x")
-    os.kill(os.getpid(), signal.SIGTERM)
+    {end}
 os.execv({str(real)!r}, [{str(real)!r}])
 """)
     gate.chmod(0o755)
     return rig
 
 
-def test_a_gate_killed_by_a_signal_runs_once_more_and_its_green_second_run_counts(tmp_path):
-    rig = killed(Inside(tmp_path), "feat: 01 rows", 1).run(plan(**{"01/reviewer": [review("01")]}))
+# How the gate's shell reports a SIGTERM of the command: `exec` replaces the shell, so the exit is -15; a shell that
+# outlives its child, as Ubuntu's dash does even for one simple command, exits 128+15.
+SHAPES = {"exec": ("exec {gate}", -15), "compound": ("{gate}; exit $?", 143)}
+
+
+def shaped(tmp_path, command):
+    rig = Inside(tmp_path)
+    rig.command = command
+    return rig
+
+
+@pytest.mark.parametrize("command, code", SHAPES.values(), ids=SHAPES)
+def test_a_gate_killed_by_a_signal_runs_once_more_and_its_green_second_run_counts(tmp_path, command, code):
+    rig = killed(shaped(tmp_path, command), "feat: 01 rows", 1).run(plan(**{"01/reviewer": [review("01")]}))
     assert rig.code == 0, rig.ledger()
     tip = rig.sha("01", "implementer")
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer"]
@@ -566,15 +581,29 @@ def test_a_gate_killed_by_a_signal_runs_once_more_and_its_green_second_run_count
     assert record.count("exit: ") == 1 and "\nexit: 0\nafter: clean\n" in record  # the second run overwrote it
 
 
-def test_a_gate_killed_by_a_signal_twice_is_red(tmp_path):
-    rig = killed(Inside(tmp_path), "feat: 01 rows", 2).run(plan(**{"01/reviewer": [review("01")], "01/fixer": [fix("01", 1)]}))
+@pytest.mark.parametrize("command, code", SHAPES.values(), ids=SHAPES)
+def test_a_gate_killed_by_a_signal_twice_is_red(tmp_path, command, code):
+    rig = killed(shaped(tmp_path, command), "feat: 01 rows", 2)
+    rig.run(plan(**{"01/reviewer": [review("01")], "01/fixer": [fix("01", 1)]}))
     assert rig.code == 0, rig.ledger()
     tip = rig.sha("01", "implementer")
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
     assert len(rig.led("killed by signal")) == 1 and tip not in [gate["commit"] for gate in rig.gates()]
     (gate,) = json.loads((rig.folder() / "findings-0.json").read_text())
     assert gate["title"] == f"the gate is red on {tip[:7]}"
-    assert "\nexit: -15\nafter: clean\n" in (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+    assert f"\nexit: {code}\nafter: clean\n" in (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+
+
+@pytest.mark.parametrize("exit", [1, 142])  # 142 is 128+SIGALRM: a signal, but not one that kills a gate from outside
+def test_a_gate_that_exits_with_any_other_code_is_red_without_running_again(tmp_path, exit):
+    rig = killed(shaped(tmp_path, "{gate}; exit $?"), "feat: 01 rows", 1, end=f"sys.exit({exit})")
+    rig.run(plan(**{"01/reviewer": [review("01")], "01/fixer": [fix("01", 1)]}))
+    assert rig.code == 0, rig.ledger()
+    tip = rig.sha("01", "implementer")
+    assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
+    assert not rig.led("killed by signal") and tip not in [gate["commit"] for gate in rig.gates()]
+    record = (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+    assert record.count("exit: ") == 1 and f"\nexit: {exit}\nafter: clean\n" in record
 
 
 def test_a_red_gate_on_the_fixer_commit_of_round_4_blocks_the_ticket(tmp_path):
