@@ -7,9 +7,13 @@ clock. Among valid lease comments the lowest comment id holds the lease; the lab
 """
 import argparse
 import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
+import tempfile
+import time
 import sys
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -202,6 +206,105 @@ def lease(verb, repo, number, session, host):
         pr.label(add=["babysitting"], remove=["needs-human"])
 
 
+def load_merge_risk():
+    for d in (Path(__file__).resolve().parent.parent / "pr-risk", Path.home() / ".my-skills/pr-risk",
+              *map(Path, PR_RISK_DIRS)):
+        if (d / "merge_risk.py").is_file():
+            sys.path.insert(0, str(d))
+            import merge_risk
+            return merge_risk
+    fail(f"pr-risk is not installed. Run: {INSTALL}")
+
+
+def judge_input(mr, body, base, head):
+    """Counted-file diffs, other files by name and count, the block, the categories. Nothing else."""
+    base = mr.git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
+    policy, _ = mr.load_policy(base)
+    paths = {c: list(g) for c, g in mr.DEFAULT_PATHS.items()}
+    for c, globs in policy["paths"].items():
+        paths[c] = paths.get(c, []) + globs
+    diff_base = mr.git("merge-base", base, head).stdout.strip()
+    numstat = mr.git("diff", "-z", "--numstat", "--no-renames", "--no-textconv",
+                     "--no-ext-diff", diff_base, head).stdout
+    cats, diffs, others = set(), [], []
+    for line in filter(None, numstat.split("\0")):
+        added, removed, path = line.split("\t", 2)
+        fc = mr.file_categories(path, paths)
+        cats |= fc
+        if "docs" in fc or mr.is_generated(path, diff_base, head):
+            others.append(f"{path}: {0 if added == '-' else int(added) + int(removed)} lines")
+        else:
+            diffs.append(mr.git("diff", "--no-renames", "--no-textconv", "--no-ext-diff",
+                                diff_base, head, "--", f":(literal){path}").stdout)
+    block = mr.FENCE.search(body)
+    return (f"## Diff of counted files\n\n{''.join(diffs)}\n## Other files\n\n"
+            + "\n".join(others) + f"\n\n## Merge-risk block\n\n{block[0] if block else '(none)'}\n"
+            f"\n## Categories of the diff\n\n{', '.join(sorted(cats))}\n")
+
+
+def ask(cli, prompt, timeout):
+    """Run one judge CLI. Returns its answer text; None when it fails; raises TimeoutExpired."""
+    if timeout <= 0:
+        raise subprocess.TimeoutExpired(cli, 0)
+    try:
+        # Use /tmp explicitly: TMPDIR may point into the untrusted PR checkout.
+        # Read-only alone still permits reading author-controlled instructions.
+        with tempfile.TemporaryDirectory(prefix="babysit-judge-", dir="/tmp") as d:
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith("GIT_") and k not in
+                   {"CLAUDECODE", "CLAUDE_PROJECT_DIR", "CODEX_THREAD_ID"}}
+            env["PWD"] = d
+            if cli == "codex":
+                out = Path(d) / "answer"
+                cmd = ["codex", "exec", "--skip-git-repo-check", "--ephemeral",
+                       "--ignore-user-config", "--ignore-rules", "--sandbox", "read-only",
+                       "-c", "project_doc_max_bytes=0", "-c", 'web_search="disabled"',
+                       "-c", "mcp_servers={}"]
+                for feature in ("shell_tool", "unified_exec", "multi_agent", "view_image",
+                                "apps", "plugins", "hooks", "skill_search"):
+                    cmd.extend(["-c", f"features.{feature}=false"])
+                cmd.extend(["-o", str(out), "-"])
+                p = subprocess.run(cmd, input=prompt, text=True, cwd=d, env=env,
+                                   capture_output=True, timeout=timeout)
+                return (out.read_text() if out.is_file() else p.stdout) if p.returncode == 0 else None
+            p = subprocess.run(["claude", "-p", "--safe-mode", "--tools", "",
+                                "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+                                "--no-session-persistence"], input=prompt, text=True,
+                               cwd=d, env=env, capture_output=True, timeout=timeout)
+            return p.stdout if p.returncode == 0 else None
+    except OSError:  # the CLI could not start: same as a failed run, so the fallback runs
+        return None
+
+
+def judge(base, head, body_file, agent):
+    mr = load_merge_risk()
+    prompt = (Path(__file__).with_name("judge-prompt.md").read_text()
+              + judge_input(mr, Path(body_file).read_text(), base, head))
+    deadline = time.monotonic() + float(os.environ.get("BABYSIT_JUDGE_TIMEOUT", 600))
+    other, same = ("codex", "claude") if agent == "claude-code" else ("claude", "codex")
+    same_model = False
+    try:
+        answer = ask(other, prompt, deadline - time.monotonic()) if shutil.which(other) else None
+        if answer is None:
+            same_model = True
+            answer = ask(same, prompt, deadline - time.monotonic()) if shutil.which(same) else None
+    except subprocess.TimeoutExpired:
+        return {"verdict": "disagree", "reason": "judge timeout", "sameModel": same_model}
+    try:
+        data = json.loads(answer)
+        verdict, reason = data["verdict"], data.get("reason")
+    except (TypeError, ValueError, KeyError, AttributeError):
+        verdict, reason = None, None
+    if verdict == "agree" and not (isinstance(reason, str) and reason.strip()):
+        verdict = None
+    if verdict == "agree":
+        return {"verdict": "agree", "sameModel": same_model,
+                "label": "same-model agree" if same_model else "agree"}
+    if verdict != "disagree":
+        reason = "invalid answer"
+    return {"verdict": "disagree", "reason": f"judge: {reason or 'disagree'}", "sameModel": same_model}
+
+
 def git(*args, ok=(0,)):
     p = subprocess.run(["git", *args], text=True, capture_output=True)
     if p.returncode not in ok:
@@ -237,9 +340,16 @@ def main():
     lp.add_argument("verb", choices=["acquire", "renew", "check", "release"])
     for a in ("repo", "pr", "session", "host"):
         lp.add_argument(f"--{a}", required=True)
+    jp = sub.add_parser("judge")
+    for a in ("body", "base", "head"):
+        jp.add_argument(f"--{a}", required=True)
+    jp.add_argument("--agent", choices=["claude-code", "codex"], required=True)
     up = sub.add_parser("update-plan")
     up.add_argument("--base", required=True)
     a = ap.parse_args()
+    if a.cmd == "judge":
+        print(json.dumps(judge(a.base, a.head, a.body, a.agent)))
+        return
     if a.cmd == "update-plan":
         print(json.dumps(update_plan(a.base)))
         return
