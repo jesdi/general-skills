@@ -2,11 +2,14 @@
 
 A gate record is `<folder>/gate-<first 7 hex of the commit>.log`. It is green only for exit 0 on a tree that is
 clean before the command and after it, with HEAD still on the commit. A command that a signal ended, on a clean tree
-with HEAD unmoved, did not judge the commit: it runs once more, and that run overwrites the record.
+with HEAD unmoved, did not judge the commit: it runs once more, and that run overwrites the record. A signal ended the
+command when its exit is negative, or when it is 128+N for N in SIGHUP, SIGINT, SIGKILL or SIGTERM: a shell that does
+not exec its last command, as dash does not, outlives the killed child and exits with 128+N.
 """
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +27,18 @@ def _after(slot: str, commit: str) -> str:
         return f"HEAD moved to {head(slot)}"
     status = git(slot, "status", "--short").stdout
     return "not clean\n" + "".join(f"    {line}\n" for line in status.splitlines()).rstrip("\n") if status else "clean"
+
+
+_KILLS = {signal.SIGHUP, signal.SIGINT, signal.SIGKILL, signal.SIGTERM}
+
+
+def _signal(code: int | str) -> int | None:
+    """The signal that ended the command: from a negative exit, or from 128+N as a shell reports its killed child."""
+    if not isinstance(code, int):
+        return None
+    if code < 0:
+        return -code
+    return code - 128 if code - 128 in _KILLS else None
 
 
 def record_path(folder: Path, commit: str) -> Path:
@@ -57,7 +72,8 @@ def run(command: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Pa
     code, after = _attempt(command, slot, commit, record, env)
     killed = []
     # A process outside the gate can kill it, as a `pkill -f` of another slot does: that run judged nothing.
-    if isinstance(code, int) and code < 0 and after == "clean":
-        killed.append(f"the gate of {commit[:7]} was killed by signal {-code} and runs again")
+    number = _signal(code)
+    if number and after == "clean":
+        killed.append(f"the gate of {commit[:7]} was killed by signal {number} and runs again")
         code, after = _attempt(command, slot, commit, record, env)
     return code == 0 and after == "clean", record, killed
