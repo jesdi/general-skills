@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-PRUNE = HERE / "prune.py"
+PRUNE = HERE.parent / "prune.py"  # the skill is one folder up
 TESTDATA = HERE / "testdata"
 DATE = "2026-10-17"
 PRUNE_BRANCH = f"chore/test-prune-{DATE}"

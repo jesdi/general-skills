@@ -10,5 +10,4 @@ source =
     skills/test-prune
 omit =
     */skills/**/test_*.py
-    */skills/test-prune/prune_harness.py
-    */skills/test-prune/testdata/*
+    */skills/test-prune/tests/*
