@@ -117,12 +117,30 @@ def command(role: str, entry: str, report: str) -> list[str]:
     """The CLI call for one agent; the prompt goes to its stdin."""
     provider, model, effort = split(entry)
     if provider == "openai":
-        # No --ephemeral: the rollout on disk is the trace. A read-only agent cannot write its report, so -o saves it.
-        tail = ["--sandbox", "read-only", "-o", report] if role in READ_ONLY else ["--sandbox", "workspace-write"]
+        # No --ephemeral: the rollout on disk is the trace. A read-only agent may not write its report, so -o saves
+        # the last message next to it; settle_report picks one. -o on the report itself overwrites a written report.
+        tail = ["--sandbox", "read-only", "-o", last_message(report)] if role in READ_ONLY else [
+            "--sandbox", "workspace-write"]
         return ["codex", "exec", "--model", model, "-c", f'model_reasoning_effort="{effort}"', *tail]
     # stream-json keeps tool output in the log and ends with a result that has total_cost_usd.
     return ["claude", "-p", "--model", model, "--effort", effort, "--permission-mode", "auto",
             "--output-format", "stream-json", "--verbose"]
+
+
+def last_message(report: str | Path) -> str:
+    """The file where codex saves the last message of a read-only agent."""
+    return f"{report}.last"
+
+
+def settle_report(report: Path) -> None:
+    """The report is the one the agent wrote when it parses, else the saved last message, when there is one."""
+    last = Path(last_message(report))
+    if not last.exists():
+        return
+    with contextlib.suppress(OSError, ValueError):
+        json.loads(report.read_text())
+        return
+    report.write_text(last.read_text())
 
 
 def render(name: str, values: dict[str, str]) -> str:

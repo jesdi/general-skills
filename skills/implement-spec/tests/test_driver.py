@@ -342,7 +342,7 @@ def test_command_lines_per_provider():
     assert driver_agents.command("implementer", "openai/gpt-sol@high", "r.json") == [
         "codex", "exec", "--model", "gpt-sol", "-c", 'model_reasoning_effort="high"', "--sandbox", "workspace-write"]
     assert driver_agents.command("reviewer", "openai/gpt-sol@high", "r.json")[-4:] == [
-        "--sandbox", "read-only", "-o", "r.json"]
+        "--sandbox", "read-only", "-o", "r.json.last"]
     assert driver_agents.command("reviewer", "opus@low", "r.json")[:6] == [
         "claude", "-p", "--model", "opus", "--effort", "low"]
 
