@@ -25,9 +25,10 @@ Write one JSON report at {report} that matches this schema:
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
     "locked": {"type": "array", "items": {"type": "string"}},
-    "red": {"type": "array", "items": {"type": "object", "required": ["test", "line"], "properties": {"test": {"type": "string", "minLength": 1}, "line": {"type": "string", "minLength": 1}}}}
+    "red": {"type": "array", "items": {"type": "object", "required": ["test", "line"], "properties": {"test": {"type": "string", "minLength": 1}, "line": {"type": "string", "minLength": 1}}}},
+    "not_addressed": {"type": "array", "items": {"type": "object", "required": ["finding", "reason"], "properties": {"finding": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}}}
   },
-  "if": {"properties": {"status": {"enum": ["DONE", "DONE_WITH_CONCERNS"]}}},
+  "if": {"properties": {"status": {"enum": ["DONE", "DONE_WITH_CONCERNS"]}}, "not": {"required": ["not_addressed"], "properties": {"not_addressed": {"minItems": 1}}}},
   "then": {"properties": {"commits": {"minItems": 1}, "locked": {"minItems": 1}, "red": {"minItems": 1}}}
 }
 ```

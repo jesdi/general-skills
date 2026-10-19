@@ -117,7 +117,7 @@ Rules for each agent:
 
 | Finding | What the driver does |
 |---|---|
-| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding of this kind that is open after the correction blocks the ticket. No correction runs after round 4. |
+| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding that the correction reports in `not_addressed` (it needs a production change first) becomes a finding of kind `code`, with the reason as its evidence, and goes to a fix round at once; the ledger says it was not corrected. A finding of this kind that is open after the correction blocks the ticket. No correction runs after round 4. |
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
@@ -176,7 +176,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 
 | Role | Template | More fields | Checks after the schema |
 |---|---|---|---|
-| test-writer | `prompts/test-writer.md` | `locked` (test file paths), `red` (`test`, `line`) | The driver reads a test node id `<file>::<test>` in `locked` as its file. With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. A correction (after `overrule-test`, or for a review finding) changes only the files that it lists in `locked` and the files that the driver restored before it. When the gate is red on the restore commit, a DONE correction lists a restored file in `locked`. |
+| test-writer | `prompts/test-writer.md` | `locked` (test file paths), `red` (`test`, `line`) | The driver reads a test node id `<file>::<test>` in `locked` as its file. With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. A correction (after `overrule-test`, or for a review finding) changes only the files that it lists in `locked` and the files that the driver restored before it. When the gate is red on the restore commit, a DONE correction lists a restored file in `locked`. Each `not_addressed[].finding` is the title of a finding of the correction; a DONE correction with each of its findings there needs no commit. |
 | implementer | `prompts/implementer.md` | `green` | With DONE: one commit or more. |
 | reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`); `commits` is empty | In a full review (one with no fix range: round 1, and the review after a test-writer correction): `mutations` is required, with a proof for each locked test file (`test` is `<locked file>::<test name>`). Each `red` is in the log. |
 | correctness | `prompts/correctness.md` | the same as the reviewer; `commits` is empty | `mutations` is optional. |

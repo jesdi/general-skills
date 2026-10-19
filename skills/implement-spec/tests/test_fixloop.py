@@ -177,6 +177,56 @@ def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_f
     assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"]) == ([vacuous], [elsewhere])
 
 
+NEEDS_CODE = "needs production code: the code has no multi-PR view"
+
+
+def not_addressing(*titles, **report):
+    """A correction of tests/test_01.py that reports `titles` under `not_addressed`."""
+    step = {**tw("01"), "files": {"tests/test_01.py": "# corrected\n"}, "commit": "test: 01 fixture fix"}
+    reasons = [{"finding": title, "reason": NEEDS_CODE} for title in titles]
+    return {**step, "report": {**step["report"], **report, "not_addressed": reasons}}
+
+
+def test_a_test_finding_the_correction_did_not_address_goes_to_the_fixer_as_a_code_finding(tmp_path):
+    # Issue #111: the ledger said "corrected it at <sha>" for every finding, and the finding came back each review.
+    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), not_addressing("VACUOUS")],
+                                       "01/fixer": [fix("01", 1)],
+                                       "01/reviewer": [review("01", [stale, vacuous]), review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "fixer", "reviewer"]
+    assert rig.led("STALE: STALE. The test-writer corrected it at")
+    assert rig.led("VACUOUS", "corrected it at") == []
+    assert rig.led(f"test correction in tests/test_01.py, outside the fix rounds: VACUOUS: VACUOUS. The test-writer "
+                   f"did not correct it: {NEEDS_CODE}. It goes to the fixer as a finding of kind code.")
+    # The fixer reads the finding as one of kind code, with the reason of the test-writer as its evidence.
+    (routed,) = [f for f in json.loads((rig.folder() / "findings-0.json").read_text()) if f["title"] == "VACUOUS"]
+    assert (routed["kind"], routed["evidence"]) == ("code", f"the test-writer did not correct it: {NEEDS_CODE}")
+    assert rig.state()["tickets"]["01"]["round"] == 1 and "findings-0.json" in rig.prompt("fixer-1")
+
+
+def test_a_correction_that_addresses_no_finding_needs_no_commit(tmp_path):
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    none = not_addressing("VACUOUS", commits=[], files=[], locked=[], red=[])
+    del none["commit"], none["files"]
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), none], "01/fixer": [fix("01", 1)],
+                                       "01/reviewer": [review("01", [vacuous]), review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")].count("test-writer") == 2  # no rerun
+    assert rig.led("VACUOUS. The test-writer did not correct it") and rig.state()["tickets"]["01"]["round"] == 1
+
+
+def test_a_correction_that_names_a_finding_it_was_not_given_is_rerun(tmp_path):
+    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), not_addressing("OTHER"), not_addressing()],
+                                       "01/reviewer": [review("01", [vacuous]), review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    assert "not_addressed: OTHER is not the title of a finding of this correction" in rig.prompt("test-writer-1")
+    assert rig.led("VACUOUS: VACUOUS. The test-writer corrected it at")
+
+
 def test_a_test_writer_that_lists_test_node_ids_in_locked_locks_their_files(tmp_path):
     # Issue #71: a node id `<file>::<test>` in `locked` names its file, for the first run and for a correction.
     vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")

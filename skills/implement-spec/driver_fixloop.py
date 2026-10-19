@@ -104,8 +104,9 @@ def _review(job: Job) -> list[dict]:
     return found
 
 
-def _correct(job: Job, findings: list[dict]) -> None:
-    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds."""
+def _correct(job: Job, findings: list[dict]) -> list[dict]:
+    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. Returns the
+    findings that it did not correct, as findings of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
     if job.corrected:
         titles = "; ".join(finding["title"] for finding in findings)
@@ -120,19 +121,39 @@ def _correct(job: Job, findings: list[dict]) -> None:
         job.previous = ""  # no review has seen the restore commit
         ledger(f"Ticket {number}: the code does not need the change to {', '.join(restored)}: the restore closes it, "
                "with no correction.")
-        return
+        return []
     values = {**job.pointers(job.round), "restored": " ".join(restored),
               "record": record and os.path.relpath(record, job.slot)}
     notes = ["correction"] + ["restored"] * bool(restored) + ["restored-red"] * bool(record)
     with during("the test-writer correction"):
         report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
-                           check={"correction": True, "restored": restored, "restore_red": bool(record)})
+                           check={"correction": True, "restored": restored, "restore_red": bool(record),
+                                  "findings": [finding["title"] for finding in findings]})
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
     run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
+    return _uncorrected(job, findings, report.get("not_addressed", []))
+
+
+def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> list[dict]:
+    """Log what the correction did with each finding. Returns each one it did not correct as a finding of kind
+    code, with its reason as the evidence: the test needs a production change first, so a fixer closes it."""
+    number = job.ticket.number
+    reasons = {item["finding"]: item["reason"] for item in not_addressed}
     for finding in findings:
+        result = (f"The test-writer did not correct it: {reasons[finding['title']]}. It goes to the fixer as a finding "
+                  "of kind code." if finding["title"] in reasons else f"The test-writer corrected it at {job.tip[:7]}.")
         ledger(f"Ticket {number}: {finding['kind']} correction in {finding['file']}, outside the fix rounds: "
-               f"{finding['title']}: {finding['evidence']}. The test-writer corrected it at {job.tip[:7]}.")
+               f"{finding['title']}: {finding['evidence']}. {result}")
+    code = {finding["title"]: {**finding, "kind": "code", "evidence": f"the test-writer did not correct it: {reason}"}
+            for finding in findings if (reason := reasons.get(finding["title"]))}
+    if code:
+        # The fixer reads the findings file of this review, so the finding is of kind code there too.
+        path = OUT / number / f"findings-{job.round}.json"
+        written = [code.get(finding["title"], finding) if finding in findings else finding
+                   for finding in json.loads(path.read_text())]
+        path.write_text(json.dumps(written, indent=1) + "\n")
+    return list(code.values())
 
 
 def _fix(job: Job) -> None:
@@ -170,7 +191,7 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
     locked_file_changed = any(finding["source"] == "driver" for finding in to_fix)
     if to_correct and not locked_file_changed:
-        _correct(job, to_correct)
+        to_fix += [finding for finding in _correct(job, to_correct) if finding["severity"] in driver_review.OPEN]
         if not to_fix:
             return False
     if not to_fix:

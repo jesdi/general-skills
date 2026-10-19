@@ -132,6 +132,9 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   it blocks only after round 4. A red gate on a test-writer correction blocks.
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
   stays the source of truth: an agent's run of the gate counts for nothing.
+- A finding that a correction reports in `not_addressed` goes to the fixer of the same round as kind `code`
+  (`driver_fixloop._correct` rewrites it in the findings file): the test needs a production change first, so a
+  second correction could not close it.
 - No test-writer correction runs after round 4 (`driver_fixloop._act_on`): its findings become `finding` questions
   with the others. A correction there would add red locked tests that no fix round makes green, and `accept` could
   not merge the ticket.
