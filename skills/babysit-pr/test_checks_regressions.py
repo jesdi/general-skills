@@ -156,7 +156,7 @@ def test_failure_write_crossing_expiry_cannot_report_success(tmp_path):
     record = subprocess.Popen(
         [sys.executable, str(SCRIPT), "round", "record-failure", "--repo", "jesdi/demo",
          "--pr", "58", "--session", "s1", "--host", "mac", "--check", "test",
-         "--error", "test_empty AssertionError"], cwd=w.project,
+         "--error", "test_empty AssertionError", "--op", "start-1"], cwd=w.project,
         env={**w.env, "GH_PAUSE_PREFIX": str(record_pause),
              "GH_PAUSE_MATCH": json.dumps(["PATCH", "issues/comments/1001", "signature:"])},
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

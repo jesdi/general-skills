@@ -49,7 +49,9 @@ class Ci(World):
         return self.round("start", session, "--op", f"start-{self.ops}")
 
     def fail(self, session, error, check="test"):
-        return self.round("record-failure", session, "--check", check, "--error", error)
+        # a failure belongs to the round of the latest start, so it carries that start's operation
+        return self.round("record-failure", session, "--check", check, "--error", error,
+                          "--op", f"start-{self.ops}")
 
     def acquire(self, session):
         return self.run("acquire", session)
