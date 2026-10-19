@@ -7,6 +7,7 @@ clock. Among valid lease comments the lowest comment id holds the lease; the lab
 """
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -32,6 +33,14 @@ HANDOFF = re.compile(r"\A## 🧑 Needs human: (.*)")
 NEW_BUDGET = ("5 fix rounds", "same failure twice")
 SEEN = "<!-- babysit-pr seen -->\n"
 PASS = {"success", "neutral", "skipped"}
+MENTION = "@babysitter"
+MERGE = re.compile(rf"\A{MENTION} merge(?:\s+(\S+))?\s*\Z")
+CONNECTIONS = {
+    "comments": "databaseId author { login } editor { login } lastEditedAt createdAt body",
+    "reviews": "author { login } state body submittedAt",
+    "reviewThreads": "isResolved comments(first: 100) { nodes { author { login } createdAt } pageInfo { hasNextPage } }",
+    "commits": "commit { oid }",
+}
 
 
 def fail(msg):
@@ -59,6 +68,7 @@ def parse(s):
 
 class Pr:
     def __init__(self, repo, number):
+        self.identity_scope = (repo, number)
         self.repo = f"repos/{repo}"
         self.base = f"{self.repo}/issues/{number}"
 
@@ -77,13 +87,41 @@ class Pr:
         return json.loads(gh("api", "-X", "PATCH", f"{self.repo}/issues/comments/{cid}", "-f", f"body={body}"))
 
     def post(self, body):
-        return json.loads(gh("api", "-X", "POST", f"{self.base}/comments", "-f", f"body={body}"))
+        c = json.loads(gh("api", "-X", "POST", f"{self.base}/comments", "-f", f"body={body}"))
+        CommentIdentities(*self.identity_scope, c["user"]["login"]).remember(c["id"], body)
+        return c
 
     def label(self, add=(), remove=()):
         for name in add:
             gh("api", "-X", "POST", f"{self.base}/labels", "-f", f"labels[]={name}")
         for name in remove:
             gh("api", "-X", "DELETE", f"{self.base}/labels/{name}", check=False)
+
+
+class CommentIdentities:
+    """Local creation receipts: mutable GitHub bodies cannot change a known identity.
+
+    Scope by repository, PR and authenticated login. Separate immutable files per
+    comment survive process restarts and concurrent sessions without lost updates.
+    Missing receipts never establish trust from an edited body.
+    """
+    def __init__(self, repo, number, owner):
+        scope = hashlib.sha256(json.dumps([repo, str(number), owner]).encode()).hexdigest()
+        self.root = Path.home() / ".local/state/babysit-pr/comments" / scope
+
+    def kind(self, cid):
+        path = self.root / str(cid)
+        return path.read_text() if path.exists() else None
+
+    def remember(self, cid, body):
+        kind = "lease" if LEASE.match(body) else "handoff" if HANDOFF.match(body) else None
+        if kind:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            try:
+                with (self.root / str(cid)).open("x") as f:
+                    f.write(kind)
+            except FileExistsError:
+                pass  # the original identity wins, even if the body has changed
 
 
 def marker(session, host, expires):
@@ -397,6 +435,90 @@ def lease_locked(verb, repo, number, session, host):
         pr.label(add=["babysitting"], remove=["needs-human"])
 
 
+def connection(repo, number, name):
+    """All nodes of one PR connection over GraphQL (REST has no comment `editor`)."""
+    owner, _, repo_name = repo.partition("/")
+    query = ("query($o: String!, $r: String!, $n: Int!, $after: String) { repository(owner: $o, name: $r) "
+             f"{{ pullRequest(number: $n) {{ {name}(first: 100, after: $after) "
+             f"{{ nodes {{ {CONNECTIONS[name]} }} pageInfo {{ hasNextPage endCursor }} }} }} }} }}")
+    nodes, after = [], []
+    while True:
+        out = json.loads(gh("api", "graphql", "-f", f"query={query}", "-f", f"o={owner}",
+                            "-f", f"r={repo_name}", "-F", f"n={number}", *after))
+        page = out["data"]["repository"]["pullRequest"][name]
+        nodes += page["nodes"]
+        if not page.get("pageInfo", {}).get("hasNextPage"):
+            return nodes
+        after = ["-f", f"after={page['pageInfo']['endCursor']}"]
+
+
+def login_of(node):
+    return (node.get("author") or {}).get("login") or "ghost"
+
+
+def owner_comments(repo, number):
+    """Hand off for any review or non-owner comment; else the owner's `@babysitter` instructions."""
+    owner = Pr(repo, number).user()
+    identities = CommentIdentities(repo, number, owner)
+    comments = sorted(connection(repo, number, "comments"), key=lambda c: c["databaseId"])
+    for c in comments:
+        if login_of(c) == owner and not c.get("lastEditedAt"):
+            identities.remember(c["databaseId"], c["body"])
+    kinds = {c["databaseId"]: identities.kind(c["databaseId"]) for c in comments}
+    last = max((i for i, c in enumerate(comments)
+                if login_of(c) == owner and kinds[c["databaseId"]] != "lease"
+                and HANDOFF.match(c["body"]) and not c.get("lastEditedAt")), default=-1)  # an edited handoff may be forged
+    since = parse(comments[last]["createdAt"]) if last >= 0 else None
+    handoff, instructions = None, []
+    for c in comments[last + 1:]:
+        author = login_of(c)
+        editor = (c.get("editor") or {}).get("login")
+        kind = kinds[c["databaseId"]]
+        if author == owner and kind == "lease":
+            continue  # creation receipt, independent of the lease's current body
+        if author == owner and not c["body"].startswith(MENTION):
+            # An unknown edited lease may be a handoff with its heading removed.
+            # Without a receipt it is safe to ignore only if no earlier instruction
+            # could be replayed. This also supports leases from another host.
+            if c.get("lastEditedAt") and (kind == "handoff" or not LEASE.match(c["body"])
+                                          or editor != owner or instructions):
+                handoff = handoff or "handoff comment edited, boundary unverifiable"
+            continue  # the babysitter's own lease comments and the owner's plain chatter
+        if author != owner:
+            handoff = handoff or f"review comment from {author}"
+        elif editor not in (None, owner):
+            handoff = handoff or f"owner comment edited by {editor}"
+        elif c.get("lastEditedAt"):  # the last editor alone cannot rule out an earlier edit by another account
+            handoff = handoff or "owner comment edited, edit history unverifiable"
+        else:
+            instructions.append({"id": c["databaseId"], "text": c["body"], "approved_sha": None})
+            m = MERGE.match(c["body"])
+            if m:
+                oids = [k["commit"]["oid"] for k in connection(repo, number, "commits")]
+                hits = {o for o in oids if re.fullmatch(r"[0-9a-f]{7,40}", m[1] or "") and o.startswith(m[1])}
+                sha = hits.pop() if len(hits) == 1 else None  # an ambiguous prefix approves nothing
+                if sha:  # the approval names its commit; the head is never inferred from dates
+                    instructions[-1]["approved_sha"] = sha
+                else:
+                    handoff = handoff or "merge approval must name a commit: @babysitter merge <sha>"
+    for r in connection(repo, number, "reviews"):
+        author = login_of(r)
+        if r["state"] == "CHANGES_REQUESTED":
+            handoff = handoff or f"changes requested by {author}"
+        elif author != owner and r["body"].strip() and (since is None or parse(r["submittedAt"]) >= since):
+            handoff = handoff or f"review comment from {author}"
+    for t in connection(repo, number, "reviewThreads"):
+        if not t["isResolved"]:
+            handoff = handoff or f"review comment from {login_of(t['comments']['nodes'][0])}"
+        for c in t["comments"]["nodes"]:
+            stamp = c.get("createdAt")  # resolving a thread must not hide its comments
+            if login_of(c) != owner and (since is None or not stamp or parse(stamp) >= since):  # equal stamps: order unknown, hand off
+                handoff = handoff or f"review comment from {login_of(c)}"
+        if t["comments"].get("pageInfo", {}).get("hasNextPage"):  # unread comments: fail closed
+            handoff = handoff or "review thread too long to read"
+    return {"handoff": handoff, "instructions": [] if handoff else instructions}
+
+
 def load_merge_risk():
     for d in (Path(__file__).resolve().parent.parent / "pr-risk", Path.home() / ".my-skills/pr-risk",
               *map(Path, PR_RISK_DIRS)):
@@ -531,6 +653,9 @@ def main():
     lp.add_argument("verb", choices=["acquire", "renew", "check", "release"])
     for a in ("repo", "pr", "session", "host"):
         lp.add_argument(f"--{a}", required=True)
+    op = sub.add_parser("owner-comments")
+    for a in ("repo", "pr"):
+        op.add_argument(f"--{a}", required=True)
     cp = sub.add_parser("checks")
     cp.add_argument("--repo", required=True)
     cp.add_argument("--pr", required=True)
@@ -549,7 +674,9 @@ def main():
     up = sub.add_parser("update-plan")
     up.add_argument("--base", required=True)
     a = ap.parse_args()
-    if a.cmd == "checks":
+    if a.cmd == "owner-comments":
+        print(json.dumps(owner_comments(a.repo, a.pr)))
+    elif a.cmd == "checks":
         checks_cmd(a.repo, a.pr, a.wait_minutes)
     elif a.cmd == "round":
         if a.verb == "record-failure" and not (a.check and a.error):
