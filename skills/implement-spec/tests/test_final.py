@@ -488,7 +488,8 @@ def pushed_run(tmp_path, monkeypatch, steps, risk_in, gh_fails=False):
         (where / name).mkdir(parents=True)
         (where / name / "SKILL.md").write_text(f"---\nname: {name}\n---\n")
     if risk_in:
-        shutil.copy(PR_RISK / "merge_risk.py", where / "pr-risk/merge_risk.py")
+        for module in ("merge_risk.py", "merge_policy.py"):
+            shutil.copy(PR_RISK / module, where / "pr-risk" / module)
     env = {**rig.env, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(claude)}
     (rig.rig / "plan.json").write_text(json.dumps(steps))
     args = ["--tickets", ".agent/tickets", "--gate", str(rig.rig / "gate"), "--spec", "specs/csv/spec.md",
