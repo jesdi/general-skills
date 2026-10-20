@@ -222,6 +222,8 @@ def api(args):
         if method in ("PATCH", "PUT"):
             log(True)
             c["body"] = fields.get("body", c["body"]); c["updated_at"] = st["now"]
+            c["editor"] = {"login": st["user"]}
+            c["last_edited_at"] = st["now"]
             save(); return emit(c, jq, include)
         if method == "DELETE":
             log(True); st["comments"].remove(c); save(); return
