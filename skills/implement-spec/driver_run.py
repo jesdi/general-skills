@@ -224,7 +224,7 @@ class Run:
         self.state.ticket(number, tip=driver_slots.head(slot))
 
 
-def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: tuple[Path, bytes],
+def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: driver_review.Config,
                         runs_again: bool) -> str:
     """After read-only agents: "" when the slot and the shared git config (`driver_review.shared_config` before
     them) are as they were; else restore both and return what they left."""

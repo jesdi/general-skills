@@ -7,6 +7,7 @@ A mutation proof is keyed by (production file, line); the line is the one the fi
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import driver_agents
@@ -148,21 +149,43 @@ def disturbed(slot: str, branch: str, tip: str) -> str:
     return f"the tree is not as the review found it: {', '.join(left)}" if left else ""
 
 
-def _read(config: Path) -> bytes:
-    return config.read_bytes() if config.exists() else b""
+# Keys that git writes on its own and that cannot hurt: `git worktree add -b` and `git push -u` of another session
+# write the tracking entries of their branch while a review runs.
+_HARMLESS = ("branch.",)
+Config = tuple[Path, bytes, dict[str, list[str]] | None]  # (file, its bytes, its keys)
 
 
-def shared_config(slot: str) -> tuple[Path, bytes]:
-    """(the git config file that every worktree of the repository shares, its bytes)."""
-    common = git(slot, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()
-    return Path(common, "config"), _read(Path(common, "config"))
+def _keys(config: Path) -> dict[str, list[str]] | None:
+    """Each key of the file and its values in order; None when git cannot read the file."""
+    listed = subprocess.run(["git", "config", "--file", str(config), "--list", "-z"], capture_output=True, text=True)
+    if listed.returncode:
+        return None
+    keys: dict[str, list[str]] = {}
+    for entry in filter(None, listed.stdout.split("\0")):
+        key, _, value = entry.partition("\n")
+        keys.setdefault(key, []).append(value)
+    return keys
 
 
-def restore_config(before: tuple[Path, bytes]) -> str:
-    """"" when the shared git config is still `before` (from `shared_config`), else write it back and say so.
-    One worktree that writes the config breaks git in all of them, as a core.worktree on a gone directory does."""
-    config, data = before
-    if _read(config) == data:
-        return ""
-    config.write_bytes(data)
-    return f"the shared git config {config} changed"
+def shared_config(slot: str) -> Config:
+    """(the git config file that every worktree of the repository shares, its bytes, its keys)."""
+    config = Path(git(slot, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip(), "config")
+    return config, config.read_bytes() if config.exists() else b"", _keys(config) if config.exists() else {}
+
+
+def restore_config(before: Config) -> str:
+    """"" when no key of the shared git config but a harmless one changed since `before` (from `shared_config`), else
+    put back the changed keys and say which. One worktree that writes the config breaks git in all of them, as a
+    core.worktree on a gone directory does. Only those keys go back: other sessions write the file at the same time."""
+    config, data, keys = before
+    now = _keys(config) if config.exists() else {}
+    if now is None or keys is None:
+        config.write_bytes(data)  # git cannot read one of them: the file goes back whole
+        return f"the shared git config {config} changed"
+    changed = sorted(key for key in keys.keys() | now.keys()
+                     if keys.get(key) != now.get(key) and not key.startswith(_HARMLESS))
+    for key in changed:
+        subprocess.run(["git", "config", "--file", str(config), "--unset-all", key], capture_output=True)
+        for value in keys.get(key, []):
+            subprocess.run(["git", "config", "--file", str(config), "--add", key, value], capture_output=True)
+    return f"the shared git config {config} changed: {', '.join(changed)}" if changed else ""
