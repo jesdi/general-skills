@@ -122,7 +122,7 @@ Rules for each agent:
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
-A fix round has three steps: the **fixer** (`prompts/fixer.md`) makes the gate green on its final commit, as the implementer does; the driver runs the gate on the new tip; a re-review reads the range of the fix. A mutation proof is repeated only when the fix changed its production line.
+A fix round has three steps: the **fixer** (`prompts/fixer.md`) makes the gate green on its final commit, as the implementer does; the driver runs the gate on the new tip; a re-review reads the range of the fix. A mutation proof is repeated only when the fix changed its production line. A fixer whose findings need no change, for example because a test-writer correction before it already resolved them, makes no commit and gives in `concerns` a reason for each finding; the round still counts, and the re-review of the same tip checks each reason.
 
 A red gate on the commit of the implementer or of a fixer is a critical finding with source `gate`. Its file is the gate record, and the record holds the output. No review runs on that tip, and the next round starts: a red gate on the commit of the implementer starts round 1. The review after that round covers each fix since the last review and repeats each proof that one of them made due. Two red gates block the ticket: one after round 4, and one on the commit of a test-writer correction, because the correction is outside the fix rounds and a fixer may not edit the locked files.
 
@@ -181,7 +181,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 | implementer | `prompts/implementer.md` | `green` | With DONE: one commit or more. |
 | reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`); `commits` is empty | In a full review (one with no fix range: round 1, and the review after a test-writer correction): `mutations` is required, with a proof for each locked test file (`test` is `<locked file>::<test name>`). Each `red` is in the log. |
 | correctness | `prompts/correctness.md` | the same as the reviewer; `commits` is empty | `mutations` is optional. |
-| fixer | `prompts/fixer.md` | `green`, `ticket` | With DONE: one commit or more. |
+| fixer | `prompts/fixer.md` | `green`, `ticket` | With DONE and no commit: no new commit on the branch, no uncommitted change, a gate that is green on the start, and a concern that names each finding of the round. |
 | final-reviewer | `prompts/final-reviewer.md` | `findings` | None. |
 | pr-writer | `prompts/pr-writer.md` | `body`; `commits` is empty | None. |
 | fixer of the final review | `prompts/final-fixer.md` | `green`; `commits` is a list of (`sha`, `ticket`) | Each new commit on the branch is in `commits`, with a ticket of the run. |

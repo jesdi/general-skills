@@ -3,7 +3,8 @@
 context: repo (slot path), branch, start (HEAD when the role started), log, full (a full review: no fix range), locked,
   correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
   restore_red (the gate is red on the commit of that restore), findings (the titles a correction gets),
-  owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip)."""
+  owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip),
+  fix (the titles of the findings a fixer gets), red (the gate is red on `start`)."""
 from __future__ import annotations
 
 import json
@@ -65,6 +66,28 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
     if locked := report.get("locked"):
         changed = _git(repo, "log", "--name-only", "-z", "--format=", f"{context['start']}..{branch}", end="\0")
         errors += [f"locked path {path} is not in the role's commits" for path in locked if path not in changed]
+    return errors
+
+
+def _unchanged_errors(report: dict, context: dict) -> list[str]:
+    """A DONE fixer with no commit (issue #123): the branch did not move, no change is left uncommitted, the gate of
+    the start is green, and a concern names each finding, with why it needs no change."""
+    if "fix" not in context or report["commits"] or report["status"] not in ("DONE", "DONE_WITH_CONCERNS"):
+        return []
+    return _moved_errors(context) + [
+        f"no commit, and no concern names the finding {title}: give each finding a concern that says why it needs no "
+        "change" for title in context["fix"] if not any(title in concern for concern in report["concerns"])]
+
+
+def _moved_errors(context: dict) -> list[str]:
+    """What a report with no commit leaves out: a commit on the branch, a change in the tree, a red gate."""
+    repo, branch = context["repo"], context["branch"]
+    errors = [f"commit {sha[:7]} is on {branch} and not in `commits`: list each commit you made"
+              for sha in _git(repo, "rev-list", f"{context['start']}..{branch}")]
+    if _git(repo, "status", "--porcelain", "--untracked-files=no"):
+        errors.append("no commit, and the tree has uncommitted changes: commit the fix and list the commit")
+    if context.get("red"):
+        errors.append(f"no commit, and the gate is red on {context['start'][:7]}: a fix of a red gate is a commit")
     return errors
 
 
@@ -134,5 +157,6 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     if "locked" in report:
         report["locked"] = locked_files(report["locked"])
-    return (_commit_errors(report, context) + _owner_errors(report, context) + _correction_errors(report, context)
-            + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context))
+    return (_commit_errors(report, context) + _owner_errors(report, context) + _unchanged_errors(report, context)
+            + _correction_errors(report, context) + _merged_errors(report, context) + _proof_errors(report, context)
+            + _locked_errors(report, context))

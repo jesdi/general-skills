@@ -134,6 +134,26 @@ def test_implementer_without_a_new_commit_is_a_violation(world):
     assert check("implementer", implementer(shas), start=shas["impl"])  # its only commit is not new
 
 
+def test_a_fixer_with_nothing_to_change_reports_no_commit_and_a_reason_per_finding(world):
+    """Issue 123: a fixer whose findings need no change has a report the driver accepts: no commit, a concern each."""
+    shas, check, tmp = world
+    fixer = lambda **changes: implementer(shas, **{"commits": [], "ticket": "01", **changes})
+    fix = {"start": shas["impl"], "fix": ["STUCK", "LOOSE"]}
+    reasons = ["STUCK: the correction at abc1234 resolved it", "LOOSE: the code already handles it"]
+    assert check("fixer", fixer(status="DONE_WITH_CONCERNS", concerns=reasons), **fix) == []
+    assert check("fixer", fixer(concerns=reasons[:1]), **fix) == [
+        "no commit, and no concern names the finding LOOSE: give each finding a concern that says why it needs no change"]
+    assert check("fixer", fixer(concerns=reasons), **fix, red=True) == [
+        f"no commit, and the gate is red on {shas['impl'][:7]}: a fix of a red gate is a commit"]
+    # A commit that predates the fixer is still refused, and a commit it made is in `commits`.
+    assert check("fixer", fixer(commits=[shas["impl"]], concerns=reasons), **fix)
+    assert check("fixer", fixer(concerns=reasons), **{**fix, "start": shas["tests"]}) == [
+        f"commit {shas['impl'][:7]} is on ticket/01 and not in `commits`: list each commit you made"]
+    (tmp / "slot" / "demo/export.py").write_text("changed\n")
+    assert check("fixer", fixer(concerns=reasons), **fix) == [
+        "no commit, and the tree has uncommitted changes: commit the fix and list the commit"]
+
+
 def test_locked_path_absent_from_the_commit_is_a_violation(world):
     shas, check, _ = world
     assert check("test-writer", writer(shas), start=shas["base"]) == []
