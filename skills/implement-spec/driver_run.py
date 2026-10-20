@@ -193,19 +193,35 @@ class Run:
         tickets = self.state.read()["tickets"]
         paths = (driver_review.restore_locked(slot, tickets[number])
                  + driver_merge.restore(slot, self.tip(), driver_merge.protected(tickets, number)))
-        # A path whose change was never committed is back at HEAD already, and `git commit -- <path>` refuses it.
-        changed = names(git(slot, "diff", "--name-only", "-z", "HEAD", "--", *paths).stdout) if paths else []
-        if changed:
-            words = "implement-spec: restore the locked files before the correction"
-            made = subprocess.run(["git", "-C", slot, "commit", "-q", "--no-verify", "-m", words, "--", *changed],
-                                  capture_output=True, text=True, env={**os.environ, **driver_merge.identity("HEAD", slot)})
-            if made.returncode:
-                raise Blocked(f"the driver cannot commit the restored locked files: {made.stderr.strip()}")
-            self.state.ticket(number, tip=driver_slots.head(slot))
+        self._commit_restored(number, slot, paths, "implement-spec: restore the locked files before the correction")
         for path in paths:
             ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
                    "a commit, so the correction starts from the locked version.")
         return paths
+
+    def restore_merged_files(self, number: str, slot: str, paths: list[str]) -> list[str]:
+        """Before a landing, by a `restore` ruling: put each of `paths` that is a locked file of a merged ticket and
+        that the ticket changed back to the version of the PR branch, in one commit of the driver. Returns those."""
+        protected = driver_merge.protected(self.state.read()["tickets"], number)
+        restored = driver_merge.restore(slot, self.tip(), [path for path in paths if path in protected])
+        self._commit_restored(number, slot, restored,
+                              "implement-spec: restore the locked files of merged tickets before the landing")
+        for path in restored:
+            ledger(f"Ticket {number}: by the ruling (restore), the driver put back {path}, a locked file of a merged "
+                   "ticket, at the version of the PR branch in a commit before the landing.")
+        return restored
+
+    def _commit_restored(self, number: str, slot: str, paths: list[str], words: str) -> None:
+        """Commit the restored `paths` in the slot as a commit of the driver, and make it the ticket tip."""
+        # A path whose change was never committed is back at HEAD already, and `git commit -- <path>` refuses it.
+        changed = names(git(slot, "diff", "--name-only", "-z", "HEAD", "--", *paths).stdout) if paths else []
+        if not changed:
+            return
+        made = subprocess.run(["git", "-C", slot, "commit", "-q", "--no-verify", "-m", words, "--", *changed],
+                              capture_output=True, text=True, env={**os.environ, **driver_merge.identity("HEAD", slot)})
+        if made.returncode:
+            raise Blocked(f"the driver cannot commit the restored locked files: {made.stderr.strip()}")
+        self.state.ticket(number, tip=driver_slots.head(slot))
 
 
 def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: tuple[Path, bytes],

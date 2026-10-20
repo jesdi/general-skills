@@ -121,6 +121,24 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "merged-locked-file": Kind(
+        True,
+        "Ticket {ticket}: the landing would change the locked file of a merged ticket: {subject}",
+        "The landing check found that ticket {ticket} changes this locked file of a merged ticket, so the PR branch "
+        "did not move. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "restore",
+        {"restore": Option(
+            "The driver puts the file back to the version of the PR branch in a commit of its own on the ticket "
+            "branch, then the landing runs again with its gate. A red gate takes the commit back and asks again.",
+            "Ruling: {ticket} lands with {subject} put back to the version of the PR branch (restore).",
+            {"phase": "merge"}),
+         "adopt": Option(
+            "The ticket locks the file, so its change lands: the merged ticket's tests in it become the ticket's own. "
+            "The landing runs again with its gate. A red gate asks again.",
+            "Ruling: {ticket} locks {subject} and lands its change to it (adopt).", {"phase": "merge"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,
@@ -149,6 +167,11 @@ def corrections(questions: list[dict], ticket: str) -> tuple[int, bool]:
     return sum("correct-again" in answers for answers in stops.values()), {"accept"} in stops.values()
 
 
+def ruled(questions: list[dict], ticket: str, kind: str) -> dict[str, str]:
+    """subject -> the last answer to the questions of `kind` on `ticket`."""
+    return {q["subject"]: q["answer"] for q in questions if (q["ticket"], q["kind"]) == (ticket, kind) and q["answer"]}
+
+
 def accepted(questions: list[dict], ticket: str, kind: str) -> list[str]:
     """The subjects of the questions of `kind` on `ticket` that the operator answered `accept`."""
     return [q["subject"] for q in questions if (q["ticket"], q["kind"], q["answer"]) == (ticket, kind, "accept")]
@@ -170,6 +193,11 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
     options, recommended = made.options, made.recommended
     if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
         options, recommended = {name: options[name] for name in ("accept", "redesign")}, "accept"
+    if kind == "merged-locked-file":
+        # The file is asked again only when an answer turned the merge gate red: that answer is not offered again.
+        tried = {q["answer"] for q in asked if (q["ticket"], q["kind"], q["subject"]) == (ticket, kind, subject)}
+        options = {name: option for name, option in options.items() if name == "redesign" or name not in tried}
+        recommended = recommended if recommended in options else next(iter(options))
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": recommended,
             "options": [{"id": name, "description": option.description} for name, option in options.items()],

@@ -42,7 +42,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - **A check before the first agent returns a list of errors**, so the operator sees all of them at one time
   (exit 3). Examples: `precondition_errors`, `driver_tickets.parse`, `driver_report.validate`.
 - **The modules that do not know about the run return a result, not `Blocked`.** Some return `""` or the reason
-  as a string (`driver_merge.refused`, `driver_merge.land`); the deciding module raises.
+  as a string (`driver_merge.land`), or what they found (`driver_merge.refused`); the deciding module raises.
 - A slot is a worktree. Slot 1 is the PR worktree; the others are in `.agent/worktrees/`.
 - A number of a ticket is a string (`"03"`). `FINAL` is used in its place for the end of run.
 
@@ -80,6 +80,10 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   a ticket lands (`driver_merge.refused`): the tree that lands must have each of them as the PR tip has it. A
   ticket's test-writer may change one only when it lists it. So a review finding on such a file goes to a correction
   too: a fixer's change there is put back, and the ticket would loop until BLOCKED (issue #116).
+- A refused landing asks a `merged-locked-file` question. `driver._rulings` applies its answers at the next landing:
+  `restore` is a commit of the driver (`Run.restore_merged_files`), and `adopt` adds the file to the ticket's
+  `locked` only when the ticket lands. A red merge gate after a ruling takes the restore commit back and asks again
+  (`driver._red_landing`); `driver_decisions.question` leaves out the option that was tried.
 - A conflict resolution, of a merge or of the rebase, may not change a locked file.
 
 ### The PR branch
