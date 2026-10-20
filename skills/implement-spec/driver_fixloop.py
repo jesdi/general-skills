@@ -218,7 +218,8 @@ def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
 def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
     state = job.run.state.read()
-    to_correct, to_fix = driver_review.route(found, state["tickets"][job.ticket.number]["locked"])
+    to_correct, to_fix = driver_review.route(found, state["tickets"][job.ticket.number]["locked"],
+                                             driver_merge.protected(state["tickets"], job.ticket.number))
     to_correct = _unaccepted(job, state, to_correct)
     if job.round == ROUNDS:
         # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
