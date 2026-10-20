@@ -83,7 +83,7 @@ def test_a_risky_ticket_gets_both_agents_and_one_merged_findings_file(tmp_path):
         again = rig.prompt(f"{role}-1", "02")
         assert "This is the re-review after fix round 1." in again and "findings-0.json" in again
         assert again.rstrip().endswith("one ref store.") and "re-review" not in rig.prompt(f"{role}-0", "02")
-    assert str(driver_review.CORRECTNESS) in rig.prompt("correctness-0", "02")
+    assert driver_review.CORRECTNESS.read_text() in rig.prompt("correctness-0", "02")
     assert "correctness.md" not in rig.prompt("reviewer-0", "02") and not rig.led("folded")
     assert json.loads((rig.folder("02") / "findings-1.json").read_text()) == []
 
@@ -929,6 +929,76 @@ def test_the_correctness_pass_reads_the_untracked_inputs_of_the_driver_from_the_
     tracked = subprocess.run(["git", "-C", str(rig.repo), "ls-files", *inputs], capture_output=True, text=True).stdout
     assert tracked == ""
     assert "read the spec, the ticket and the findings file from the working tree" in again
+
+
+def test_the_correctness_prompt_carries_the_checks_of_a_review_diff_in_a_gitignored_directory(tmp_path, monkeypatch):
+    """Issue #120: a project-local install is ignored, and the pass may read neither the tree nor git for it."""
+    rig = Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]}, ignore=".my-skills/")
+    checks = rig.repo / ".my-skills/review-diff/correctness.md"
+    checks.parent.mkdir(parents=True)
+    checks.write_text("# Correctness reviewer\n\n| Check | Flag |\n|---|---|\n| Ledger | A row booked twice. |\n")
+    monkeypatch.setattr(driver_review, "CORRECTNESS", checks)
+    rig.run(plan())
+    assert rig.code == 0, rig.ledger()
+    ignored = subprocess.run(["git", "-C", str(rig.repo), "check-ignore", "-q", str(checks)])
+    assert ignored.returncode == 0
+    assert "| Ledger | A row booked twice. |" in rig.prompt("correctness-0", "02")
+
+
+STOPPED = "02-review-stopped-1"
+
+
+def stuck(role, status="NEEDS_CONTEXT"):
+    """A review step whose report stops: BLOCKED or NEEDS_CONTEXT, with no finding."""
+    step = review("02") if role == "reviewer" else correct()
+    step["report"] = {**step["report"], "status": status, "concerns": ["the checks file is absent"]}
+    return step
+
+
+def risky(tmp_path):
+    return Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
+
+
+@pytest.mark.parametrize("role", ["reviewer", "correctness"])
+def test_a_review_that_reports_needs_context_asks_the_operator_and_retry_resumes_it(tmp_path, role):
+    """Issue #120: a stopped reviewer or correctness pass was a dead end with no question."""
+    steps = plan(**{f"02/{role}": [stuck(role)]})
+    rig = risky(tmp_path)
+    rig.run(steps)
+    assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
+    assert rig.led(f"BLOCKED at the review: the {role}: the {role} reported NEEDS_CONTEXT: the checks file is absent.")
+    (question,) = rig.state()["run"]["questions"]
+    assert (question["id"], question["recommended"]) == (STOPPED, "retry")
+    assert [o["id"] for o in question["options"]] == ["retry", "accept", "redesign"]
+    assert question["evidence"][0] == f".agent/implement/02/{role}-0.json"
+    rig.run(steps, "--answer", f"{STOPPED}=retry")
+    assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
+    assert len(rig.calls("02", role)) == 2
+    assert rig.led(f"Ruling: 02 review runs again (retry): the {role} reported NEEDS_CONTEXT")
+
+
+def test_an_accepted_review_stop_closes_the_review_with_the_other_reports(tmp_path):
+    steps = plan(**{"02/correctness": [stuck("correctness", "BLOCKED")] * 2,
+                    "02/reviewer": [review("02"), review("02", [finding("R-IMPORTANT")]), review("02")],
+                    "02/fixer": [fix("02", 1)]})
+    rig = risky(tmp_path)
+    rig.run(steps)
+    assert rig.code == 2, rig.ledger()
+    rig.run(steps, "--answer", f"{STOPPED}=accept")
+    assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
+    # The reviewer's finding still gets its fix round; the stopped pass does not stop the ticket again.
+    assert rig.state()["tickets"]["02"]["round"] == 1 and len(rig.calls("02", "correctness")) == 3
+    assert rig.led("the correctness reported BLOCKED: the checks file is absent", "goes on with the other reports")
+
+
+def test_a_review_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
+    steps = plan(**{"02/correctness": [stuck("correctness")]})
+    rig = risky(tmp_path)
+    rig.run(steps)
+    assert rig.code == 2, rig.ledger()
+    rig.run(steps, "--answer", f"{STOPPED}=redesign")
+    assert rig.code == 1 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
+    assert len(rig.calls("02", "correctness")) == 1
 
 
 @pytest.mark.parametrize("role", ["reviewer", "correctness"])
