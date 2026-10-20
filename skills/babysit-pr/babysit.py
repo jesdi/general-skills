@@ -660,24 +660,16 @@ def load_merge_risk(base=None):
 
 def judge_input(mr, body, base, head):
     """Counted-file diffs, other files by name and count, the block, the categories. Nothing else."""
-    base = mr.git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
-    policy, _ = mr.load_policy(base)
-    paths = {c: list(g) for c, g in mr.DEFAULT_PATHS.items()}
-    for c, globs in policy["paths"].items():
-        paths[c] = paths.get(c, []) + globs
-    diff_base = mr.git("merge-base", base, head).stdout.strip()
-    numstat = mr.git("diff", "-z", "--numstat", "--no-renames", "--no-textconv",
-                     "--no-ext-diff", diff_base, head).stdout
-    cats, diffs, others = set(), [], []
-    for line in filter(None, numstat.split("\0")):
-        added, removed, path = line.split("\t", 2)
-        fc = mr.file_categories(path, paths)
-        cats |= fc
-        if "docs" in fc or mr.is_generated(path, diff_base, head):
-            others.append(f"{path}: {0 if added == '-' else int(added) + int(removed)} lines")
+    base, policy, _ = mr.base_policy(base)
+    diff_base, files = mr.classify_diff(base, head, policy)
+    diffs, others = [], []
+    for path, _, lines, counted in files:
+        if counted:
+            diffs.append(git("diff", "--no-renames", "--no-textconv", "--no-ext-diff",
+                             diff_base, head, "--", f":(literal){path}").stdout)
         else:
-            diffs.append(mr.git("diff", "--no-renames", "--no-textconv", "--no-ext-diff",
-                                diff_base, head, "--", f":(literal){path}").stdout)
+            others.append(f"{path}: {lines or 0} lines")
+    cats = mr.diff_stats(files)[0]
     block = mr.FENCE.search(body)
     return (f"## Diff of counted files\n\n{''.join(diffs)}\n## Other files\n\n"
             + "\n".join(others) + f"\n\n## Merge-risk block\n\n{block[0] if block else '(none)'}\n"
