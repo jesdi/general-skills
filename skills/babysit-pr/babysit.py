@@ -292,6 +292,10 @@ def first_seen(pr, key, now, since=None):
 
 
 def checks_cmd(repo, number, wait):
+    print(ci_state(repo, number, wait))
+
+
+def ci_state(repo, number, wait):
     pr = Pr(repo, number)
     sha = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))["head"]["sha"]
     out = gh("api", "--paginate", f"{pr.repo}/commits/{sha}/check-runs", "--jq", ".check_runs[] | tojson")
@@ -310,18 +314,18 @@ def checks_cmd(repo, number, wait):
     pending_runs = [r for r in runs if r["status"] != "completed"]
     pending_statuses = [s for s in latest.values() if s["state"] == "pending"]
     if not runs and not latest:
-        print("no checks")
+        return "no checks"
     elif red:
-        print("red")
+        return "red"
     elif pending_runs or pending_statuses:
         # Observe every pending item, even when an earlier one is already stalled.
         times = [pending_since(pr, f"{repo}#{sha}#run:{r.get('id', r['name'])}",
                                min(filter(None, (r.get("started_at"), r.get("created_at"))), default=None), now) for r in pending_runs]
         times += [pending_since(pr, f"{repo}#{sha}#status:{s['context']}",
                                 s.get("created_at"), now) for s in pending_statuses]
-        print("CI stalled" if now - min(times) >= timedelta(minutes=wait) else "pending")
+        return "CI stalled" if now - min(times) >= timedelta(minutes=wait) else "pending"
     else:
-        print("green")
+        return "green"
 
 
 def reset_terminal_statuses(pr, prefix, statuses):
@@ -385,6 +389,19 @@ def lease(verb, repo, number, session, host):
         return lease_locked(verb, repo, number, session, host)
 
 
+def release(pr, session):
+    """End `session`'s leases; drop `babysitting` unless another session holds the PR."""
+    comments = pr.comments()
+    found = leases(comments, pr.user())
+    top = holder(found, pr.now())
+    # Finish label cleanup while our lease still prevents a resume from winning.
+    if not top or top[1] == session:
+        pr.label(remove=["babysitting"])
+    for l in found:
+        if l[1] == session:
+            end(pr, l[4])
+
+
 def lease_locked(verb, repo, number, session, host):
     require_pr_risk(repo, number)
     pr = Pr(repo, number)
@@ -401,11 +418,7 @@ def lease_locked(verb, repo, number, session, host):
     elif verb == "renew":
         return renew(repo, number, session)
     elif verb == "release":
-        for l in found:
-            if l[1] == session:
-                end(pr, l[4])
-        if not top or mine:
-            pr.label(remove=["babysitting"])
+        release(pr, session)
     else:  # acquire
         if top and not mine:
             fail(f"already babysat by {top[2]}")
@@ -697,6 +710,121 @@ def update_plan(base):
     return {**out, "plan": "rebase-with-conflict", "files": files, "push": force}
 
 
+def pr_commits(repo, number):
+    return [json.loads(l) for l in gh("api", "--paginate", f"repos/{repo}/pulls/{number}/commits",
+                                      "--jq", ".[] | tojson").splitlines() if l]
+
+
+def merge_method(repo, number, policy=None):
+    """Policy wins; a branch with a merge commit needs "merge"; else rebase when the repo allows it."""
+    configured = (json.loads(Path(policy).read_text()) if policy else {}).get("mergeMethod")
+    if configured:
+        return configured
+    if any(len(c["parents"]) > 1 for c in pr_commits(repo, number)):
+        return "merge"
+    allowed = json.loads(gh("api", f"repos/{repo}"))
+    flags = {"rebase": "allow_rebase_merge", "merge": "allow_merge_commit", "squash": "allow_squash_merge"}
+    return next((m for m, f in flags.items() if allowed.get(f)), "rebase")
+
+
+def squash_message(title, number, body):
+    summary = re.search(r"^## Summary\n+(.*?)(?=^## |\Z)", body, re.M | re.S)
+    field = lambda k: (re.search(rf"^{k}: (.*)$", body, re.M) or [0, "?"])[1].strip()
+    digest = (f"merge-risk v1: {field('door')}, {field('blast_radius')}, touches {field('touches')}, "
+              f"rollback {field('rollback')}")
+    return f"{title} (#{number})", (summary[1].strip() + "\n\n" if summary else "") + digest
+
+
+def terminal_owner(pr, session, action):
+    """Fence terminal writes against the current lease; never adopt its session."""
+    top = holder(leases(pr.comments(), pr.user()), pr.now())
+    if top and not session:
+        fail(f"{action} needs --session while a lease is active (reuse it on retries)")
+    if top and top[1] != session:
+        fail(f"{session} is stale: {top[1]} resumed the PR")
+
+
+def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="", session=None, op=None):
+    pr = Pr(repo, number)
+    op = op or hashlib.sha256(json.dumps([reason, ci, rounds, gate, judge_line, fix_log]).encode()).hexdigest()[:12]
+    tag = f"<!-- babysit-pr handoff: {op} -->"
+    user, comments = pr.user(), pr.comments()
+    mine = [c for c in comments if c["user"]["login"] == user]
+    terminal_owner(pr, session, "handoff")
+    last = max((c["id"] for c in mine if HANDOFF.match(c["body"])), default=None)
+    # A retry after a partial failure reuses its comment: a second one would move
+    # the owner-comment boundary past instructions given in between. A newer lease
+    # means the PR was resumed, so this is a new handoff.
+    reuse = last is not None and any(c["id"] == last and tag in c["body"] for c in mine) \
+        and not any(LEASE.match(c["body"]) and c["id"] > last for c in mine)
+    status = f"CI {ci}" + (f" · {rounds} fix rounds" if rounds is not None else "")
+    if not reuse:
+        pr.post(f"## 🧑 Needs human: {reason}\n\n{status}\n{gate}\n{judge_line}\n{extra}\n"
+                f"### Fix log\n\n{fix_log}\n\nResume: `/babysit-pr https://github.com/{repo}/pull/{number}`\n{tag}\n")
+    gh("api", "-X", "POST", f"{pr.repo}/labels", "-f", "name=needs-human", check=False)  # 422 when it exists
+    terminal_owner(pr, session, "handoff")
+    pr.label(add=["needs-human"], remove=["babysitting"])
+    if session:
+        release(pr, session)
+
+
+def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None):
+    pr = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    gate = "gate: passed"
+    judge_line = f"judge: {judge_label}"
+    op = hashlib.sha256(f"{sha} {judge_label} {approved}".encode()).hexdigest()[:12]
+
+    def stop(reason, extra=""):
+        handoff(repo, number, reason, "green", None, gate, judge_line, "(none)", extra, session, f"{op}-{reason}")
+        fail(reason)
+
+    if pr["head"]["sha"] != sha:
+        fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
+    if approved is None:
+        if judge_label not in ("agree", "same-model agree"):
+            stop(f"judge {judge_label}")
+    else:
+        judge_line = f"owner approved {approved}"
+        commits = pr_commits(repo, number)
+        oids = [c["sha"] for c in commits]
+        hits = {o for o in oids if o.startswith(approved)} if re.fullmatch(r"[0-9a-f]{7,40}", approved) else set()
+        full = hits.pop() if len(hits) == 1 else None  # an ambiguous or short prefix approves nothing
+        if full is None and not re.fullmatch(r"[0-9a-f]{7,40}", approved):
+            stop("approval must name a commit: @babysitter merge <sha>")
+        if full != sha:
+            extra = ""
+            if re.fullmatch(r"[0-9a-f]{7,40}", approved):
+                # A rebase rewrites the sha: the link still shows the change, but there is no list.
+                extra = f"\nNew commits since the approval: https://github.com/{repo}/compare/{full or approved}...{sha}\n"
+                if full:
+                    who = lambda c: (c["author"] or {}).get("login") or c["commit"].get("author", {}).get("name", "unknown")
+                    extra += "\n".join(f"- `{c['sha']}` {c['commit']['message'].splitlines()[0]} ({who(c)})"
+                                        for c in commits[oids.index(full) + 1:]) + "\n"
+            stop(f"approval was for {approved}", extra)
+    state = ci_state(repo, number, 0)
+    if state != "green":
+        stop(f"CI is {state} at merge time")
+    method = merge_method(repo, number, policy)
+    cmd = ["pr", "merge", str(number), "--repo", repo, f"--{method}", "--match-head-commit", sha]
+    if method == "squash":
+        subject, text = squash_message(pr["title"], number, Path(body_file).read_text())
+        cmd += ["--subject", subject, "--body", text]
+    terminal_owner(Pr(repo, number), session, "merge")
+    if session:
+        own_lease(repo, number, session)
+    p = subprocess.run(["gh", *cmd], text=True, capture_output=True)
+    if p.returncode:
+        err = p.stderr.strip()
+        if "head branch was modified" in err.lower():
+            fail(f"head moved since the gate saw {sha}: gate again")
+        stop(f"merge blocked: {'approval required' if 'approv' in err.lower() else err}")
+    pr = Pr(repo, number)
+    pr.post("🤖 Merged by babysit-pr: gate passed, " + (
+        f"judge {judge_label}" if approved is None else f"owner approved {approved}"))
+    if session:
+        release(pr, session)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -724,6 +852,23 @@ def main():
     jp.add_argument("--agent", choices=["claude-code", "codex"], required=True)
     up = sub.add_parser("update-plan")
     up.add_argument("--base", required=True)
+    mp = sub.add_parser("merge-method")
+    mg = sub.add_parser("merge")
+    hp = sub.add_parser("handoff")
+    for p in (mp, mg, hp):
+        for x in ("repo", "pr"):
+            p.add_argument(f"--{x}", required=True)
+    for p in (mp, mg):
+        p.add_argument("--policy")
+    mg.add_argument("--sha", required=True)
+    mg.add_argument("--body", required=True)
+    mg.add_argument("--judge")
+    mg.add_argument("--approved-sha")
+    for p in (mg, hp):
+        p.add_argument("--session", help="release this session's lease")
+    for x in ("reason", "ci", "gate", "judge", "fix-log"):
+        hp.add_argument(f"--{x}", required=True)
+    hp.add_argument("--rounds", type=int, required=True)
     a = ap.parse_args()
     if a.cmd == "owner-comments":
         print(json.dumps(owner_comments(a.repo, a.pr)))
@@ -735,6 +880,14 @@ def main():
         round_cmd(a.verb, a.repo, a.pr, a.session, a.check, a.error, a.op)
     elif a.cmd == "judge":
         print(json.dumps(judge(a.base, a.head, a.body, a.agent)))
+    elif a.cmd == "merge-method":
+        print(json.dumps({"method": merge_method(a.repo, a.pr, a.policy)}))
+    elif a.cmd == "merge":
+        if not (a.judge or a.approved_sha):
+            ap.error("merge needs --judge or --approved-sha")
+        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session)
+    elif a.cmd == "handoff":
+        handoff(a.repo, a.pr, a.reason, a.ci, a.rounds, a.gate, a.judge, Path(a.fix_log).read_text(), session=a.session)
     elif a.cmd == "update-plan":
         print(json.dumps(update_plan(a.base)))
     else:

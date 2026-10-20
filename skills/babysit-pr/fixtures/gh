@@ -6,7 +6,9 @@ State is the JSON file $GH_FAKE_STATE:
   user       login of `gh api user`
   next_id    id of the next comment posted
   comments   [{id, user: {login}, body, created_at, updated_at}]
-  labels     [name]
+  labels     [name] on the PR
+  repo_labels  [name] labels that exist in the repository (optional; when set, assigning a label
+             that is not in it fails 422 like GitHub, and `POST repos/O/R/labels -f name=X` creates it)
   head_sha   head commit of every PR (default "head1")
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
   statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
@@ -17,6 +19,13 @@ State is the JSON file $GH_FAKE_STATE:
   Comments may carry `editor` ({login}) and `last_edited_at` (GraphQL `editor` / `lastEditedAt`).
   page_size  GraphQL connections return this many nodes per page (cursor = offset); default all
   threads may carry `more_comments` (true: the thread has comments beyond the page read)
+  title, body  PR title and body (default "" )
+  repo_settings  {allow_rebase_merge, allow_merge_commit, allow_squash_merge} served by `gh api repos/O/R`
+  merge_error  when set, `gh pr merge` fails printing it (e.g. a required approval)
+  merges     recorded successful `gh pr merge` calls: {number, method, match, subject, body, auto}
+  Commits may carry `message`, `author` (login) and `parents` (list of shas; 2 = a merge commit).
+  `gh pr merge N --rebase|--merge|--squash --match-head-commit SHA [--subject S] [--body B]` fails
+  when SHA is not head_sha, like GitHub does.
   hidden_until_post  comment ids missing from comment lists until the first comment is posted
              (a race: the other session posts after our first read)
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
@@ -89,6 +98,10 @@ def labels_obj():
 
 
 def add_labels(names):
+    if "repo_labels" in st:
+        missing = [n for n in names if n not in st["repo_labels"]]
+        if missing:
+            die(f"HTTP 422: label does not exist in the repository: {missing}", True)
     for n in names:
         if n not in st["labels"]:
             st["labels"].append(n)
@@ -138,7 +151,12 @@ def api(args):
         log(False)
         return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
                      "user": {"login": st["user"]},
+                     "title": st.get("title", ""), "body": st.get("body", ""),
                      "head": {"sha": st.get("head_sha", "head1")}}, jq, include)
+    if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
+        log(False)
+        return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
+                                             "allow_squash_merge": False}), jq, include)
     if re.fullmatch(rf"pulls/{n}/reviews", path) and method == "GET":
         log(False)
         return emit([{"id": r["id"], "user": r["user"], "state": r["state"], "body": r.get("body", ""),
@@ -147,7 +165,9 @@ def api(args):
         log(False); return emit([], jq, include)
     if re.fullmatch(rf"pulls/{n}/commits", path) and method == "GET":
         log(False)
-        return emit([{"sha": c["sha"], "commit": {"committer": {"date": c["date"]}}}
+        return emit([{"sha": c["sha"], "parents": [{"sha": x} for x in c.get("parents", ["p0"])],
+                      "author": {"login": c.get("author", "jesdi")},
+                      "commit": {"message": c.get("message", ""), "committer": {"date": c["date"]}}}
                      for c in st.get("commits", [])], jq, include)
     if path == "graphql":
         log(False)
@@ -205,6 +225,12 @@ def api(args):
             save(); return emit(c, jq, include)
         if method == "DELETE":
             log(True); st["comments"].remove(c); save(); return
+    if path == "labels" and method == "POST":
+        name = fields.get("name", "")
+        if name in st.get("repo_labels", []):
+            die("HTTP 422: already_exists", True)
+        log(True); st.setdefault("repo_labels", []).append(name); save()
+        return emit({"name": name}, jq, include)
     if re.fullmatch(rf"issues/{n}/labels", path):
         if method == "GET":
             log(False); return emit(labels_obj(), jq, include)
@@ -240,7 +266,23 @@ def pr_like(args):
         comments = [{"id": str(c["id"]), "body": c["body"], "author": c["user"],
                      "createdAt": c["created_at"], "updatedAt": c["updated_at"]} for c in visible()]
         log(False)
-        return emit({"labels": labels_obj(), "comments": comments, "state": "OPEN"}, jq)
+        return emit({"labels": labels_obj(), "comments": comments, "state": "OPEN",
+                     "title": st.get("title", ""), "body": st.get("body", ""),
+                     "headRefOid": st.get("head_sha", "head1")}, jq)
+    if verb == "merge":
+        match = (flag_values(rest, "--match-head-commit") or [None])[0]
+        method = next((m for m in ("rebase", "merge", "squash") if f"--{m}" in rest), None)
+        if st.get("merge_error"):
+            log(True); print(st["merge_error"], file=sys.stderr); sys.exit(1)
+        if match != st.get("head_sha", "head1"):
+            log(True); print("Head branch was modified. Review and try the merge again.", file=sys.stderr)
+            sys.exit(1)
+        log(True)
+        st.setdefault("merges", []).append({
+            "number": rest[0], "method": method, "match": match, "auto": "--auto" in rest,
+            "subject": (flag_values(rest, "--subject", "-t") or [None])[0],
+            "body": (flag_values(rest, "--body", "-b") or [None])[0]})
+        save(); return
     if verb == "comment":
         body = (flag_values(rest, "--body", "-b") or [""])[0]
         log(True); new_comment(body); save(); return
