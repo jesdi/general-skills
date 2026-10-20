@@ -13,8 +13,8 @@ Interface choices (ticket 05):
 - question ids are `<NN>-locked-test-<n>` with n counting per run (the first is 1, a second stop on the ticket is 2),
   and `<NN>-finding-<n>` for an open finding after round 4. Options: `overrule-test` / `overrule-implementer`
   (recommended: overrule-implementer), and `accept` / `split` / `redesign`.
-- an implementer is BLOCKED with a stop only when a `concerns` entry starts with "locked test contradicts spec:";
-  any other BLOCKED report is an ordinary BLOCKED ticket (exit 1, no decisions file).
+- an implementer is BLOCKED with a `locked-test` stop only when a `concerns` entry starts with "locked test
+  contradicts spec:"; any other BLOCKED report is an `implementer-stopped` stop (issue #123).
 - the answers file is `.agent/implement-answers.json` in the schema.md shape: `v`, `stage: "implement"`, `submitted`
   (`"changes"`), `revision`, `answers`. A rerun applies it only with `submitted` set and `revision` equal to the current
   decisions revision; otherwise a ledger line says "ignored" (and "revision" for a stale file, the option id for an
@@ -193,11 +193,11 @@ def test_answer_for_an_unknown_question_id_exits_3_naming_it_before_any_agent(tm
     assert "no-such-question" in rig.out + rig.err and len(rig.calls()) == seen
 
 
-def test_a_blocked_report_that_is_not_a_contradicted_locked_test_is_not_a_stop(tmp_path):
+def test_a_blocked_report_that_is_not_a_contradicted_locked_test_is_an_implementer_stop(tmp_path):
     rig = Review(tmp_path)
     rig.run(steps(blocked("cannot reach the database")))
-    assert rig.code == 1, rig.output()
-    assert not (rig.repo / ".agent/implement/decisions.json").exists()
+    assert rig.code == 2, rig.output()
+    assert [q["id"] for q in decisions(rig)["questions"]] == ["01-implementer-stopped-1"]
     assert rig.state()["tickets"]["01"]["phase"] == "blocked"
 
 

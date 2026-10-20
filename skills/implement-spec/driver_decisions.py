@@ -91,6 +91,36 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "implementer-stopped": Kind(
+        True,
+        "Ticket {ticket}: the implementer stopped: {subject}",
+        "The implementer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, and no concern says that a locked test "
+        "contradicts the spec. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "retry",
+        {"retry": Option(
+            "The implementer runs again from the tip it left.",
+            "Ruling: {ticket} implementer runs again (retry): {subject}.", {"phase": "implement"}),
+         "accept-tip": Option(
+            "The implementer does not run again: the driver gates and reviews the tip it left, and the fix rounds "
+            "close what the review finds.",
+            "Ruling: {ticket} tip goes to the gate and the review as it is (accept-tip): {subject}.",
+            {"phase": "gate"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "fixer-stopped": Kind(
+        True,
+        "Ticket {ticket}: the fixer stopped: {subject}",
+        "The fixer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, and no concern says that a locked test "
+        "contradicts the spec. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "retry",
+        {"retry": Option(
+            "The round that stopped does not count: the driver gates and reviews the tip the fixer left, and a fixer "
+            "runs that round again on what the review finds.",
+            "Ruling: {ticket} fix round runs again (retry): {subject}.", {"phase": "review"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,

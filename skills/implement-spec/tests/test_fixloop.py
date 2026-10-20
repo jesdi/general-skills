@@ -727,13 +727,11 @@ def test_the_escalation_takes_the_next_entry_of_the_list():
     assert driver_fixloop.entry({"implementer": ["a@low"]}, 3) == "a@low"
 
 
-@pytest.mark.parametrize("step, error", [
-    ({}, "BLOCKED at fix round 1: report .agent/implement/01/fixer-1.json is not"),
-    ({"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["cannot"], "green": [], "ticket": "01"}},
-     "BLOCKED at fix round 1: the fixer reported BLOCKED: cannot.")])
-def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path, step, error):
-    rig = Inside(tmp_path).run(plan(**{"01/reviewer": [review("01", [STUCK])], "01/fixer": [step, step]}))
+def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path):
+    """A fixer that reports BLOCKED asks a `fixer-stopped` question: test_decisions covers it."""
+    rig = Inside(tmp_path).run(plan(**{"01/reviewer": [review("01", [STUCK])], "01/fixer": [{}, {}]}))
     entry = rig.state()["tickets"]["01"]
+    error = "BLOCKED at fix round 1: report .agent/implement/01/fixer-1.json is not"
     assert error in blocked(rig) and entry["round"] == 1 and entry["tip"] == rig.sha("01", "implementer")
 
 
