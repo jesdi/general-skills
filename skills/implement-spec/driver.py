@@ -120,7 +120,8 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
             report = run.agent(role, number, slot, values, notes=notes, check=check)
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":
-            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"]))
+            facts.update(driver_review.written(slot, entry, report["locked"], report.get("fixtures", []),
+                                                facts["tip"]))
             values["locked"] = " ".join(facts["locked"])
         run.state.ticket(number, phase=AFTER.get(role, "review"), note="", **facts)
         start, notes = facts["tip"], []

@@ -131,12 +131,19 @@ def _proof_errors(report: dict, context: dict) -> list[str]:
 
 
 def _locked_errors(report: dict, context: dict) -> list[str]:
-    """In a full review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`)."""
+    """In a full review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`).
+    `locked` names no fixture of the ticket: a fixture holds no test that a proof could name (#118)."""
     if not context.get("full") or "findings" not in report:
         return []
     tests = [proof["test"] for proof in report.get("mutations", [])]
     return [f"mutations: no mutation proof for the locked test file {path}" for path in context.get("locked", [])
             if not any(test.startswith(path) for test in tests)]
+
+
+def _fixture_errors(report: dict) -> list[str]:
+    """Each fixture of a test-writer report (a locked file that holds no test) is in its `locked`."""
+    return [f"fixtures: {path} is not in `locked`" for path in report.get("fixtures", [])
+            if path not in report.get("locked", [])]
 
 
 def locked_files(listed: list[str]) -> list[str]:
@@ -159,4 +166,4 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         report["locked"] = locked_files(report["locked"])
     return (_commit_errors(report, context) + _owner_errors(report, context) + _unchanged_errors(report, context)
             + _correction_errors(report, context) + _merged_errors(report, context) + _proof_errors(report, context)
-            + _locked_errors(report, context))
+            + _locked_errors(report, context) + _fixture_errors(report))

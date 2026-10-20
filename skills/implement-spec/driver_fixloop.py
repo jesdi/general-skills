@@ -43,9 +43,14 @@ class Job:
         findings = os.path.relpath(OUT / self.ticket.number / f"findings-{review}.json", self.slot)
         gate = os.path.relpath(driver_gate.record_path(OUT / self.ticket.number, self.tip), self.slot)
         return {**self.values, "start_sha": self.tip, "from_sha": self.previous, "round": str(self.round),
-                "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
+                "locked": " ".join(entry["locked"]), "locked_tests": " ".join(tested(entry)), "test_writer_sha": str(entry["test_writer_sha"] or ""),
                 "findings": findings, "gate_record": gate,
                 "proofs": " ".join(f"{file}:{line}" for file, line in sorted(self.again))}
+
+
+def tested(entry: dict) -> list[str]:
+    """The locked files of the ticket record that hold tests: each one needs a mutation proof in a full review."""
+    return [path for path in entry["locked"] if path not in entry["fixtures"]]
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
@@ -72,7 +77,8 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
     accepted = driver_decisions.accepted(job.run.state.read()["run"]["questions"], number, "review-stopped")
 
     def call(role: str, entry: str) -> dict:
-        # A full review (no fix range) must give a mutation proof for each locked test file; the prompt names them.
+        # A full review (no fix range) must give a mutation proof for each locked test file, not for a locked fixture
+        # (#118); the prompt names them.
         full = not job.previous and role == "reviewer"
         notes = ["rereview"] if job.previous else ["full-review"] if full else []
         notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
@@ -114,7 +120,7 @@ def _review(job: Job) -> list[dict]:
     if job.ticket.risk:
         cast.append(("correctness", driver_agents.correctness_entry(run.models)))
     reports = run.read_only(number, job.slot, job.values["branch"], job.tip,
-                            lambda: _run_reviewers(job, cast, state["locked"]))
+                            lambda: _run_reviewers(job, cast, tested(state)))
     for (role, _), report in zip(cast, reports):
         found += _log_findings(job, [{**finding, "source": role} for finding in report["findings"]])
         job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
@@ -154,7 +160,8 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
             raise
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
+    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"],
+                                                                   report.get("fixtures", []), job.tip))
     return _uncorrected(job, findings, report.get("not_addressed", []))
 
 

@@ -767,6 +767,27 @@ def test_a_full_review_after_a_correction_names_each_locked_file_that_needs_a_pr
     assert "In round 1" not in full and due not in again
 
 
+def test_a_full_review_needs_no_proof_for_a_locked_fixture_that_holds_no_test(tmp_path):
+    """Issue #118: a fake `gh` the test-writer locks holds no test, so no `<locked file>::<test name>` can name it."""
+    first = {**tw("01"), "files": {"tests/test_01.py": "def test_x():\n    assert 0\n", "tests/fakes/gh": "exit 0\n"}}
+    first["report"] = {**first["report"], "files": ["tests/test_01.py", "tests/fakes/gh"],
+                       "locked": ["tests/test_01.py", "tests/fakes/gh"], "fixtures": ["tests/fakes/gh"]}
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first], "01/reviewer": [review("01")]}))
+    assert rig.code == 0 and len(rig.calls("01", "reviewer")) == 1, rig.ledger()
+    assert rig.state()["tickets"]["01"]["fixtures"] == ["tests/fakes/gh"]
+    assert "for each of these locked test files: tests/test_01.py\n" in rig.calls("01", "reviewer")[0]["prompt"]
+
+
+def test_a_fixture_must_be_a_locked_file_and_a_correction_that_relists_it_decides_again(tmp_path):
+    report = dict(status="NEEDS_CONTEXT", commits=[], files=[], concerns=[], locked=["a"], red=[], fixtures=["gh"])
+    path = tmp_path / "test-writer-0.json"
+    path.write_text(json.dumps(report))
+    context = {"repo": ".", "branch": "HEAD", "start": "HEAD", "log": str(path)}
+    assert "fixtures: gh is not in `locked`" in driver_report.validate("test-writer", str(path), context)
+    entry = {"test_writer_sha": None, "locked": ["tests/a.py", "gh", "fake"], "held": {}, "fixtures": ["gh", "fake"]}
+    assert driver_review.written(".", entry, ["gh"], [], "tip")["fixtures"] == ["fake"]
+
+
 def test_the_locked_file_rule_is_for_the_first_review_only(tmp_path):
     report = dict(status="DONE", commits=[], files=[], concerns=[], findings=[], mutations=[])
     path = tmp_path / "reviewer-0.json"

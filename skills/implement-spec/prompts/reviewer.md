@@ -26,7 +26,7 @@ Write one JSON report at {report}. When your sandbox is read-only, give the JSON
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
     "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "file", "line", "title", "evidence", "kind"], "properties": {"severity": {"enum": ["critical", "important", "minor"]}, "file": {"type": "string"}, "line": {"type": "integer"}, "title": {"type": "string", "minLength": 1}, "evidence": {"type": "string", "minLength": 1}, "kind": {"enum": ["code", "fixture", "test"]}}}},
-    "mutations": {"description": "Required in a full review: one proof or more for each locked test file, with `test` as `<locked file>::<test name>`. A review scoped to a fix gives the proofs that it names.", "type": "array", "items": {"type": "object", "required": ["test", "file", "line", "red"], "properties": {"test": {"type": "string", "minLength": 1}, "file": {"type": "string", "minLength": 1}, "line": {"type": "integer"}, "red": {"type": "string", "minLength": 1}}}}
+    "mutations": {"description": "Required in a full review: one proof or more for each locked test file that the end of this prompt names (a locked fixture holds no test and needs none), with `test` as `<locked file>::<test name>`. A review scoped to a fix gives the proofs that it names.", "type": "array", "items": {"type": "object", "required": ["test", "file", "line", "red"], "properties": {"test": {"type": "string", "minLength": 1}, "file": {"type": "string", "minLength": 1}, "line": {"type": "integer"}, "red": {"type": "string", "minLength": 1}}}}
   }
 }
 ```

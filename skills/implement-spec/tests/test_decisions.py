@@ -293,15 +293,16 @@ def test_a_locked_file_keeps_its_old_reference_until_a_test_writer_lists_it(repo
     old = commit("b.py", "1\n")
     commit("b.py", "the implementer changed it\n")
     tip = commit("a.py", "the correction\n")
-    first = driver_review.written(".", {"test_writer_sha": None, "locked": [], "held": {}}, ["a.py", "b.py", "c.py"], old)
-    assert first == {"test_writer_sha": old, "locked": ["a.py", "b.py", "c.py"], "held": {}}
-    after = driver_review.written(".", first, ["a.py"], tip)
-    assert after == {"test_writer_sha": tip, "locked": ["a.py", "b.py", "c.py"], "held": {"b.py": old}}
+    first = driver_review.written(".", {"test_writer_sha": None, "locked": [], "held": {}, "fixtures": []},
+                                  ["a.py", "b.py", "c.py"], [], old)
+    assert first == {"test_writer_sha": old, "locked": ["a.py", "b.py", "c.py"], "held": {}, "fixtures": []}
+    after = driver_review.written(".", first, ["a.py"], [], tip)
+    assert after == {"test_writer_sha": tip, "locked": ["a.py", "b.py", "c.py"], "held": {"b.py": old}, "fixtures": []}
     (finding,) = driver_review.locked_findings(".", after)
     assert (finding["title"], finding["evidence"]) == ("locked file changed: b.py", f"git diff {old}..HEAD -- b.py")
-    assert driver_review.written(".", after, ["b.py"], tip)["held"] == {}, "the test-writer corrected it: a new reference"
+    assert driver_review.written(".", after, ["b.py"], [], tip)["held"] == {}, "the test-writer corrected it: a new reference"
     # A diff that git cannot make holds each other file, and then the check of the review fails in the open.
-    lost = driver_review.written(".", {**first, "test_writer_sha": "0" * 40}, ["a.py"], tip)
+    lost = driver_review.written(".", {**first, "test_writer_sha": "0" * 40}, ["a.py"], [], tip)
     assert lost["held"] == {"b.py": "0" * 40, "c.py": "0" * 40}
     assert [f["title"].split(":")[0] for f in driver_review.locked_findings(".", lost)] == ["locked file check failed"]
 
