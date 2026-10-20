@@ -5,10 +5,14 @@ Ticket: {ticket}
 Seam: {seam}
 Range: {pr_branch}...{branch}, with the ticket tip at {start_sha}
 Locked files: {locked}
-Checks: {correctness}
 
-Read the checks file and apply each of its checks to the diff of the range, with the Risk line of the ticket first: races, idempotency, time, authorization, persistence keys and identities, migrations, error paths.
-The output section of the checks file does not apply here: your findings go into the report.
+Apply each check of the review-diff checks below to the diff of the range, with the Risk line of the ticket first: races, idempotency, time, authorization, persistence keys and identities, migrations, error paths.
+The output section of the checks does not apply here: your findings go into the report.
+
+<checks>
+{correctness}
+</checks>
+
 Read file content from git at {start_sha} (`git diff`, `git show {start_sha}:<path>`), never from the working tree, and run no tests: another agent makes temporary edits in this worktree while you work.
 The one exception is the input of the driver, which git can lack because `.agent/` is ignored: read the spec, the ticket and the findings file from the working tree. The other agent does not edit them.
 Report only a defect that you can show with a concrete sequence of events. `mutations` is optional for this pass.

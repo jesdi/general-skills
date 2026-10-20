@@ -16,7 +16,7 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_slots
-from driver_run import OUT, Blocked, Run, during, ledger
+from driver_run import OUT, Blocked, Run, Stopped, during, ledger
 from driver_tickets import Ticket
 
 ROUNDS = 4
@@ -62,9 +62,13 @@ def _log_findings(job: Job, findings: list[dict]) -> list[dict]:
 
 
 def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> list[dict]:
-    """Run the (role, model entry) pairs of `cast` at the same time in the one slot. Returns their reports."""
+    """Run the (role, model entry) pairs of `cast` at the same time in the one slot. Returns their reports.
+    A role that stops (BLOCKED, NEEDS_CONTEXT) asks a `review-stopped` question, unless an `accept` ruling on an
+    earlier stop of that role lets the review go on with its report."""
+    number = job.ticket.number
     values, running = job.pointers(job.round - 1), [role for role, _ in cast]
-    errors: dict[str, str] = {}
+    errors, stops = {}, {}
+    accepted = driver_decisions.accepted(job.run.state.read()["run"]["questions"], number, "review-stopped")
 
     def call(role: str, entry: str) -> dict:
         # A full review (no fix range) must give a mutation proof for each locked test file; the prompt names them.
@@ -74,6 +78,13 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
             return job.run.agent(role, job.ticket.number, job.slot, values, entry=entry, fix_round=job.round,
                                  notes=notes, check={"full": True, "locked": locked} if full else {},
                                  alone=lambda: len(running) == 1)
+        except Stopped as stopped:
+            if any(subject.startswith(f"the {role} ") for subject in accepted):
+                ledger(f"Ticket {number}: {stopped}; by the ruling (accept), the review goes on with the other reports.")
+                return stopped.report
+            stops[role] = str(stopped)
+            errors[role] = f"the {role}: {stopped}"
+            return {}
         except Blocked as blocked:
             errors[role] = f"the {role}: {blocked}"
             return {}
@@ -82,6 +93,10 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
 
     with ThreadPoolExecutor(len(cast)) as pool:
         reports = list(pool.map(lambda agent: call(*agent), cast))
+    if stops:
+        first = next(role for role, _ in cast if role in stops)
+        job.run.ask(number, "review-stopped", [stops[role] for role, _ in cast if role in stops],
+                    str(OUT / number / f"{first}-{job.round}.json"))
     if errors:
         raise Blocked("; ".join(errors[role] for role, _ in cast if role in errors))
     return reports

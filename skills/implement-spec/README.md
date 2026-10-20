@@ -17,7 +17,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - `.agent/` is gitignored and the worktree has no uncommitted change.
 - Each ticket file `NN-name.md` has a title, a **Blocked by** line and a **Seam** line, and the graph has no cycle (`driver_tickets.py`). A ticket needs one criterion or more, unless its Seam is `none — refactor`. A ticket needs a **Touches** line when the set has more than one ticket. The [to-tickets skill](../to-tickets/SKILL.md) has the line format.
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
-- The `review-diff` skill is installed next to this one: the final review of every run reads it, and so does the correctness pass.
+- The `review-diff` skill is installed next to this one: the final review of every run reads it, and the correctness prompt carries its `correctness.md`, so the pass needs no read of a file that git ignores.
 - With `--push` or `--unattended`, the repository has an `origin` remote.
 - Each model that the run can use answers one short test prompt (the preflight). A model that fails gives one line with its error. `--dry-run` skips the preflight.
 
@@ -57,7 +57,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 |---|---|
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
-| 2 | Parked: a question of kind `locked-test`, `locked-test-again` or `final-finding` is open. Exit 2 wins over exit 1. |
+| 2 | Parked: a question of kind `locked-test`, `locked-test-again`, `review-stopped` or `final-finding` is open. Exit 2 wins over exit 1. |
 | 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs on the same PR branch. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
 | 4 | Stopped: the CLI of an agent failed two times and wrote no report (for example, the account cannot use the model). The driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI or the model entry, then run the same command again to resume. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
@@ -111,7 +111,7 @@ Rules for each agent:
 - A call blocks until the agent ends. The driver does not poll.
 - An agent stops only the processes it started and their child processes, by PID, and never kills a process it did not start, nor uses `pkill`, `killall` or a `kill` by name or pattern: other slots and sessions share the machine. A process it did not start that blocks it goes into its concerns.
 - An agent gets one rerun: after a rejected report, after a timeout, or after it left the ticket branch. The rerun prompt is the first prompt plus the reason.
-- A report with status `BLOCKED` or `NEEDS_CONTEXT` blocks the ticket.
+- A report with status `BLOCKED` or `NEEDS_CONTEXT` blocks the ticket. From the reviewer or the correctness pass, it also asks a `review-stopped` question.
 - A BLOCKED ticket stops the tickets that it blocks. All other tickets run on.
 
 ### Findings and fix rounds
@@ -198,6 +198,7 @@ A question is a bounded choice for the operator. `driver_decisions.py` `KINDS` h
 | `locked-test` | `<NN>-locked-test-<n>` | An implementer or a fixer reports BLOCKED with a concern that starts with `locked test contradicts spec:`. | 2 | `overrule-test`: the test-writer corrects the test from that report, then the implementer runs again, and the fix rounds count from 0: the corrected tests are a new contract. `overrule-implementer` (recommended): the implementer runs again. |
 | `finding` | `<NN>-finding-<n>` | A finding is open after fix round 4. One question for each finding. | 1 | `accept`: close the finding; the ticket merges when each of its findings is accepted. `split` (recommended) and `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. |
 | `locked-test-again` | `<NN>-locked-test-again-<n>` | A finding for a test-writer correction is open in the review right after a correction, or the driver rejects the correction's report (for example, it changes a file that it does not list in `locked`). One question for each finding. | 2 | `correct-again` (recommended): the ticket resumes from the review, and that review's findings get one more correction. `accept`: no more correction runs for the ticket, its locked tests stay as they are, and the ticket goes on to its fix rounds with its other findings; a changed locked file is still restored. `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. After two `correct-again` stops on a ticket, its next question offers only `accept` (recommended) and `redesign`, so a test-writer and a reviewer that never agree cannot loop. |
+| `review-stopped` | `<NN>-review-stopped-<n>` | The reviewer or the correctness pass reports `BLOCKED` or `NEEDS_CONTEXT`. One question for each agent that stopped. | 2 | `retry` (recommended): the ticket resumes from the review, and each agent of the review runs again. `accept`: the same, and for the rest of the ticket a `BLOCKED` or `NEEDS_CONTEXT` report of that agent does not stop it: the review goes on with that report's findings and those of the other reports. `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. |
 | `final-finding` | `final-finding-<n>` | A finding is open after the second round of the final review. | 2 | `fix` (recommended): the finding stays open and nothing is pushed. `accept`: close the finding. |
 
 `n` counts the questions of that ticket and kind in the run, so an id is never used twice.

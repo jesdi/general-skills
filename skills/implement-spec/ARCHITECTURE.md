@@ -142,6 +142,11 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
   `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the
   extra corrections (`AGAIN`), and an `accept` stop closes the ticket's locked-test findings in `_act_on`.
+- A reviewer or a correctness pass that reports BLOCKED or NEEDS_CONTEXT raises `driver_run.Stopped`, which
+  carries the report. `driver_fixloop._run_reviewers` turns it into a `review-stopped` question, or, after an
+  `accept` ruling on that role (`driver_decisions.accepted`), uses the report as it is.
+- The correctness prompt carries the checks of `review-diff` (`driver_review.checks`): the pass reads files only
+  from git at the tip and from `.agent/`, and a project-local install sits in an ignored directory.
 
 ### Questions
 

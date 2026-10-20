@@ -37,6 +37,14 @@ class Blocked(Exception):
     """A ticket, or the end of run, cannot go on. The message says why."""
 
 
+class Stopped(Blocked):
+    """An agent's accepted report says BLOCKED or NEEDS_CONTEXT. `report` is that report."""
+
+    def __init__(self, why: str, report: dict):
+        super().__init__(why)
+        self.report = report
+
+
 class Halted(Exception):
     """The CLI of an agent failed with no report, two times: a model the account cannot use, a CLI that is not
     signed in. The run starts no other agent and ends with exit 4; the ticket keeps its phase for the next run."""
@@ -117,7 +125,7 @@ class Run:
             self.ask(number, "locked-test", [subject], str(evidence), tip=driver_slots.head(slot))
         if report.get("status") in ("BLOCKED", "NEEDS_CONTEXT"):
             concerns = "; ".join(report["concerns"]) or "no concern given"
-            raise Blocked(f"the {role} reported {report['status']}: {concerns}")
+            raise Stopped(f"the {role} reported {report['status']}: {concerns}", report)
         return report
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
