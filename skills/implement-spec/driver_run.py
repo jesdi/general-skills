@@ -119,14 +119,27 @@ class Run:
         report = _attempts(self, role, number, slot, values, **options)
         if role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
-        if subject := driver_decisions.contradicted(role, report):
-            # The implementer's commits stay: after the ruling the ticket goes on from them.
-            evidence = OUT / number / f"{role}-{options.get('fix_round', 0)}.json"
-            self.ask(number, "locked-test", [subject], str(evidence), tip=driver_slots.head(slot))
         if report.get("status") in ("BLOCKED", "NEEDS_CONTEXT"):
             concerns = "; ".join(report["concerns"]) or "no concern given"
-            raise Stopped(f"the {role} reported {report['status']}: {concerns}", report)
+            why = f"the {role} reported {report['status']}: {concerns}"
+            if number != FINAL:
+                self._ask_stop(role, number, slot, report, why, options.get("fix_round", 0))
+            raise Stopped(why, report)
         return report
+
+    def _ask_stop(self, role: str, number: str, slot: str, report: dict, why: str, fix_round: int) -> None:
+        """The question of a stopped implementer or fixer: `locked-test` when it says a locked test contradicts the
+        spec, else `<role>-stopped` (issue #123). Its commits stay: after the ruling the ticket goes on from them."""
+        if role not in ("implementer", "fixer"):
+            return
+        evidence, tip = str(OUT / number / f"{role}-{fix_round}.json"), driver_slots.head(slot)
+        if subject := driver_decisions.contradicted(role, report):
+            self.ask(number, "locked-test", [subject], evidence, tip=tip)
+        elif role == "implementer":
+            self.ask(number, "implementer-stopped", [why], evidence, tip=tip)
+        else:
+            # The round that stopped does not count: `retry` reviews the tip and runs that round again.
+            self.ask(number, "fixer-stopped", [why], evidence, tip=tip, round=fix_round - 1)
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""
