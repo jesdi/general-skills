@@ -33,6 +33,7 @@ describe('Python check runner', () => {
       '-m coverage erase',
       '-m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q',
       '-m coverage run -a -m pytest skills/implement-spec -q',
+      '-m coverage run -a -m pytest skills/babysit-pr -q',
       '-m coverage run -m pytest skills/test-prune -q',
       '-m coverage combine --append -q',
       '-m coverage json -o .crap/python.json',
