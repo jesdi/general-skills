@@ -200,3 +200,11 @@ def test_late_first_failure_still_detects_two_distinct_rounds(tmp_path):
     p = w.round("record-failure", "s1", *args, "a")
     assert p.returncode != 0
     assert "same failure twice" in p.output
+
+
+def test_a_skipped_or_neutral_check_is_not_green(tmp_path):
+    for conclusion in ("skipped", "neutral"):
+        (tmp_path / conclusion).mkdir()
+        w = ci_world(tmp_path / conclusion, [run_ci("test", "completed", "success"),
+                                             run_ci("e2e", "completed", conclusion)])
+        assert w.checks().stdout.strip() == "red", conclusion
