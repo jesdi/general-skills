@@ -67,6 +67,7 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
     earlier stop of that role lets the review go on with its report."""
     number = job.ticket.number
     values, running = job.pointers(job.round - 1), [role for role, _ in cast]
+    values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
     errors, stops = {}, {}
     accepted = driver_decisions.accepted(job.run.state.read()["run"]["questions"], number, "review-stopped")
 
@@ -74,6 +75,7 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
         # A full review (no fix range) must give a mutation proof for each locked test file; the prompt names them.
         full = not job.previous and role == "reviewer"
         notes = ["rereview"] if job.previous else ["full-review"] if full else []
+        notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
         try:
             return job.run.agent(role, job.ticket.number, job.slot, values, entry=entry, fix_round=job.round,
                                  notes=notes, check={"full": True, "locked": locked} if full else {},
@@ -177,8 +179,9 @@ def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> l
     return list(code.values())
 
 
-def _fix(job: Job) -> None:
-    """Run the next fix round: a fixer on the implementer's list."""
+def _fix(job: Job, findings: list[dict]) -> None:
+    """Run the next fix round: a fixer on the implementer's list, for `findings`. A fixer that makes no commit gives
+    a reason per finding, and the review of the same tip checks them (issue #123)."""
     run, number = job.run, job.ticket.number
     job.round += 1
     on = entry(run.models, job.round)
@@ -188,7 +191,8 @@ def _fix(job: Job) -> None:
     elif job.round == 3:
         ledger(f"Ticket {number} round 3: the implementer has no next entry, so the round stays on {on}.")
     with during(f"fix round {job.round}"):
-        run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round)
+        run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round,
+                  check={"fix": [finding["title"] for finding in findings], "red": job.red})
     before, job.tip = job.tip, driver_slots.head(job.slot)
     run.state.ticket(number, tip=job.tip)
     followed = driver_review.follow(job.slot, before, job.tip, job.proofs)
@@ -236,7 +240,7 @@ def _act_on(job: Job, found: list[dict]) -> bool:
         evidence = OUT / job.ticket.number / f"findings-{ROUNDS}.json"
         job.run.ask(job.ticket.number, "finding", titles, str(evidence))
         raise Blocked(f"the review: after round {ROUNDS} these findings are open: {'; '.join(titles)}")
-    _fix(job)
+    _fix(job, to_fix)
     return False
 
 

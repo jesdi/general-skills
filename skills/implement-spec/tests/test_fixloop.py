@@ -561,6 +561,24 @@ def test_four_rounds_then_blocked_with_the_escalation_at_round_3(tmp_path):
     assert rig.state()["tickets"]["03"]["phase"] == "merged"
 
 
+def test_a_fixer_with_nothing_to_change_is_accepted_and_the_same_tip_is_reviewed_again(tmp_path):
+    """Issue 123: a fixer whose finding needs no change reports no commit. That is no rerun: the round counts, the
+    gate of the tip stands, and the re-review weighs the fixer's reason."""
+    rig = Inside(tmp_path)
+    nothing = {"report": {"status": "DONE_WITH_CONCERNS", "commits": [], "files": [], "green": ["1 passed"],
+                          "ticket": "01", "concerns": ["STUCK: the code already handles it"]}}
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK]), review("01")], "01/fixer": [nothing]}))
+    assert rig.code == 0, rig.ledger()
+    assert len(rig.calls("01", "fixer")) == 1 and rig.led("fixer ran on", "report accepted")
+    assert rig.state()["tickets"]["01"]["round"] == 1 and rig.state()["tickets"]["01"]["phase"] == "merged"
+    tip = rig.sha("01", "implementer")
+    assert [gate["commit"] for gate in rig.gates()].count(tip) == 1
+    again = rig.prompt("reviewer-1")
+    assert f"The fix is {tip}..{tip}" in again and "The fixer of round 1 changed nothing" in again
+    assert ".agent/implement/01/fixer-1.json" in again and "no concern names" not in rig.prompt("fixer-1")
+    assert "list no commit" in rig.prompt("fixer-1")
+
+
 def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_evidence(tmp_path):
     """Issue 64: the gate of a fix round is red. That is a finding for the next round, not a BLOCKED ticket."""
     rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 1"]})
