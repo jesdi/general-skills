@@ -932,6 +932,35 @@ def test_a_reviewer_that_writes_the_shared_git_config_gets_it_restored_and_runs_
     assert f".agent/implement/01/gate-{tip[:7]}.log" in prompt and "never write with `git config`" in prompt
 
 
+def test_a_branch_entry_that_another_worktree_writes_during_the_review_is_no_rule_break_and_stays(tmp_path):
+    # Issue #130: a `git worktree add -b x origin/main` of another session writes [branch "x"] into the shared config.
+    rig = Inside(tmp_path)
+    shared = rig.repo / ".git" / "config"
+    track = {"git": [["config", "branch.x.remote", "origin"], ["config", "branch.x.merge", "refs/heads/main"]]}
+    rig.run(plan(**{"01/reviewer": [{**review("01"), **track}]}))
+    assert rig.code == 0, rig.ledger()
+    assert not rig.led("a read-only role broke its rule:") and len(rig.calls("01", "reviewer")) == 1
+    assert '[branch "x"]' in shared.read_text()
+
+
+def config_values(config, key):
+    return subprocess.run(["git", "config", "--file", str(config), "--get-all", key], capture_output=True, text=True).stdout
+
+
+@pytest.mark.parametrize("key, value", [("core.hooksPath", "/tmp/hooks"), ("alias.st", "!rm -rf ."),
+                                        ("include.path", "/tmp/evil"), ("remote.origin.url", "/tmp/evil")])
+def test_a_dangerous_key_is_restored_and_the_other_sessions_branch_entry_stays(tmp_path, key, value):
+    rig = Inside(tmp_path)
+    shared = rig.repo / ".git" / "config"
+    before = config_values(shared, key)
+    both = {"git": [["config", key, value], ["config", "branch.x.remote", "origin"]]}
+    rig.run(plan(**{"01/reviewer": [{**review("01"), **both}, review("01")]}))
+    assert rig.code == 0, rig.ledger()
+    (line,) = rig.led("Ticket 01: a read-only role broke its rule:")
+    assert f"the shared git config {shared.resolve()} changed: {key.lower()}" in line
+    assert config_values(shared, key) == before and config_values(shared, "branch.x.remote") == "origin\n"
+
+
 def test_a_reviewer_that_times_out_starts_again_from_the_clean_tip(tmp_path):
     hang = {"files": {"demo/export.py": "mutated\n", "junk.txt": "x\n"}, "sleep": 60}
     rig = Inside(tmp_path).run(plan(**{"01/reviewer": [hang, review("01")]}), "--timeout", "reviewer=0.03")
