@@ -26,6 +26,7 @@ Write one JSON report at {report} that matches this schema:
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
     "locked": {"type": "array", "items": {"type": "string"}},
+    "fixtures": {"description": "Each file of `locked` that holds no test, as a fake, a fixture or a helper: a review needs no mutation proof for it.", "type": "array", "items": {"type": "string"}},
     "red": {"type": "array", "items": {"type": "object", "required": ["test", "line"], "properties": {"test": {"type": "string", "minLength": 1}, "line": {"type": "string", "minLength": 1}}}},
     "not_addressed": {"type": "array", "items": {"type": "object", "required": ["finding", "reason"], "properties": {"finding": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}}}
   },

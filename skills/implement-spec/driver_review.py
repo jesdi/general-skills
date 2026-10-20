@@ -80,17 +80,18 @@ def restore_locked(slot: str, entry: dict) -> list[str]:
     return restored
 
 
-def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
-    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed`.
-    `tip` is the new reference. A locked file that a correction does not list and that differs from the old
-    reference keeps the old one in `held`, so a change the implementer made before stays a finding."""
+def written(slot: str, entry: dict, listed: list[str], fixtures: list[str], tip: str) -> dict:
+    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed`, of which
+    `fixtures` hold no test. `tip` is the new reference. A locked file that a correction does not list and that differs
+    from the old reference keeps the old one in `held`, so a change the implementer made before stays a finding."""
     held = {path: sha for path, sha in entry["held"].items() if path not in listed}
     others = [path for path in entry["locked"] if path not in listed and path not in held]
     if entry["test_writer_sha"] and others:
         diff = git(slot, "diff", "--name-only", "-z", entry["test_writer_sha"], tip, "--", *others)
         # A diff that git cannot make holds each file.
         held.update(dict.fromkeys(names(diff.stdout) if diff.returncode == 0 else others, entry["test_writer_sha"]))
-    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
+    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held,
+            "fixtures": [path for path in entry["fixtures"] if path not in listed] + fixtures}
 
 
 def route(findings: list[dict], locked: list[str], protected: list[str]) -> tuple[list[dict], list[dict]]:
