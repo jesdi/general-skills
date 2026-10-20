@@ -13,7 +13,7 @@ import driver_review_page
 from test_cli import git
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
-from test_review import ONE, finding, fix, review
+from test_review import ONE, STUCK, finding, fix, review
 from test_stops import CONTRA, NEW_TEST, Q1, UNATTENDED, blocked, correction, decisions, stage, steps, write_answers
 from test_walk import impl, plan, tw
 
@@ -489,3 +489,83 @@ def test_no_open_question_or_no_file_reads_nothing_and_given_writes_only_valid_a
     assert driver_answers.given([(Q1, "overrule-test")], one) == []
     assert driver_answers.read(one) == ({Q1: "overrule-test"}, [])
     assert driver_answers.read(doc()) == ({}, []), "with no open question the file is history"
+
+
+# ---------------------------------------------------------------- an implementer or a fixer with nothing to change, or that stops
+
+IMPLEMENTER_STOPPED, FIXER_STOPPED = "01-implementer-stopped-1", "01-fixer-stopped-1"
+NO_CHANGE = "the correction made the locked tests green: the start needs no change"
+
+
+def unchanged():
+    """An implementer step with no commit: the start commit already meets the ticket."""
+    return {"report": {"status": "DONE_WITH_CONCERNS", "commits": [], "files": [], "concerns": [NO_CHANGE],
+                       "green": ["1 passed"]}}
+
+
+def stops(role="implementer", status="NEEDS_CONTEXT"):
+    report = {"status": status, "commits": [], "files": [], "concerns": ["the ticket names no column order"],
+              "green": [], **({"ticket": "01"} if role == "fixer" else {})}
+    return {"report": report}
+
+
+def test_an_implementer_with_nothing_to_change_after_a_correction_is_accepted_and_its_start_is_gated(tmp_path):
+    """Issue 123: after `overrule-test` the correction made the locked tests green, so the implementer had nothing to
+    change, and no report of it was valid: NEEDS_CONTEXT blocked the ticket with no question."""
+    rig = stopped(tmp_path)
+    rig.run(steps(blocked(), unchanged()), "--answer", f"{Q1}=overrule-test")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert len(rig.calls("01", "implementer")) == 2 and rig.led("implementer ran on", "report accepted")
+    corrected = rig.calls("01", "test-writer")[1]["sha"]
+    assert corrected in [gate["commit"] for gate in rig.gates()]
+    assert rig.calls("01", "reviewer")[0]["head"] == corrected
+    assert "list no commit" in rig.prompt("implementer-0")
+
+
+@pytest.mark.parametrize("status", ["NEEDS_CONTEXT", "BLOCKED"])
+def test_an_implementer_that_stops_asks_the_operator_and_retry_runs_it_again(tmp_path, status):
+    """Issue 123: a stop of the implementer that is not `locked test contradicts spec:` had no question."""
+    rig = Inside(tmp_path, ONE).run(steps(stops(status=status)))
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    (question,) = rig.state()["run"]["questions"]
+    assert (question["id"], question["recommended"]) == (IMPLEMENTER_STOPPED, "retry")
+    assert [o["id"] for o in question["options"]] == ["retry", "accept-tip", "redesign"]
+    assert question["evidence"][0] == ".agent/implement/01/implementer-0.json"
+    assert question["subject"] == f"the implementer reported {status}: the ticket names no column order"
+    rig.run(steps(stops(status=status), impl("01")), "--answer", f"{IMPLEMENTER_STOPPED}=retry")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert len(rig.calls("01", "implementer")) == 2 and len(rig.calls("01", "test-writer")) == 1
+    assert rig.led(f"Ruling: 01 implementer runs again (retry): the implementer reported {status}")
+
+
+def test_accept_tip_gates_and_reviews_the_tip_the_stopped_implementer_left(tmp_path):
+    rig = Inside(tmp_path, ONE).run(steps(stops()))
+    assert rig.code == 2, rig.ledger()
+    rig.run(steps(stops()), "--answer", f"{IMPLEMENTER_STOPPED}=accept-tip")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    tip = rig.sha("01", "test-writer")
+    assert len(rig.calls("01", "implementer")) == 1 and tip in [gate["commit"] for gate in rig.gates()]
+    assert rig.calls("01", "reviewer")[0]["head"] == tip
+
+
+def test_an_implementer_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
+    rig = Inside(tmp_path, ONE).run(steps(stops()))
+    rig.run(steps(stops()), "--answer", f"{IMPLEMENTER_STOPPED}=redesign")
+    assert rig.code == 1 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert len(rig.calls("01", "implementer")) == 1
+
+
+def test_a_fixer_that_stops_asks_the_operator_and_retry_runs_its_round_again(tmp_path):
+    """Issue 123: the round that stopped does not count, so the retry is that round again, after a review."""
+    steps = plan(**{"01/reviewer": [review("01", [STUCK]), review("01", [STUCK]), review("01")],
+                    "01/fixer": [stops("fixer"), fix("01", 1)]})
+    rig = Inside(tmp_path, ONE).run(steps)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 0, rig.ledger()
+    (question,) = rig.state()["run"]["questions"]
+    assert (question["id"], question["recommended"]) == (FIXER_STOPPED, "retry")
+    assert [o["id"] for o in question["options"]] == ["retry", "redesign"]
+    assert question["evidence"][0] == ".agent/implement/01/fixer-1.json"
+    rig.run(steps, "--answer", f"{FIXER_STOPPED}=retry")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert rig.state()["tickets"]["01"]["round"] == 1 and len(rig.calls("01", "fixer")) == 2
+    assert rig.led("Ruling: 01 fix round runs again (retry): the fixer reported NEEDS_CONTEXT")
