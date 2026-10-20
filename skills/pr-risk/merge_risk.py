@@ -204,26 +204,48 @@ def is_generated(path, base, head):
     return b"@generated" in blob.stdout
 
 
-def diff_stats(base, head, policy):
-    """Return (categories, counted_lines, unknown_paths, policy_changed); base is a commit sha."""
+def base_policy(base):
+    """(sha of origin/<base>, the policy committed there, policy errors as reasons)."""
+    sha = git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
+    return (sha, *load_policy(sha))
+
+
+def classify_diff(base, head, policy):
+    """The one classification of a PR's files that the gate and the judge both read.
+
+    Returns (diff_base, files) for head against its merge-base with base (a commit sha).
+    Each file is (path, categories, lines, counted): lines is added plus removed, None when
+    unknown (binary, or hidden by a -diff attribute); docs and generated files are not counted.
+    Diff drivers of the repo never apply: they could hide counted lines.
+    """
     diff_base = git("merge-base", base, head).stdout.strip()
     paths = {c: list(g) for c, g in DEFAULT_PATHS.items()}
     for c, globs in policy["paths"].items():
         paths[c] = paths.get(c, []) + globs
-    out = git("diff", "-z", "--numstat", "--no-renames", diff_base, head).stdout
-    cats, counted, unknown, policy_changed = set(), 0, [], False
+    out = git("diff", "-z", "--numstat", "--no-renames", "--no-textconv", "--no-ext-diff",
+              diff_base, head).stdout
+    files = []
     for line in filter(None, out.split("\0")):
         added, removed, path = line.split("\t", 2)
-        fc = file_categories(path, paths)
-        cats |= fc
-        policy_changed |= path == POLICY_FILE
-        if "docs" in fc or is_generated(path, diff_base, head):
+        cats = file_categories(path, paths)
+        lines = None if added == "-" else int(added) + int(removed)
+        files.append((path, cats, lines,
+                      "docs" not in cats and not is_generated(path, diff_base, head)))
+    return diff_base, files
+
+
+def diff_stats(files):
+    """Return (categories, counted_lines, unknown_paths, policy_changed) of classified files."""
+    cats, counted, unknown = set(), 0, []
+    for path, file_cats, lines, is_counted in files:
+        cats |= file_cats
+        if not is_counted:
             continue
-        if added == "-":  # binary, or hidden by a -diff attribute: the size is unknown
+        if lines is None:
             unknown.append(path)
-            continue
-        counted += int(added) + int(removed)
-    return cats, counted, unknown, policy_changed
+        else:
+            counted += lines
+    return cats, counted, unknown, any(path == POLICY_FILE for path, *_ in files)
 
 
 def block_reasons(block, cats):
@@ -257,9 +279,8 @@ def diff_reasons(policy, touches, stats):
 
 def gate(body, base, head):
     block = parse(body)
-    base = git("rev-parse", "--verify", f"origin/{base}^{{commit}}").stdout.strip()
-    policy, reasons = load_policy(base)
-    stats = diff_stats(base, head, policy)
+    base, policy, reasons = base_policy(base)
+    stats = diff_stats(classify_diff(base, head, policy)[1])
     cats, counted = stats[0], stats[1]
     reasons += block_reasons(block, cats)
     touches = set(block["touches"]) if not block["errors"] else set()
