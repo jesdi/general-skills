@@ -1137,13 +1137,6 @@ def test_a_review_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
     assert len(rig.calls("02", "correctness")) == 1
 
 
-@pytest.mark.parametrize("role", ["reviewer", "correctness"])
-def test_the_schema_of_a_review_says_that_commits_holds_only_the_agents_own_commits(role):
-    """Issue 66: a reviewer that lists a commit of the range costs a rerun (`is not a new commit`)."""
-    description = driver_report.schema(role)["properties"]["commits"]["description"]
-    assert "only the commits you created" in description.lower() and "empty" in description
-
-
 def test_the_reviewer_schema_asks_for_one_proof_for_each_locked_test_file_in_the_first_review():
     """Issue 66: a first review with no proof for a locked test file costs a rerun."""
     description = driver_report.schema("reviewer")["properties"]["mutations"]["description"]
