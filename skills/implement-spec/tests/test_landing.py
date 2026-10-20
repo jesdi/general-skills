@@ -5,8 +5,9 @@ and test_final), and through two worktrees of one fixture repository, on two PR 
 files and with `wait_pr_moves`, never with a sleep.
 
 Interface choices (ticket 09):
-- a ticket that "does not land" ends the run with exit 1 and phase `blocked`; one ledger sentence names the ticket and
-  `locked file changed: <path>`; no commit of the ticket is on the PR branch. Whether a fix round ran before is free:
+- a ticket that "does not land" ends the run with phase `blocked`; one ledger sentence names the ticket and
+  `locked file changed: <path>`, and a `merged-locked-file` question (exit 2) names the path (issue #116); no commit of
+  the ticket is on the PR branch. Whether a fix round ran before is free:
   each plan gives that ticket fixers that write no report.
 - an implementer "merges the PR branch" with the `git` hook of the fake runner: `git merge --no-edit feat/csv` in its
   slot, after `wait_pr_moves`, before it writes its files and commits.
@@ -61,18 +62,20 @@ def holds(rig, sha, commit="feat/csv"):
     return subprocess.run(["git", "merge-base", "--is-ancestor", sha, commit], cwd=rig.repo).returncode == 0
 
 
-def kept_out(rig, nn):
-    """Ticket `nn` did not land: the run ends with exit 1 and the PR branch has none of its commits."""
-    assert rig.code == 1, rig.output()
+def kept_out(rig, nn, codes=(1,)):
+    """Ticket `nn` did not land: the run ends with one of `codes` and the PR branch has none of its commits."""
+    assert rig.code in codes, rig.output()
     assert phase(rig, nn) == "blocked"
     assert not {f"test: {nn} red", f"feat: {nn} rows"} & set(rig.pr_subjects()), rig.pr_subjects()
     assert not any(holds(rig, c["sha"]) for c in rig.calls(nn) if c["sha"])
 
 
 def refused(rig, nn, path):
-    """The landing of ticket `nn` was refused for the locked file `path` of a merged ticket."""
-    kept_out(rig, nn)
+    """The landing of ticket `nn` was refused for the locked file `path` of a merged ticket, with a question."""
+    kept_out(rig, nn, codes=(2,))
     assert rig.led(nn, f"locked file changed: {path}"), rig.ledger()
+    (question,) = [q for q in rig.state()["run"]["questions"] if q["answer"] is None]
+    assert (question["id"], question["subject"]) == (f"{nn}-merged-locked-file-1", path)
 
 
 def restored(rig, nn, path):
@@ -238,8 +241,8 @@ def test_a_ticket_that_lands_while_the_merge_gate_of_another_is_open_does_not_le
     if phase(rig, "03") == "merged":  # 03 landed first, when no merged ticket had locked the file
         assert rig.code == 0, rig.output()
         assert landed(rig, rig.sha("03", "implementer")) < landed(rig, rig.sha("02", "test-writer")), rig.ledger()
-    else:  # 02 landed in the window: the driver looked again, or it gave the stale merge commit up
-        kept_out(rig, "03")
+    else:  # 02 landed in the window: the driver looked again (a question), or it gave the stale merge commit up
+        kept_out(rig, "03", codes=(1, 2))
         assert on_pr(rig, SHARED) == MORE_SEED
 
 

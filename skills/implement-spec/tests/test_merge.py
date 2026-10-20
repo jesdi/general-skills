@@ -96,20 +96,20 @@ def test_the_landing_check_refuses_what_it_cannot_read(repo, monkeypatch):
     sh("git", "branch", "ticket/02")
     same = commit_on("ticket/02", "a.txt", "a\n")
     tickets = {"01": {"phase": "merged", "locked": ["t.py", "gone.py"]}, "02": {"phase": "merge", "locked": []}}
-    assert driver_merge.refused(tickets, "02", base, same) == ""  # absent on both sides of two commits that exist
+    assert driver_merge.refused(tickets, "02", base, same) == ([], "")  # absent on both sides of two commits that exist
     there = commit_on("ticket/02", "t.py", "t\n")
-    assert driver_merge.refused(tickets, "02", base, there) == "locked file changed: t.py"
-    assert driver_merge.refused(tickets, "02", there, base) == "locked file changed: t.py"
+    assert driver_merge.refused(tickets, "02", base, there) == (["t.py"], "")
+    assert driver_merge.refused(tickets, "02", there, base) == (["t.py"], "")
     # A candidate that is no commit: an id that does not resolve, and a tree.
     for bad in ("1" * 40, sh("git", "rev-parse", f"{base}^{{tree}}")):
-        assert driver_merge.refused(tickets, "02", base, bad).startswith(f"cannot read the locked files at {bad}: ")
-        assert driver_merge.refused(tickets, "02", bad, base).startswith(f"cannot read the locked files at {bad}: ")
+        assert driver_merge.refused(tickets, "02", base, bad)[1].startswith(f"cannot read the locked files at {bad}: ")
+        assert driver_merge.refused(tickets, "02", bad, base)[1].startswith(f"cannot read the locked files at {bad}: ")
     # A record with no `locked` key is a ticket that locked nothing: no error in the middle of a landing.
     assert driver_merge.protected({"01": {"phase": "merged"}, "02": {"phase": "merge"}}, "02") == []
     assert driver_merge.protected({"01": {"phase": "merged", "locked": ["a"]}}, "02") == ["a"]
     # git fails on both sides: the two answers are equal, and the landing is refused all the same.
     monkeypatch.setenv("GIT_DIR", "/nowhere")
-    assert driver_merge.refused(tickets, "02", base, there).startswith(f"cannot read the locked files at {base}: ")
+    assert driver_merge.refused(tickets, "02", base, there)[1].startswith(f"cannot read the locked files at {base}: ")
     monkeypatch.delenv("GIT_DIR")
     assert driver_merge.land("pr", there, "1" * 40) != "" and sh("git", "rev-parse", "pr") == base
 
@@ -125,9 +125,9 @@ def test_the_landing_check_compares_the_mode_and_the_type_of_a_locked_file_too(r
     link = commit_on("ticket/02", "t.py", "", lambda path: (os.remove(path), os.symlink("t\n", path)))
     blob = lambda commit: sh("git", "rev-parse", f"{commit}:t.py")
     assert blob(file) == blob(runs) == blob(link) and sh("git", "ls-tree", link, "t.py").startswith("120000 ")
-    assert driver_merge.refused(tickets, "02", file, file) == ""
-    assert driver_merge.refused(tickets, "02", file, runs) == "locked file changed: t.py"
-    assert driver_merge.refused(tickets, "02", file, link) == "locked file changed: t.py"
+    assert driver_merge.refused(tickets, "02", file, file) == ([], "")
+    assert driver_merge.refused(tickets, "02", file, runs) == (["t.py"], "")
+    assert driver_merge.refused(tickets, "02", file, link) == (["t.py"], "")
 
 
 def test_begin_opens_the_conflicting_merge_on_a_machine_with_no_git_identity(repo, monkeypatch, tmp_path):

@@ -231,9 +231,12 @@ def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_f
     entry = rig.state()["tickets"]["01"]
     assert (entry["round"], entry["test_writer_sha"]) == (0, rig.calls("01", "test-writer")[1]["sha"])
     assert rig.led("correction in tests/test_01.py, outside the fix rounds: VACUOUS: VACUOUS.")
-    # Only a severe finding of kind `test` on a locked file goes to the test-writer.
+    # Only a severe finding of kind `test` on a locked file goes to the test-writer, and a severe finding of any kind on
+    # a locked file of a merged ticket.
     minor, elsewhere = finding("M", "minor", kind="test", file="tests/test_01.py"), finding("E", kind="test")
     assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"], []) == ([vacuous], [elsewhere])
+    gap, aside = finding("G", file="tests/test_00.py"), finding("A", "minor", file="tests/test_00.py")
+    assert driver_review.route([gap, aside, elsewhere], [], ["tests/test_00.py"]) == ([gap], [elsewhere])
 
 
 NEEDS_CODE = "needs production code: the code has no multi-PR view"
@@ -565,6 +568,76 @@ def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_for_it
     assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py", ACCENT], rig.ledger()
     assert rig.code == 0 and rig.led(f"Ticket 02: critical finding of kind fixture from the driver at {ACCENT}:1")
     assert "assert 1 == 'y'" in on_pr(rig, ACCENT)
+
+
+# ---------------------------------------------------------------- a ticket that must change a merged ticket's locked file
+
+MERGED_LOCKED = "02-merged-locked-file"
+LANDING_RESTORE = "implement-spec: restore the locked files of merged tickets before the landing"
+
+
+def touches_01(n):
+    """Fixer `n` of 02, which also changes tests/test_01.py, the locked file of merged ticket 01."""
+    return fix("02", n, files={"demo/export.py": f"def fn_02():\n    return 'fix{n}'\n",
+                               "tests/test_01.py": LOCKED_01 + f"# fix {n}\n"})
+
+
+def changed_at_round_4(tmp_path, name, files=None, gate=None):
+    """Ticket 02 whose fixer of round 4 changes the locked file of merged ticket 01: the review after it finds the
+    change, and with no round left it is a `finding` question, which the operator accepts."""
+    steps = plan(**{"02/reviewer": [review("02", [STUCK])] * 4 + [review("02")],
+                    "02/fixer": [fix("02", 1), fix("02", 2), fix("02", 3), touches_01(4)]})
+    rig = Inside(under(tmp_path, name), files or three(), gate=gate).run(steps, parallel="1")
+    assert rig.code == 1 and asked(rig) == {"02-finding-1": ["accept", "split", "redesign"]}, rig.ledger()
+    assert rig.state()["run"]["questions"][0]["subject"].startswith("the ticket changed the locked file of a merged ticket")
+    return rig.run(steps, "--answer", "02-finding-1=accept", parallel="1"), steps
+
+
+def test_an_accepted_change_to_a_merged_ticket_locked_file_asks_at_the_landing_and_restore_lands_it(tmp_path):
+    """Issue #116, comment 1: `accept` sent the ticket to its landing, which the landing check refused with no
+    question, so no answer could merge it."""
+    rig, steps = changed_at_round_4(tmp_path, "restore")
+    assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
+    assert rig.led("Ticket 02: BLOCKED at the merge: locked file changed: tests/test_01.py.")
+    assert asked(rig) == {f"{MERGED_LOCKED}-1": ["restore", "adopt", "redesign"]}
+    question = [q for q in rig.state()["run"]["questions"] if q["answer"] is None][0]
+    assert question["recommended"] == "restore" and question["subject"] == "tests/test_01.py"
+    rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=restore", parallel="1")
+    assert rig.code == 0, rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and LANDING_RESTORE in rig.pr_subjects()
+    assert rig.led("Ticket 02: by the ruling (restore), the driver put back tests/test_01.py")
+    assert rig.state()["tickets"]["02"]["phase"] == "merged"
+
+
+def test_adopt_lands_the_change_to_the_merged_ticket_locked_file_and_the_ticket_locks_it(tmp_path):
+    rig, steps = changed_at_round_4(tmp_path, "adopt")
+    rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=adopt", parallel="1")
+    assert rig.code == 0, rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 4\n"
+    assert "tests/test_01.py" in rig.state()["tickets"]["02"]["locked"] and rig.led("by the ruling (adopt)")
+
+
+def test_redesign_keeps_the_ticket_blocked_at_its_landing(tmp_path):
+    rig, steps = changed_at_round_4(tmp_path, "redesign")
+    rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=redesign", parallel="1")
+    assert rig.code == 1 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and not asked(rig)
+
+
+def test_a_restore_that_turns_the_merge_gate_red_is_taken_back_and_asks_again_without_restore(tmp_path):
+    """The ticket's code needs its change to the file: the restore commit leaves the ticket branch and the question
+    comes back with the options left, so the stop still has an answer."""
+    two = {name: text for name, text in three().items() if not name.startswith("03")}  # 02 lands as a fast-forward
+    rig, steps = changed_at_round_4(tmp_path, "red", files=two, gate={"subjects": [LANDING_RESTORE]})
+    rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=restore", parallel="1")
+    assert rig.code == 2 and rig.led("Ticket 02: BLOCKED at the merge: the gate is red on"), rig.ledger()
+    assert asked(rig) == {f"{MERGED_LOCKED}-2": ["adopt", "redesign"]}
+    question = [q for q in rig.state()["run"]["questions"] if q["answer"] is None][0]
+    assert question["recommended"] == "adopt" and question["evidence"][0].endswith(".log")
+    fixer = rig.calls("02", "fixer")[-1]["sha"]
+    assert rig.state()["tickets"]["02"]["tip"] == fixer and on_pr(rig, "tests/test_01.py") == LOCKED_01
+    rig.run(steps, "--answer", f"{MERGED_LOCKED}-2=adopt", parallel="1")
+    assert rig.code == 0 and on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 4\n", rig.ledger()
 
 
 # ---------------------------------------------------------------- the rounds
@@ -916,9 +989,10 @@ def conflict(tmp_path, resolve):
     """01 and 03 both add demo/cli.py and 03 merges first (as test_review.conflicted); `resolve` is 01's conflict step."""
     rig = Inside(tmp_path, {k: v for k, v in three().items() if not k.startswith("02")})
     one = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", "demo/cli.py": test_review.cli("one")})
-    return rig.run(plan(**{"01/test-writer": [{**tw("01"), "touch": ["s1"]}], "01/conflict": [resolve, resolve],
-                           "03/implementer": [{**impl("03", "demo/cli.py", test_review.cli("three")), "wait": ["s1"]}],
-                           "01/implementer": [{**one, "wait_pr_moves": True}]}))
+    rig.steps = plan(**{"01/test-writer": [{**tw("01"), "touch": ["s1"]}], "01/conflict": [resolve, resolve],
+                        "03/implementer": [{**impl("03", "demo/cli.py", test_review.cli("three")), "wait": ["s1"]}],
+                        "01/implementer": [{**one, "wait_pr_moves": True}]})
+    return rig.run(rig.steps)
 
 
 def test_a_conflict_resolution_that_changes_a_locked_file_does_not_land(tmp_path):
@@ -935,9 +1009,13 @@ def test_a_conflict_resolution_that_changes_a_locked_file_of_a_merged_ticket_doe
     rig = conflict(tmp_path, {"files": {"demo/cli.py": test_review.cli("resolved"), "tests/test_03.py": WEAK},
                               "commit": "merge: resolve cli", "report": done})
     # The resolution is a commit of the ticket; the landing check refuses the tree that it would put on the PR branch.
-    assert "BLOCKED at the merge: locked file changed: tests/test_03.py." in blocked(rig)
+    assert rig.code == 2 and rig.led("Ticket 01: BLOCKED at the merge: locked file changed: tests/test_03.py."), rig.ledger()
+    assert asked(rig) == {"01-merged-locked-file-1": ["restore", "adopt", "redesign"]}
     assert rig.tip() == rig.sha("03", "implementer") and on_pr(rig, "tests/test_03.py") == tw("03")["files"]["tests/test_03.py"]
     assert rig.state()["tickets"]["01"]["tip"] == rig.calls("01", "conflict")[0]["sha"]
+    rig.run(rig.steps, "--answer", "01-merged-locked-file-1=restore")
+    assert rig.code == 0 and on_pr(rig, "tests/test_03.py") == tw("03")["files"]["tests/test_03.py"], rig.ledger()
+    assert on_pr(rig, "demo/cli.py") == test_review.cli("resolved") and len(rig.calls("01", "conflict")) == 1
 
 
 def test_a_conflict_agent_that_gives_up_leaves_no_open_merge_in_the_slot(tmp_path):
