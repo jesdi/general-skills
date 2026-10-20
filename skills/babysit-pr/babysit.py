@@ -420,6 +420,9 @@ def repair_if_taken_over(pr, session, after_id=None):
     successor = next((l for l in reversed(history) if l[0] > after_id), None)
     top = holder(leases(comments, user), pr.now()) or successor
     if not top or top[1] == session:
+        # No takeover, but the owner may have merged while our terminal write was in flight.
+        if json.loads(gh("api", f"{pr.repo}/pulls/{pr.identity_scope[1]}")).get("merged"):
+            pr.label(remove=["babysitting", "needs-human"])
         return
     taker = top[1]
     applied = None
@@ -434,7 +437,8 @@ def repair_if_taken_over(pr, session, after_id=None):
                           and HANDOFF.match(c["body"])), default=0)
         merge_id = max((c["id"] for c in comments if c["user"]["login"] == user
                         and c["body"].startswith("🤖 Merged by babysit-pr:")), default=0)
-        if merge_id > max(lease_id, handoff_id):
+        merged = json.loads(gh("api", f"{pr.repo}/pulls/{pr.identity_scope[1]}")).get("merged")
+        if merged or merge_id > max(lease_id, handoff_id):
             want = ([], ["babysitting", "needs-human"])
         elif handoff_id > lease_id:
             want = (["needs-human"], ["babysitting"])

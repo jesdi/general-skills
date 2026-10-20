@@ -237,6 +237,6 @@ def test_every_call_targets_the_requested_repository_and_pr(tmp_path, repo, pr):
     targets = [a for argv in w.calls() for a in argv
                if re.search(r"\b(repos|issues|pulls)/", a) or a in ("--repo", "-R")]
     assert targets
-    pattern = rf"^/?repos/{re.escape(repo)}/issues/({pr}(/|$)|comments/\d+$)"
+    pattern = rf"^/?repos/{re.escape(repo)}/(issues|pulls)/({pr}(/|$)|comments/\d+$)"
     for t in targets:
         assert re.match(pattern, t), t
