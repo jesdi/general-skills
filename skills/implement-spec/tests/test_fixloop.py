@@ -233,7 +233,7 @@ def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_f
     assert rig.led("correction in tests/test_01.py, outside the fix rounds: VACUOUS: VACUOUS.")
     # Only a severe finding of kind `test` on a locked file goes to the test-writer.
     minor, elsewhere = finding("M", "minor", kind="test", file="tests/test_01.py"), finding("E", kind="test")
-    assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"]) == ([vacuous], [elsewhere])
+    assert driver_review.route([vacuous, minor, elsewhere], ["tests/test_01.py"], []) == ([vacuous], [elsewhere])
 
 
 NEEDS_CODE = "needs production code: the code has no multi-PR view"
@@ -453,6 +453,27 @@ def test_a_fixture_correction_starts_from_the_locked_file_of_the_merged_ticket(t
                                                 "02/reviewer": [review("02", [stale]), proves("02", "tests/test_01.py")]}))
     assert on_pr(rig, "tests/test_01.py") == CORRECTED_01, rig.ledger()
     assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
+
+
+def test_a_finding_in_the_locked_file_of_a_merged_ticket_goes_to_the_correction_not_the_fixer(tmp_path):
+    """Issue #116: ticket 02 must change the locked file of merged ticket 01. The implementer changes it, and the
+    restore closes the driver's finding. The next review reports the missing change there: a fixer may only make it
+    the forbidden way, so the correction makes it and lists the file."""
+    missing = finding("MISSING", file="tests/test_01.py", line=2)
+    correction = appending(tmp_path, files={})
+    correction["report"]["locked"] = ["tests/test_01.py"]
+    rig = Inside(tmp_path, three()).run(plan(**{
+        "02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
+        "02/reviewer": [review("02"), review("02", [missing]), proves("02", "tests/test_01.py")]}))
+    assert rig.code == 0, rig.ledger()
+    assert rig.led("Ticket 02:", "the restore closes it") and not rig.calls("02", "fixer")
+    assert rig.led("Ticket 02: code correction in tests/test_01.py, outside the fix rounds: MISSING")
+    assert on_pr(rig, "tests/test_01.py") == CORRECTED_01
+    assert "tests/test_01.py" in rig.state()["tickets"]["02"]["locked"]
+    first, corrected = rig.prompt("test-writer-0", "02"), rig.prompt("test-writer-1", "02")
+    assert "When the ticket must change a locked file of a merged ticket" in first
+    assert "on a locked file of a merged ticket (tests/test_01.py" in corrected
+    assert "only this correction may change that file" in corrected
 
 
 def test_the_test_writer_checks_fixture_preconditions_and_a_correction_keeps_shared_fixtures_and_runs_the_locked_files(tmp_path):

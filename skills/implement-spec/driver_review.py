@@ -93,12 +93,13 @@ def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
     return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
 
 
-def route(findings: list[dict], locked: list[str]) -> tuple[list[dict], list[dict]]:
+def route(findings: list[dict], locked: list[str], protected: list[str]) -> tuple[list[dict], list[dict]]:
     """(the findings for a test-writer correction; the other findings that are severe enough for a fix round).
-    A correction gets each fixture finding, whatever its severity, and each severe test finding on a `locked` file:
-    the fixer may not edit a locked file, so a fix round cannot close it."""
-    correct = [finding for finding in findings if finding["kind"] == "fixture"
-               or (finding["kind"] == "test" and finding["file"] in locked and finding["severity"] in OPEN)]
+    A correction gets each fixture finding, whatever its severity, each severe test finding on a `locked` file, and
+    each severe finding on a `protected` file (a locked file of a merged ticket): the fixer may not edit those files,
+    so a fix round cannot close it. Only a correction can take a protected file into the ticket's `locked` (#116)."""
+    correct = [finding for finding in findings if finding["kind"] == "fixture" or finding["severity"] in OPEN and (
+               finding["file"] in protected or finding["kind"] == "test" and finding["file"] in locked)]
     return correct, [finding for finding in findings if finding not in correct and finding["severity"] in OPEN]
 
 

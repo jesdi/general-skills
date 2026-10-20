@@ -78,7 +78,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - The locked files of merged tickets are checked before each review (`driver_review.merged_changes`): a change is a
   `fixture` finding, so it goes to a correction, where the restore and its gate decide. They are checked again when
   a ticket lands (`driver_merge.refused`): the tree that lands must have each of them as the PR tip has it. A
-  ticket's test-writer may change one only when it lists it.
+  ticket's test-writer may change one only when it lists it. So a review finding on such a file goes to a correction
+  too: a fixer's change there is put back, and the ticket would loop until BLOCKED (issue #116).
 - A conflict resolution, of a merge or of the rebase, may not change a locked file.
 
 ### The PR branch
