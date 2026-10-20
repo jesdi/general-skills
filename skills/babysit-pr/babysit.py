@@ -95,7 +95,17 @@ class Pr:
         for name in add:
             gh("api", "-X", "POST", f"{self.base}/labels", "-f", f"labels[]={name}")
         for name in remove:
+            self.remove_label(name)
+
+    def remove_label(self, name):
+        # DELETE may return 404 for an absent label or fail transiently. Read
+        # back the labels before accepting either response as a completed write.
+        for _ in range(2):
             gh("api", "-X", "DELETE", f"{self.base}/labels/{name}", check=False)
+            labels = json.loads(gh("api", f"{self.base}/labels"))
+            if not any(label["name"] == name for label in labels):
+                return
+        fail(f"could not remove label {name}: label reconciliation incomplete")
 
 
 class CommentIdentities:
@@ -389,6 +399,56 @@ def lease(verb, repo, number, session, host):
         return lease_locked(verb, repo, number, session, host)
 
 
+def confirmed_leases(comments, user):
+    """Include completed holders, but never treat a pending claim as ownership."""
+    return [l for l in leases(comments, user, include_ended=True)
+            if CLAIM_PENDING not in l[4]["body"]]
+
+
+def repair_if_taken_over(pr, session, after_id=None):
+    """Labels have no compare-and-swap: after a terminal write, re-read the lease and give a new holder its labels back.
+
+    The repair write can itself race the new holder finishing its own handoff, so
+    re-read after each write and follow the durable state until it stops moving.
+    """
+    comments, user = pr.comments(), pr.user()
+    history = confirmed_leases(comments, user)
+    if after_id is None:
+        after_id = max((l[0] for l in history if l[1] == session), default=0)
+    # A successor can merge and release before our first read. Its confirmed
+    # lease remains evidence of takeover after it stops being the active holder.
+    successor = next((l for l in reversed(history) if l[0] > after_id), None)
+    top = holder(leases(comments, user), pr.now()) or successor
+    if not top or top[1] == session:
+        return
+    taker = top[1]
+    applied = None
+    while True:
+        comments, user = pr.comments(), pr.user()
+        active = holder(leases(comments, user), pr.now())
+        # Compare the handoff to the actual holder, even before it releases.
+        # Ended pending claims never held the PR and cannot supersede a handoff.
+        history = confirmed_leases(comments, user)
+        lease_id = active[0] if active else max((l[0] for l in history), default=0)
+        handoff_id = max((c["id"] for c in comments if c["user"]["login"] == user
+                          and HANDOFF.match(c["body"])), default=0)
+        merge_id = max((c["id"] for c in comments if c["user"]["login"] == user
+                        and c["body"].startswith("🤖 Merged by babysit-pr:")), default=0)
+        if merge_id > max(lease_id, handoff_id):
+            want = ([], ["babysitting", "needs-human"])
+        elif handoff_id > lease_id:
+            want = (["needs-human"], ["babysitting"])
+        elif active:
+            want = (["babysitting"], ["needs-human"])
+        else:
+            want = ([], ["babysitting"])
+        if want == applied:
+            break
+        pr.label(add=want[0], remove=want[1])
+        applied = want
+    fail(f"{session} was taken over by {taker}: labels restored to the new holder")
+
+
 def release(pr, session):
     """End `session`'s leases; drop `babysitting` unless another session holds the PR."""
     comments = pr.comments()
@@ -397,6 +457,7 @@ def release(pr, session):
     # Finish label cleanup while our lease still prevents a resume from winning.
     if not top or top[1] == session:
         pr.label(remove=["babysitting"])
+        repair_if_taken_over(pr, session)
     for l in found:
         if l[1] == session:
             end(pr, l[4])
@@ -741,7 +802,7 @@ def terminal_owner(pr, session, action):
     if top and not session:
         fail(f"{action} needs --session while a lease is active (reuse it on retries)")
     if top and top[1] != session:
-        fail(f"{session} is stale: {top[1]} resumed the PR")
+        fail(f"{session} is stale: {top[1]} resumed the PR (taken over)")
 
 
 def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="", session=None, op=None):
@@ -749,6 +810,7 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
     op = op or hashlib.sha256(json.dumps([reason, ci, rounds, gate, judge_line, fix_log]).encode()).hexdigest()[:12]
     tag = f"<!-- babysit-pr handoff: {op} -->"
     user, comments = pr.user(), pr.comments()
+    lease_boundary = max((l[0] for l in confirmed_leases(comments, user)), default=0)
     mine = [c for c in comments if c["user"]["login"] == user]
     terminal_owner(pr, session, "handoff")
     last = max((c["id"] for c in mine if HANDOFF.match(c["body"])), default=None)
@@ -764,6 +826,7 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
     gh("api", "-X", "POST", f"{pr.repo}/labels", "-f", "name=needs-human", check=False)  # 422 when it exists
     terminal_owner(pr, session, "handoff")
     pr.label(add=["needs-human"], remove=["babysitting"])
+    repair_if_taken_over(pr, session, lease_boundary)
     if session:
         release(pr, session)
 
