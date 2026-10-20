@@ -67,15 +67,16 @@ def _entries(commit: str, paths: list[str]) -> tuple[dict[str, str], str]:
     return {path: entry for entry, _, path in (line.partition("\t") for line in names(tree.stdout))}, ""
 
 
-def refused(tickets: dict, number: str, old: str, new: str) -> str:
-    """"" or why ticket `number` may not land `new` on the PR tip `old`: each locked file of a merged ticket must
-    be the same blob with the same mode in both."""
+def refused(tickets: dict, number: str, old: str, new: str) -> tuple[list[str], str]:
+    """Why ticket `number` may not land `new` on the PR tip `old`: (each locked file of a merged ticket that is not
+    the same blob with the same mode in both, "") or ([], why git cannot tell). ([], "") lets it land."""
     paths = protected(tickets, number)
     if not paths:
-        return ""  # `git ls-tree` with no path lists the whole tree
+        return [], ""  # `git ls-tree` with no path lists the whole tree
     (before, error), (after, failed) = _entries(old, paths), _entries(new, paths)
-    return error or failed or "; ".join(f"locked file changed: {path}" for path in paths
-                                        if before.get(path) != after.get(path))
+    if error or failed:
+        return [], error or failed
+    return [path for path in paths if before.get(path) != after.get(path)], ""
 
 
 def changed(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
