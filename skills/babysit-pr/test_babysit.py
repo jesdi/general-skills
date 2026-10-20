@@ -54,8 +54,15 @@ class World:
             d.mkdir()
         shutil.copy(FAKE_GH, bindir / "gh")
         (bindir / "gh").chmod(0o755)
+        self.script = SCRIPT
+        if not pr_risk:  # no sibling pr-risk beside the script, no install under HOME
+            stage = tmp_path / "stage" / "skills" / "babysit-pr"
+            stage.mkdir(parents=True)
+            for name in ("babysit.py", "judge-prompt.md"):
+                shutil.copy(SCRIPT.parent / name, stage / name)
+            self.script = stage / "babysit.py"
         if pr_risk:
-            skill = self.project / ".agents" / "skills" / "pr-risk"
+            skill = self.home / ".agents" / "skills" / "pr-risk"
             skill.mkdir(parents=True)
             (skill / "SKILL.md").write_text("---\nname: pr-risk\n---\n")
         self.state = tmp_path / "state.json"
@@ -71,7 +78,7 @@ class World:
 
     def run(self, verb, session, repo="jesdi/demo", pr="58"):
         p = subprocess.run(
-            [sys.executable, str(SCRIPT), "lease", verb, "--repo", repo, "--pr", pr,
+            [sys.executable, str(self.script), "lease", verb, "--repo", repo, "--pr", pr,
              "--session", session, "--host", "mac2"],
             cwd=self.project, env=self.env, text=True, capture_output=True)
         p.output = p.stdout + p.stderr
