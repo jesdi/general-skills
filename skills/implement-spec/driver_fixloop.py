@@ -187,17 +187,24 @@ def _fix(job: Job) -> None:
     job.corrected, job.proofs, job.again = False, set(followed), due
 
 
+def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
+    """The findings for a correction once an `accept` ruling closed the ticket's locked-test findings: only the
+    driver's, since a changed locked file is still restored. With no such ruling, `to_correct`."""
+    number = job.ticket.number
+    if not driver_decisions.corrections(state["run"]["questions"], number)[1]:
+        return to_correct
+    for finding in to_correct:
+        if finding["source"] != "driver":
+            ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
+                   f"(accept), with no correction: {finding['title']}.")
+    return [finding for finding in to_correct if finding["source"] == "driver"]
+
+
 def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
-    state, number = job.run.state.read(), job.ticket.number
-    to_correct, to_fix = driver_review.route(found, state["tickets"][number]["locked"])
-    if driver_decisions.corrections(state["run"]["questions"], number)[1]:
-        # The operator accepted the locked tests as they are. A changed locked file is still restored.
-        for finding in to_correct:
-            if finding["source"] != "driver":
-                ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the "
-                       f"ruling (accept), with no correction: {finding['title']}.")
-        to_correct = [finding for finding in to_correct if finding["source"] == "driver"]
+    state = job.run.state.read()
+    to_correct, to_fix = driver_review.route(found, state["tickets"][job.ticket.number]["locked"])
+    to_correct = _unaccepted(job, state, to_correct)
     if job.round == ROUNDS:
         # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
         to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]
