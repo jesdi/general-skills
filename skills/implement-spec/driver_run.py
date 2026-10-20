@@ -229,7 +229,10 @@ def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: d
     """After read-only agents: "" when the slot and the shared git config (`driver_review.shared_config` before
     them) are as they were; else restore both and return what they left."""
     # The config first: a bad core.worktree in it breaks the git commands of the slot check.
-    changed = driver_review.restore_config(config)
+    try:
+        changed = driver_review.restore_config(config)
+    except driver_review.Unrestored as error:
+        raise Blocked(str(error)) from error
     moved = driver_review.disturbed(slot, branch, tip)
     if moved:
         driver_review.restore(slot, branch, tip)
