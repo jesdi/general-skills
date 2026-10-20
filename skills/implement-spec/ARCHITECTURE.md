@@ -107,7 +107,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   the shared git config, the driver restores them and runs the review one more time (`Run.read_only`). The config is
   the keys of that file before the role (`driver_review.shared_config`): every worktree reads that one file, so a key a
   role writes there, such as a `core.worktree` on a temp directory, breaks git in all of them. Other sessions write
-  it too, so `branch.*` tracking keys do not count and only the changed keys go back, never the whole file.
+  it too, so the tracking keys of a new branch (`driver_review._tracking`) do not count and only the changed keys go
+  back, checked after; the whole file goes back only when git cannot write them.
 - A slot with uncommitted work of an interrupted or parked ticket is kept for that ticket (`driver_state.kept`).
 - A blocked ticket keeps its slot when the slot is not clean.
 

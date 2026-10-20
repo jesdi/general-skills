@@ -936,7 +936,8 @@ def test_a_branch_entry_that_another_worktree_writes_during_the_review_is_no_rul
     # Issue #130: a `git worktree add -b x origin/main` of another session writes [branch "x"] into the shared config.
     rig = Inside(tmp_path)
     shared = rig.repo / ".git" / "config"
-    track = {"git": [["config", "branch.x.remote", "origin"], ["config", "branch.x.merge", "refs/heads/main"]]}
+    # The rig has no remote, so only the merge key: the unit tests below cover a remote key.
+    track = {"git": [["config", "branch.x.merge", "refs/heads/main"]]}
     rig.run(plan(**{"01/reviewer": [{**review("01"), **track}]}))
     assert rig.code == 0, rig.ledger()
     assert not rig.led("a read-only role broke its rule:") and len(rig.calls("01", "reviewer")) == 1
@@ -953,12 +954,90 @@ def test_a_dangerous_key_is_restored_and_the_other_sessions_branch_entry_stays(t
     rig = Inside(tmp_path)
     shared = rig.repo / ".git" / "config"
     before = config_values(shared, key)
-    both = {"git": [["config", key, value], ["config", "branch.x.remote", "origin"]]}
+    both = {"git": [["config", key, value], ["config", "branch.x.merge", "refs/heads/main"]]}
     rig.run(plan(**{"01/reviewer": [{**review("01"), **both}, review("01")]}))
     assert rig.code == 0, rig.ledger()
     (line,) = rig.led("Ticket 01: a read-only role broke its rule:")
     assert f"the shared git config {shared.resolve()} changed: {key.lower()}" in line
-    assert config_values(shared, key) == before and config_values(shared, "branch.x.remote") == "origin\n"
+    assert config_values(shared, key) == before and config_values(shared, "branch.x.merge") == "refs/heads/main\n"
+
+
+def tracked_repo(tmp_path):
+    """A repository with an origin remote and a main branch that tracks it, and its shared config."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    for key, value in (("remote.origin.url", "/tmp/origin"), ("branch.main.remote", "origin"),
+                       ("branch.main.merge", "refs/heads/main")):
+        subprocess.run(["git", "-C", str(repo), "config", key, value], check=True)
+    return repo, repo / ".git" / "config"
+
+
+def set_key(repo, *args):
+    subprocess.run(["git", "-C", str(repo), "config", *args], check=True)
+
+
+def test_a_new_branch_that_tracks_a_configured_remote_is_no_change(tmp_path):
+    repo, config = tracked_repo(tmp_path)
+    before = driver_review.shared_config(str(repo))
+    set_key(repo, "branch.y.remote", "origin")
+    set_key(repo, "branch.y.merge", "refs/heads/main")
+    assert driver_review.restore_config(before) == ""
+    assert config_values(config, "branch.y.merge") == "refs/heads/main\n"
+
+
+@pytest.mark.parametrize("key, value", [("branch.x.remote", "/tmp/evil"), ("branch.x.remote", "nowhere"),
+                                        ("branch.x.pushremote", "origin"), ("branch.x.merge", "HEAD"),
+                                        ("branch.main.merge", "refs/heads/evil"), ("branch.main.rebase", "true")])
+def test_a_branch_key_that_no_worktree_add_writes_is_flagged_and_restored(tmp_path, key, value):
+    repo, config = tracked_repo(tmp_path)
+    before = driver_review.shared_config(str(repo))
+    set_key(repo, key, value)
+    assert driver_review.restore_config(before) == f"the shared git config {config} changed: {key}"
+    assert config.read_bytes() == before[1]
+
+
+def test_a_branch_key_next_to_an_existing_one_is_flagged(tmp_path):
+    repo, config = tracked_repo(tmp_path)
+    set_key(repo, "branch.x.merge", "refs/heads/main")
+    before = driver_review.shared_config(str(repo))
+    set_key(repo, "branch.x.remote", "origin")
+    assert driver_review.restore_config(before).endswith("changed: branch.x.remote")
+    assert config_values(config, "branch.x.remote") == ""
+
+
+def test_a_held_config_lock_falls_back_to_the_whole_file_and_is_verified(tmp_path):
+    repo, config = tracked_repo(tmp_path)
+    before = driver_review.shared_config(str(repo))
+    mode = config.stat().st_mode
+    set_key(repo, "core.hooksPath", "/tmp/hooks")
+    config.with_name("config.lock").write_text("")
+    assert driver_review.restore_config(before).endswith("changed: core.hookspath")
+    assert config.read_bytes() == before[1] and config.stat().st_mode == mode
+
+
+def test_a_config_the_driver_cannot_write_back_raises(tmp_path):
+    repo, config = tracked_repo(tmp_path)
+    before = driver_review.shared_config(str(repo))
+    set_key(repo, "core.hooksPath", "/tmp/hooks")
+    config.with_name("config.lock").write_text("")
+    os.chmod(config.parent, 0o555)
+    try:
+        with pytest.raises(driver_review.Unrestored, match="core.hookspath"):
+            driver_review.restore_config(before)
+    finally:
+        os.chmod(config.parent, 0o755)
+
+
+@pytest.mark.parametrize("change", [["--unset", "x.flag"], ["x.flag", "false"], ["--add", "x.flag", "true"]])
+def test_a_valueless_key_goes_back_valueless(tmp_path, change):
+    repo, config = tracked_repo(tmp_path)
+    with config.open("a") as text:
+        text.write("[x]\n\tflag\n")
+    before = driver_review.shared_config(str(repo))
+    assert before[2]["x.flag"] == [None]
+    set_key(repo, *change)
+    assert driver_review.restore_config(before).endswith("changed: x.flag")
+    assert config.read_bytes() == before[1]
 
 
 def test_a_reviewer_that_times_out_starts_again_from_the_clean_tip(tmp_path):
