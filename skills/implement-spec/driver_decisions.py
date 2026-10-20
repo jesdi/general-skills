@@ -75,6 +75,22 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "review-stopped": Kind(
+        True,
+        "Ticket {ticket}: an agent of the review stopped: {subject}",
+        "The reviewer or the correctness pass of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, so the review "
+        "did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "retry",
+        {"retry": Option(
+            "The review runs again, with each of its agents.",
+            "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
+         "accept": Option(
+            "The review runs again, and from now on a BLOCKED or NEEDS_CONTEXT report of this agent does not stop "
+            "the ticket: the review goes on with its findings and those of the other reports.",
+            "Ruling: {ticket} review goes on past this stop (accept): {subject}.", {"phase": "review"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,
@@ -101,6 +117,11 @@ def corrections(questions: list[dict], ticket: str) -> tuple[int, bool]:
         if (q["ticket"], q["kind"]) == (ticket, "locked-test-again") and q["answer"]:
             stops.setdefault(q["stop"], set()).add(q["answer"])
     return sum("correct-again" in answers for answers in stops.values()), {"accept"} in stops.values()
+
+
+def accepted(questions: list[dict], ticket: str, kind: str) -> list[str]:
+    """The subjects of the questions of `kind` on `ticket` that the operator answered `accept`."""
+    return [q["subject"] for q in questions if (q["ticket"], q["kind"], q["answer"]) == (ticket, kind, "accept")]
 
 
 def contradicted(role: str, report: dict) -> str:
