@@ -134,6 +134,17 @@ def test_implementer_without_a_new_commit_is_a_violation(world):
     assert check("implementer", implementer(shas), start=shas["impl"])  # its only commit is not new
 
 
+def test_an_implementer_with_nothing_to_change_reports_no_commit_and_why(world):
+    """Issue 123: an implementer whose start already meets the ticket has a report the driver accepts."""
+    shas, check, _ = world
+    why = ["the correction made the locked tests green: the start needs no change"]
+    assert check("implementer", implementer(shas, commits=[], concerns=why), start=shas["impl"]) == []
+    assert check("implementer", implementer(shas, commits=[]), start=shas["impl"]) == [
+        "no commit, and no concern: say in `concerns` why the start needs no change"]
+    assert check("implementer", implementer(shas, commits=[], concerns=why), start=shas["tests"]) == [
+        f"commit {shas['impl'][:7]} is on ticket/01 and not in `commits`: list each commit you made"]
+
+
 def test_a_fixer_with_nothing_to_change_reports_no_commit_and_a_reason_per_finding(world):
     """Issue 123: a fixer whose findings need no change has a report the driver accepts: no commit, a concern each."""
     shas, check, tmp = world
