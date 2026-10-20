@@ -57,6 +57,24 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "locked-test-again": Kind(
+        True,
+        "Ticket {ticket}: a locked-test finding is open after the test-writer correction: {subject}",
+        "The test-writer correction did not close this finding on the locked tests: the review after it found it "
+        "again, or the driver rejected the correction (the ledger line says which). Ticket {ticket} is BLOCKED and "
+        "each ticket that it blocks waits.",
+        "correct-again",
+        {"correct-again": Option(
+            "The test-writer corrects the locked tests once more, from the next review. Then the fix rounds go on.",
+            "Ruling: {ticket} locked-test finding goes back to the test-writer for one more correction "
+            "(correct-again): {subject}.", {"phase": "review"}),
+         "accept": Option(
+            "Close the finding as it is: the locked tests stay as they are, and no more correction runs for the "
+            "ticket. The ticket goes on to its fix rounds with its other findings.",
+            "Ruling: {ticket} locked-test finding closed as it is (accept): {subject}.", {"phase": "review"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,
@@ -72,6 +90,19 @@ KINDS = {
 }
 
 
+AGAIN = 2  # the extra corrections a ticket may get: a test-writer and a reviewer that never agree cannot loop
+
+
+def corrections(questions: list[dict], ticket: str) -> tuple[int, bool]:
+    """(the extra corrections that the `locked-test-again` stops of `ticket` gave, whether one stop accepted its
+    findings). A stop with one `correct-again` answer gives one correction; a stop with only `accept` accepts."""
+    stops: dict[int, set] = {}
+    for q in questions:
+        if (q["ticket"], q["kind"]) == (ticket, "locked-test-again") and q["answer"]:
+            stops.setdefault(q["stop"], set()).add(q["answer"])
+    return sum("correct-again" in answers for answers in stops.values()), {"accept"} in stops.values()
+
+
 def contradicted(role: str, report: dict) -> str:
     """The locked tests that a BLOCKED report of an implementer or a fixer says contradict the spec; "" when it is not
     that stop."""
@@ -85,9 +116,12 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
     """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
+    options, recommended = made.options, made.recommended
+    if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
+        options, recommended = {name: options[name] for name in ("accept", "redesign")}, "accept"
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
-            "evidence": evidence, "recommended": made.recommended,
-            "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
+            "evidence": evidence, "recommended": recommended,
+            "options": [{"id": name, "description": option.description} for name, option in options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "answer": None}
 
 
