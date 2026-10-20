@@ -22,10 +22,9 @@ Write one JSON report at {report} that matches this schema:
 ```json
 {
   "type": "object",
-  "required": ["status", "commits", "files", "concerns", "findings"],
+  "required": ["status", "files", "concerns", "findings"],
   "properties": {
     "status": {"enum": ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"]},
-    "commits": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}},
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
     "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "file", "line", "title", "evidence", "kind"], "properties": {"severity": {"enum": ["critical", "important", "minor"]}, "file": {"type": "string"}, "line": {"type": "integer"}, "title": {"type": "string", "minLength": 1}, "evidence": {"type": "string", "minLength": 1}, "kind": {"enum": ["code", "fixture", "test"]}}}}

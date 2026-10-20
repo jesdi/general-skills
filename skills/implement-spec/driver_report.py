@@ -41,8 +41,9 @@ def _seen(line: str, log: str) -> bool:
 
 
 def _shas(report: dict) -> list[str]:
-    """`commits` as SHAs: the fix batch of the final review gives each commit with its ticket."""
-    return [commit["sha"] if isinstance(commit, dict) else commit for commit in report["commits"]]
+    """`commits` as SHAs: the fix batch of the final review gives each commit with its ticket. A read-only role has
+    no `commits` (issue #129)."""
+    return [commit["sha"] if isinstance(commit, dict) else commit for commit in report.get("commits", [])]
 
 
 def _owner_errors(report: dict, context: dict) -> list[str]:

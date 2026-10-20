@@ -17,10 +17,9 @@ Write one JSON report at {report} that matches this schema:
 ```json
 {
   "type": "object",
-  "required": ["status", "commits", "files", "concerns", "body"],
+  "required": ["status", "files", "concerns", "body"],
   "properties": {
     "status": {"enum": ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"]},
-    "commits": {"type": "array", "maxItems": 0},
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
     "body": {"type": "string", "minLength": 1}

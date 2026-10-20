@@ -173,21 +173,21 @@ The defaults need both `claude` and `codex` on PATH. The `openai` defaults name 
 
 Each agent writes one JSON report. The schema of a role is the `json` block of its prompt template, so the agent reads the text that the driver enforces. `driver_report.py` `validate` checks the report against the schema, against git and against the log of the agent. A field that the schema does not name is ignored.
 
-Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`), `commits`, `files` and `concerns`.
+Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCKED`), `files` and `concerns`. A role that commits also has `commits`. A read-only role (reviewer, correctness, final-reviewer, pr-writer) has none: a reviewer reads `commits` as the commits it reviews, and the driver would refuse each of them as not new. The driver checks instead that a read-only role leaves its slot on the tip it got, with a clean tree.
 
 | Role | Template | More fields | Checks after the schema |
 |---|---|---|---|
 | test-writer | `prompts/test-writer.md` | `locked` (test file paths), `red` (`test`, `line`), optional `fixtures` (each locked file that holds no test, as a fake `gh`) | The driver reads a test node id `<file>::<test>` in `locked` as its file. Each fixture is in `locked`; the ticket record keeps it a fixture until a later correction lists the file again. With DONE: one commit, one locked file and one red line or more. Each locked path is in a commit that the role made. Each `line` is in the log. A locked file of a merged ticket that the role changed is in `locked`. A correction (after `overrule-test`, or for a review finding) changes only the files that it lists in `locked` and the files that the driver restored before it. When the gate is red on the restore commit, a DONE correction lists a restored file in `locked`. Each `not_addressed[].finding` is the title of a finding of the correction; a DONE correction with each of its findings there needs no commit. |
 | implementer | `prompts/implementer.md` | `green` | With DONE and no commit: no new commit on the branch, no uncommitted change, and a concern that says why the start needs no change. The driver then gates and reviews the start commit. |
-| reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`); `commits` is empty | In a full review (one with no fix range: round 1, and the review after a test-writer correction): `mutations` is required, with a proof for each locked test file (`test` is `<locked file>::<test name>`). A locked fixture needs no proof: it holds no test that a proof could name, and the locked-file check protects it. Each `red` is in the log. |
-| correctness | `prompts/correctness.md` | the same as the reviewer; `commits` is empty | `mutations` is optional. |
+| reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`), `mutations` (`test`, `file`, `line`, `red`) | In a full review (one with no fix range: round 1, and the review after a test-writer correction): `mutations` is required, with a proof for each locked test file (`test` is `<locked file>::<test name>`). A locked fixture needs no proof: it holds no test that a proof could name, and the locked-file check protects it. Each `red` is in the log. |
+| correctness | `prompts/correctness.md` | the same as the reviewer | `mutations` is optional. |
 | fixer | `prompts/fixer.md` | `green`, `ticket` | With DONE and no commit: no new commit on the branch, no uncommitted change, a gate that is green on the start, and a concern that names each finding of the round. |
 | final-reviewer | `prompts/final-reviewer.md` | `findings` | None. |
-| pr-writer | `prompts/pr-writer.md` | `body`; `commits` is empty | None. |
+| pr-writer | `prompts/pr-writer.md` | `body` | None. |
 | fixer of the final review | `prompts/final-fixer.md` | `green`; `commits` is a list of (`sha`, `ticket`) | Each new commit on the branch is in `commits`, with a ticket of the run. |
 | conflict | `prompts/conflict.md`, `prompts/rebase-conflict.md` | none | With DONE: one commit or more. No locked file may change. |
 
-For each role, every commit in `commits` must be new since the role started and on its branch. `severity` is `critical`, `important` or `minor`. `kind` is `code`, `test` or `fixture`. A read-only `codex` agent cannot write a file, so it gives the JSON as its last message and the CLI saves it as the report.
+For each role that commits, every commit in `commits` must be new since the role started and on its branch. `severity` is `critical`, `important` or `minor`. `kind` is `code`, `test` or `fixture`. A read-only `codex` agent cannot write a file, so it gives the JSON as its last message and the CLI saves it as the report.
 
 ## Question kinds
 
