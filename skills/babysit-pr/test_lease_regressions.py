@@ -62,7 +62,7 @@ def start(w, verb, session, prefix, match):
     # These election races model separate hosts. Same-host writers serialize on
     # the home-directory lock, so each simulated host needs its own home.
     home = w.home.parent / f"home-{session}"
-    home.mkdir(exist_ok=True)
+    (home / ".agents/skills/pr-risk").mkdir(parents=True, exist_ok=True)
     return subprocess.Popen(
         [sys.executable, str(SCRIPT), "lease", verb, "--repo", "jesdi/demo",
          "--pr", "58", "--session", session, "--host", "mac2"],

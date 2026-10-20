@@ -203,7 +203,7 @@ def round_ops(comment):
 
 
 def own_lease(repo, number, session):
-    require_pr_risk()
+    require_pr_risk(repo, number)
     pr = Pr(repo, number)
     top = holder(leases(pr.comments(), pr.user()), pr.now())
     if top is None or top[1] != session:
@@ -364,10 +364,14 @@ def extend(pr, c, session, host, expires, user):
     confirm(pr, c)
 
 
-def require_pr_risk():
-    home = Path.home()
-    if not any(Path(d).is_dir() for d in (*PR_RISK_DIRS, home / ".my-skills/pr-risk")):
-        fail(f"pr-risk is not installed. Run: {INSTALL}")
+def require_pr_risk(repo, number):
+    if trusted_pr_risk_dirs():
+        return
+    if subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True).returncode == 0:
+        base = gh("api", f"repos/{repo}/pulls/{number}", "--jq", ".base.ref", check=False).strip()
+        if base and base_install(base):
+            return
+    fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
 def renew(repo, number, session):
@@ -382,7 +386,7 @@ def lease(verb, repo, number, session, host):
 
 
 def lease_locked(verb, repo, number, session, host):
-    require_pr_risk()
+    require_pr_risk(repo, number)
     pr = Pr(repo, number)
     user = pr.user()
     comments = pr.comments()
@@ -519,13 +523,60 @@ def owner_comments(repo, number):
     return {"handoff": handoff, "instructions": [] if handoff else instructions}
 
 
-def load_merge_risk():
-    for d in (Path(__file__).resolve().parent.parent / "pr-risk", Path.home() / ".my-skills/pr-risk",
-              *map(Path, PR_RISK_DIRS)):
+def checkout_root():
+    p = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True)
+    return Path(p.stdout.strip() if p.returncode == 0 else ".").resolve()
+
+
+def trusted_pr_risk_dirs():
+    """Installs a PR cannot change: next to this skill, and under $HOME. Never inside the checkout.
+
+    A path counts only if it, and the module files in it, resolve outside the checkout:
+    HOME may be the checkout, and a symlink may point into it. A project install is
+    read from origin/<base> instead.
+    """
+    root = checkout_root()
+    home = Path.home()
+    outside = lambda p: not p.resolve().is_relative_to(root)
+    return [d.resolve() for d in [Path(__file__).resolve().parent.parent / "pr-risk",
+                                  *(home / n for n in PR_RISK_DIRS)]
+            if d.is_dir() and outside(d)
+            and all((d / n).is_file() and outside(d / n) for n in ("merge_risk.py", "merge_policy.py"))]
+
+
+def base_install(base):
+    """[(file name, bytes)] of a pr-risk install committed on origin/<base>, else None."""
+    names = ("merge_risk.py", "merge_policy.py")
+    for d in PR_RISK_DIRS:  # a project install counts only as committed on origin/<base>
+        shown = [subprocess.run(["git", "show", f"origin/{base}:{d}/{n}"], capture_output=True)
+                 for n in names]
+        if all(p.returncode == 0 for p in shown):
+            return [(n, p.stdout) for n, p in zip(names, shown)]
+
+
+def import_merge_risk(folder):
+    sys.modules.pop("merge_risk", None)
+    sys.modules.pop("merge_policy", None)
+    saved = sys.path[:]
+    root = checkout_root()  # PYTHONPATH or "" may name the checkout: the trusted import must not see it
+    sys.path[:] = [str(folder)] + [p for p in saved if p and not Path(p).resolve().is_relative_to(root)]
+    try:
+        import merge_risk
+    finally:
+        sys.path[:] = saved
+    return merge_risk
+
+
+def load_merge_risk(base=None):
+    for d in trusted_pr_risk_dirs():
         if (d / "merge_risk.py").is_file():
-            sys.path.insert(0, str(d))
-            import merge_risk
-            return merge_risk
+            return import_merge_risk(d)
+    files = base_install(base) if base else None
+    if files:
+        with tempfile.TemporaryDirectory(prefix="babysit-pr-risk-", dir="/tmp") as tmp:
+            for n, data in files:
+                (Path(tmp) / n).write_bytes(data)
+            return import_merge_risk(tmp)
     fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
@@ -590,7 +641,7 @@ def ask(cli, prompt, timeout):
 
 
 def judge(base, head, body_file, agent):
-    mr = load_merge_risk()
+    mr = load_merge_risk(base)
     prompt = (Path(__file__).with_name("judge-prompt.md").read_text()
               + judge_input(mr, Path(body_file).read_text(), base, head))
     deadline = time.monotonic() + float(os.environ.get("BABYSIT_JUDGE_TIMEOUT", 600))
