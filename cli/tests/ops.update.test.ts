@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -239,5 +239,29 @@ describe('global install', () => {
     const ctx = await makeCtx();
     await opInstall(['hello-world'], ['claude'], 'local', ctx);
     expect(existsSync(join(ctx.home, '.my-skills'))).toBe(false);
+  });
+});
+
+describe('state writers', () => {
+  it('a decline and a pin wait for the store lock and keep the hook ownership written under it', async () => {
+    const ctx = await makeCtx();
+    await opInstall(['hello-world'], ['claude'], 'global', ctx);
+    const lock = join(ctx.home, '.my-skills.lock');
+    const file = join(ctx.home, '.config', 'my-skills', 'state.json');
+    await mkdir(lock); // an install of a renamed hook holds the lock
+    const pending = Promise.all([
+      opDecline('hello-world', '0.1.1', ctx),
+      opSetPinned('hello-world', true, 'global', ctx),
+    ]);
+    await new Promise((r) => setTimeout(r, 120));
+    const state = JSON.parse(await readFile(file, 'utf8'));
+    state.skills['hello-world'].ownedHooks = ['claude\0PostToolUse\0Bash\0renamed.sh'];
+    await writeFile(file, JSON.stringify(state));
+    await rm(lock, { recursive: true });
+    await pending;
+    const after = JSON.parse(await readFile(file, 'utf8'));
+    expect(after.skills['hello-world'].ownedHooks).toEqual(['claude\0PostToolUse\0Bash\0renamed.sh']);
+    expect(after.skills['hello-world'].pinned).toBe(true);
+    expect(after.declined['hello-world']).toBe('0.1.1');
   });
 });
