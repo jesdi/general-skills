@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import driver_agents
+import driver_decisions
 import driver_gate
 import driver_merge
 import driver_review
@@ -108,9 +109,10 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. Returns the
     findings that it did not correct, as findings of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
+    titles, evidence = [finding["title"] for finding in findings], str(OUT / number / f"findings-{job.round}.json")
     if job.corrected:
-        titles = "; ".join(finding["title"] for finding in findings)
-        raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {titles}")
+        run.ask(number, "locked-test-again", titles, evidence)
+        raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {'; '.join(titles)}")
     restored = run.restore_locked_files(number, job.slot)
     job.tip = driver_slots.head(job.slot)  # the restore is a commit of the driver
     # The gate was green on the tip before the restore, so a red gate here is a restored file that fails with the
@@ -126,9 +128,13 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
               "record": record and os.path.relpath(record, job.slot)}
     notes = ["correction"] + ["restored"] * bool(restored) + ["restored-red"] * bool(record)
     with during("the test-writer correction"):
-        report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
-                           check={"correction": True, "restored": restored, "restore_red": bool(record),
-                                  "findings": [finding["title"] for finding in findings]})
+        try:
+            report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
+                               check={"correction": True, "restored": restored, "restore_red": bool(record),
+                                      "findings": titles})
+        except Blocked:
+            run.ask(number, "locked-test-again", titles, evidence)  # a rejected correction is one that did not close
+            raise
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
     run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
@@ -183,8 +189,15 @@ def _fix(job: Job) -> None:
 
 def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
-    locked = job.run.state.read()["tickets"][job.ticket.number]["locked"]
-    to_correct, to_fix = driver_review.route(found, locked)
+    state, number = job.run.state.read(), job.ticket.number
+    to_correct, to_fix = driver_review.route(found, state["tickets"][number]["locked"])
+    if driver_decisions.corrections(state["run"]["questions"], number)[1]:
+        # The operator accepted the locked tests as they are. A changed locked file is still restored.
+        for finding in to_correct:
+            if finding["source"] != "driver":
+                ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the "
+                       f"ruling (accept), with no correction: {finding['title']}.")
+        to_correct = [finding for finding in to_correct if finding["source"] == "driver"]
     if job.round == ROUNDS:
         # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
         to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]

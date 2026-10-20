@@ -141,12 +141,67 @@ def test_a_locked_file_check_that_git_cannot_make_is_a_finding(tmp_path):
     assert found["severity"] == "critical" and found["title"].startswith("locked file check failed: ")
 
 
-def test_a_fixture_finding_that_comes_back_after_its_correction_blocks_the_ticket(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
-    correction = {**tw("01"), "files": {"tests/test_01.py": "# corrected\n"}, "commit": "test: 01 fixture fix"}
-    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), correction], "01/reviewer": [review("01", [stale])] * 2}))
-    assert blocked(rig).endswith("BLOCKED at the review: a locked-test finding is open after the test-writer correction: STALE.")
-    assert len(rig.calls("01", "test-writer")) == 2 and rig.state()["tickets"]["01"]["round"] == 0
+STALE = finding("STALE", kind="fixture", file="tests/test_01.py")
+AGAIN_1 = "01-locked-test-again-1"
+
+
+def corrections(n):
+    """`n` test-writer corrections of tests/test_01.py, each with its own content."""
+    return [{**tw("01"), "files": {"tests/test_01.py": f"# corrected {i}\n"}, "commit": f"test: 01 correction {i}"}
+            for i in range(1, n + 1)]
+
+
+def asked(rig):
+    """The open questions of the run: id -> option ids."""
+    return {q["id"]: [o["id"] for o in q["options"]] for q in rig.state()["run"]["questions"] if q["answer"] is None}
+
+
+def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_the_operator(tmp_path):
+    # Issue #107: the ticket was BLOCKED with no question, so only an edit of state.json could resume it.
+    steps = plan(**{"01/test-writer": [tw("01"), *corrections(2)],
+                    "01/reviewer": [review("01", [STALE])] * 3 + [review("01")]})
+    rig = Inside(tmp_path).run(steps)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert rig.led("BLOCKED at the review: a locked-test finding is open after the test-writer correction: STALE.")
+    assert asked(rig) == {AGAIN_1: ["correct-again", "accept", "redesign"]}
+    (question,) = rig.state()["run"]["questions"]
+    assert question["recommended"] == "correct-again" and question["evidence"][0] == ".agent/implement/01/findings-0.json"
+    rig.run(steps, "--answer", f"{AGAIN_1}=correct-again")
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "reviewer", "test-writer",
+                     "reviewer"]
+    assert rig.led("Ruling: 01 locked-test finding goes back to the test-writer for one more correction")
+    assert rig.state()["tickets"]["01"]["phase"] == "merged"
+
+
+def test_an_accepted_locked_test_finding_lets_the_ticket_go_on_to_its_fix_rounds(tmp_path):
+    steps = plan(**{"01/test-writer": [tw("01"), *corrections(1)], "01/fixer": [fix("01", 1)],
+                    "01/reviewer": [review("01", [STALE]), review("01", [STALE]), review("01", [STALE, STUCK]),
+                                    review("01", [STALE])]})
+    rig = Inside(tmp_path).run(steps)
+    assert rig.code == 2 and list(asked(rig)) == [AGAIN_1], rig.ledger()
+    rig.run(steps, "--answer", f"{AGAIN_1}=accept")
+    assert rig.code == 0, rig.ledger()
+    order = [call["role"] for call in rig.calls("01")]
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "reviewer", "fixer",
+                     "reviewer"]
+    assert rig.state()["tickets"]["01"]["round"] == 1
+    assert rig.led("STALE", "closed as it is by the ruling")
+
+
+def test_the_extra_corrections_are_bounded_and_redesign_keeps_the_ticket_blocked(tmp_path):
+    steps = plan(**{"01/test-writer": [tw("01"), *corrections(3)], "01/reviewer": [review("01", [STALE])] * 6})
+    rig = Inside(tmp_path).run(steps)
+    for n in (1, 2):
+        assert asked(rig) == {f"01-locked-test-again-{n}": ["correct-again", "accept", "redesign"]}, rig.ledger()
+        rig.run(steps, "--answer", f"01-locked-test-again-{n}=correct-again")
+    # Two extra corrections did not close it: a third one is not offered.
+    assert asked(rig) == {"01-locked-test-again-3": ["accept", "redesign"]}, rig.ledger()
+    assert len(rig.calls("01", "test-writer")) == 4
+    rig.run(steps, "--answer", "01-locked-test-again-3=redesign")
+    assert rig.code == 1 and rig.state()["tickets"]["01"]["phase"] == "blocked" and asked(rig) == {}
+    assert rig.led("Ruling: 01 stays BLOCKED, the design changes first (redesign): STALE.")
 
 
 def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_starts_the_fix_round(tmp_path):
@@ -282,10 +337,15 @@ def test_the_fix_rounds_count_from_0_after_an_overruled_test(tmp_path):
     assert rig.state()["tickets"]["01"]["round"] == 1 and not rig.led("after round 4")
 
 
-def test_a_fixture_correction_that_is_rejected_blocks_the_ticket(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
-    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), {}, {}], "01/reviewer": [review("01", [stale])]}))
-    assert "BLOCKED at the test-writer correction: report .agent/implement/01/test-writer-1.json is not" in blocked(rig)
+def test_a_fixture_correction_that_is_rejected_asks_the_operator(tmp_path):
+    # Issue #107: a correction the driver rejects (for one, a change to a file it does not list) was a dead end too.
+    steps = plan(**{"01/test-writer": [tw("01"), {}, {}, *corrections(1)],
+                    "01/reviewer": [review("01", [STALE])] * 2 + [review("01")]})
+    rig = Inside(tmp_path).run(steps)
+    assert rig.code == 2 and list(asked(rig)) == [AGAIN_1], rig.ledger()
+    assert rig.led("BLOCKED at the test-writer correction: report .agent/implement/01/test-writer-1.json is not")
+    rig.run(steps, "--answer", f"{AGAIN_1}=correct-again")
+    assert rig.code == 0 and len(rig.calls("01", "test-writer")) == 4, rig.ledger()
 
 
 # ---------------------------------------------------------------- the locked files of the merged tickets

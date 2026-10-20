@@ -138,6 +138,10 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - No test-writer correction runs after round 4 (`driver_fixloop._act_on`): its findings become `finding` questions
   with the others. A correction there would add red locked tests that no fix round makes green, and `accept` could
   not merge the ticket.
+- A correction that does not close its findings (the next review finds one again, or the driver rejects its
+  report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
+  `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the
+  extra corrections (`AGAIN`), and an `accept` stop closes the ticket's locked-test findings in `_act_on`.
 
 ### Questions
 

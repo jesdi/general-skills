@@ -57,7 +57,7 @@ Default timeouts in minutes: explorer 30, test-writer 30, implementer 90, review
 |---|---|
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
-| 2 | Parked: a question of kind `locked-test` or `final-finding` is open. Exit 2 wins over exit 1. |
+| 2 | Parked: a question of kind `locked-test`, `locked-test-again` or `final-finding` is open. Exit 2 wins over exit 1. |
 | 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs on the same PR branch. No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
 | 4 | Stopped: the CLI of an agent failed two times and wrote no report (for example, the account cannot use the model). The driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI or the model entry, then run the same command again to resume. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
@@ -118,7 +118,7 @@ Rules for each agent:
 
 | Finding | What the driver does |
 |---|---|
-| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding that the correction reports in `not_addressed` (it needs a production change first) becomes a finding of kind `code`, with the reason as its evidence, and goes to a fix round at once; the ledger says it was not corrected. A finding of this kind that is open after the correction blocks the ticket. No correction runs after round 4. |
+| kind `fixture`, any severity, or kind `test`, `critical` or `important`, on a locked file of the ticket | One test-writer correction, outside the fix rounds. The fixer may not edit a locked file, so a fix round cannot close a `test` finding there. The corrected files are the new locked versions, and the next review is a full review. A finding that the correction reports in `not_addressed` (it needs a production change first) becomes a finding of kind `code`, with the reason as its evidence, and goes to a fix round at once; the ledger says it was not corrected. A finding of this kind that is open in the review after the correction, or a correction that the driver rejects, blocks the ticket with a `locked-test-again` question. No correction runs after round 4. |
 | `critical` or `important` | One fix round. |
 | `minor` | It stays in the ledger and in the findings file. The final reviewer gets the list. |
 
@@ -197,6 +197,7 @@ A question is a bounded choice for the operator. `driver_decisions.py` `KINDS` h
 |---|---|---|---|---|
 | `locked-test` | `<NN>-locked-test-<n>` | An implementer or a fixer reports BLOCKED with a concern that starts with `locked test contradicts spec:`. | 2 | `overrule-test`: the test-writer corrects the test from that report, then the implementer runs again, and the fix rounds count from 0: the corrected tests are a new contract. `overrule-implementer` (recommended): the implementer runs again. |
 | `finding` | `<NN>-finding-<n>` | A finding is open after fix round 4. One question for each finding. | 1 | `accept`: close the finding; the ticket merges when each of its findings is accepted. `split` (recommended) and `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. |
+| `locked-test-again` | `<NN>-locked-test-again-<n>` | A finding for a test-writer correction is open in the review right after a correction, or the driver rejects the correction's report (for example, it changes a file that it does not list in `locked`). One question for each finding. | 2 | `correct-again` (recommended): the ticket resumes from the review, and that review's findings get one more correction. `accept`: no more correction runs for the ticket, its locked tests stay as they are, and the ticket goes on to its fix rounds with its other findings; a changed locked file is still restored. `redesign`: the ticket stays BLOCKED, with the ruling in the ledger. After two `correct-again` stops on a ticket, its next question offers only `accept` (recommended) and `redesign`, so a test-writer and a reviewer that never agree cannot loop. |
 | `final-finding` | `final-finding-<n>` | A finding is open after the second round of the final review. | 2 | `fix` (recommended): the finding stays open and nothing is pushed. `accept`: close the finding. |
 
 `n` counts the questions of that ticket and kind in the run, so an id is never used twice.
