@@ -232,19 +232,19 @@ def test_a_correction_that_commits_more_than_the_files_it_lists_is_rejected(tmp_
     assert "feat: 01 rows" not in rig.pr_subjects() and rig.state()["tickets"]["01"]["held"] == {}
 
 
-MUTATION = "tests/test_01.py::test_x is green against the tip: deleting fn_01 in demo/export.py turns it red"
+MUTATION = "FAILED tests/test_01.py::test_x - AssertionError: fn_01 deleted"
 
 
 def test_an_overrule_correction_whose_test_is_green_against_the_tip_reaches_the_review(tmp_path, capsys):
-    # Issue #134: the corrected test is green on the implementer's code, so the correction has no red line to give.
-    green = {**correction(), "stdout": COST}
-    green["report"] = {**green["report"], "red": [], "concerns": [MUTATION]}
+    # Issue #134: the corrected test is green on the implementer's code, so its red line comes from a reverted mutation.
+    green = {**correction(), "stdout": MUTATION + "\n" + COST}
+    green["report"] = {**green["report"], "red": [{"test": "tests/test_01.py::test_x", "line": MUTATION}]}
     scenario = plan(**{"01/test-writer": [tw("01"), green, green], "01/implementer": [partial(), impl("01")]})
     rig = Inside(tmp_path, ONE).run(scenario)
     rig.run(scenario, "--answer", f"{Q1}=overrule-test")
     assert rig.code == 0, rig.ledger()
     assert len(rig.calls("01", "test-writer")) == 2, "the green correction is accepted with no rerun"
-    assert "name in `concerns` the production-code mutation" in rig.prompt("test-writer-0")
+    assert "break the production line that the test protects" in rig.prompt("test-writer-0")
     assert rig.state()["tickets"]["01"]["phase"] == "merged"
 
 
