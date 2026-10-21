@@ -16,6 +16,7 @@ import driver_report
 import driver_run
 import driver_review
 import test_review
+from conftest import GIT
 from test_cli import three
 from test_review import FABLE, ONE, OPUS, RISKY, SOL, STUCK, correct, finding, fix, review
 from test_walk import impl, plan, tw
@@ -812,7 +813,10 @@ def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path):
 
 def test_a_first_review_proves_each_locked_file_and_a_second_bad_report_blocks(tmp_path):
     rig = Inside(tmp_path).run(plan(**{"01/reviewer": [review("01", lines=())] * 2}))
-    assert "BLOCKED at the review: the reviewer: mutations: no mutation proof for the locked test file tests/test_01.py." in blocked(rig)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert rig.led("BLOCKED at the review: the reviewer: mutations: no mutation proof for the locked test file "
+                   "tests/test_01.py.")
+    assert [q["id"] for q in rig.state()["run"]["questions"]] == ["01-review-rejected-1"]
     assert "feat: 01 rows" not in rig.pr_subjects()
 
 
@@ -863,7 +867,15 @@ def test_the_locked_file_rule_is_for_the_first_review_only(tmp_path):
     report = dict(status="DONE", commits=[], files=[], concerns=[], findings=[], mutations=[])
     path = tmp_path / "reviewer-0.json"
     path.write_text(json.dumps(report))
-    context = {"repo": ".", "branch": "main", "start": "HEAD", "log": str(path), "locked": ["tests/a.py", "tests/b.py"]}
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    for name in ("a", "b"):
+        (repo / f"tests/{name}.py").write_text("def test_x():\n    pass\n")
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run([*GIT, "-C", str(repo), "commit", "-q", "-m", "tests"], check=True)
+    context = {"repo": str(repo), "branch": "main", "start": "HEAD", "log": str(path),
+               "locked": ["tests/a.py", "tests/b.py"]}
     assert driver_report.validate("reviewer", str(path), context) == []
     assert driver_report.validate("reviewer", str(path), {**context, "full": True}) == [
         "mutations: no mutation proof for the locked test file tests/a.py",

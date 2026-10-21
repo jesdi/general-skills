@@ -152,6 +152,9 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - A reviewer or a correctness pass that reports BLOCKED or NEEDS_CONTEXT raises `driver_run.Stopped`, which
   carries the report. `driver_fixloop._run_reviewers` turns it into a `review-stopped` question, or, after an
   `accept` ruling on that role (`driver_decisions.accepted`), uses the report as it is.
+- A reviewer or a correctness pass whose report the driver rejects two times asks a `review-rejected` question.
+  The stop records each rejection in the ticket's `rejected` (role -> why); after `retry`, the role's first prompt
+  carries it (`prompts/rejected.md`), and the next review that ends clears it.
 - An implementer or a fixer that reports BLOCKED or NEEDS_CONTEXT asks a question in `Run._ask_stop`: `locked-test`
   for a contradicted locked test, else `implementer-stopped` or `fixer-stopped`. The stop of a fixer sets the round
   back by one, so its `retry` (gate and review the tip, then a fixer) runs the same round again.
@@ -165,6 +168,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 
 - A stop is a bounded question in `state.json`. Only `driver_decisions.stop` adds one. An answered question is
   never open again.
+- An open question of a merged ticket is dropped (`driver_decisions.drop_merged`), at the start of a run and after
+  each landing, with a ledger line: a ticket the operator set to `merge` by hand leaves its stop behind.
 - An answers file counts only when it is bound to the revision of the current `decisions.json`.
 - Only a question whose kind parks gives exit 2. A third round of the final review is never started: its open
   findings become questions.

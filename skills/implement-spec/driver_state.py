@@ -2,7 +2,7 @@
 
     {"run": {revision, pr_branch, schema, gates, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, fixtures, green_gates, slot, note, held}}}"""
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, fixtures, green_gates, slot, note, held, rejected}}}"""
 from __future__ import annotations
 
 import fcntl
@@ -22,7 +22,7 @@ PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": [],
-            "slot": None, "note": "", "held": {},
+            "slot": None, "note": "", "held": {}, "rejected": {},
             "fixtures": []}
 
 

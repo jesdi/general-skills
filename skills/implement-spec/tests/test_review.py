@@ -299,7 +299,7 @@ def test_a_red_line_missing_from_the_reviewer_log_reruns_once_then_blocks(tmp_pa
     rig.run(plan(**{"01/reviewer": [bad, review("01") if second_matches else bad]}))
     first, second = rig.calls("01", "reviewer")
     assert "red line not found in log" in second["prompt"] and "red line not found" not in first["prompt"]
-    assert rig.code == (0 if second_matches else 1), rig.output()
+    assert rig.code == (0 if second_matches else 2), rig.output()  # 2: the `review-rejected` question
     assert len(rig.calls("01", "reviewer")) == 2
     if not second_matches:
         assert rig.led("01", "BLOCKED") and "feat: 01 rows" not in rig.pr_subjects()

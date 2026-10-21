@@ -58,8 +58,14 @@ def _owner_errors(report: dict, context: dict) -> list[str]:
                      for commit in report["commits"] if commit["ticket"] not in context["owners"]]
 
 
+def _present(repo: str, commit: str, paths: list[str]) -> list[str]:
+    """The `paths` that are files at `commit`."""
+    return _git(repo, "ls-tree", "-r", "--name-only", "-z", commit, "--", *paths, end="\0") if paths else []
+
+
 def _commit_errors(report: dict, context: dict) -> list[str]:
-    """Every commit is new since the role started and on the branch; every locked path is in such a commit."""
+    """Every commit is new since the role started and on the branch; every locked path is in such a commit and is a
+    file at the branch tip: a deleted file holds no test that a review could prove (issue #136)."""
     repo, branch, commits = context["repo"], context["branch"], _shas(report)
     new = _git(repo, "rev-list", f"{context['start']}..{branch}")
     errors = [f"commit {sha[:7]} is not a new commit on {branch}"
@@ -67,6 +73,9 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
     if locked := report.get("locked"):
         changed = _git(repo, "log", "--name-only", "-z", "--format=", f"{context['start']}..{branch}", end="\0")
         errors += [f"locked path {path} is not in the role's commits" for path in locked if path not in changed]
+        present = _present(repo, branch, locked)
+        errors += [f"locked path {path} is not a file at the tip of {branch}: list in `locked` only files you keep"
+                   for path in locked if path in changed and path not in present]
     return errors
 
 
@@ -139,12 +148,14 @@ def _proof_errors(report: dict, context: dict) -> list[str]:
 
 def _locked_errors(report: dict, context: dict) -> list[str]:
     """In a full review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`).
-    `locked` names no fixture of the ticket: a fixture holds no test that a proof could name (#118)."""
+    `locked` names no fixture of the ticket: a fixture holds no test that a proof could name (#118). A locked file
+    that is not at the reviewed tip holds no test either (issue #136)."""
     if not context.get("full") or "findings" not in report:
         return []
-    tests = [proof["test"] for proof in report.get("mutations", [])]
-    return [f"mutations: no mutation proof for the locked test file {path}" for path in context.get("locked", [])
-            if not any(test.startswith(path) for test in tests)]
+    locked = context.get("locked", [])
+    tests, present = [proof["test"] for proof in report.get("mutations", [])], _present(context["repo"], context["start"], locked)
+    return [f"mutations: no mutation proof for the locked test file {path}" for path in locked
+            if path in present and not any(test.startswith(path) for test in tests)]
 
 
 def _fixture_errors(report: dict) -> list[str]:
