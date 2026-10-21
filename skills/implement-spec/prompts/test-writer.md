@@ -12,7 +12,7 @@ Run each test and confirm that it fails because the behavior is missing, not bec
 A test that is green before any implementation is not a proof. Rewrite it until it fails, or name in `concerns` the production-code mutation that turns it red.
 Commit the tests red on the checked-out branch. Do not write implementation code and do not dispatch subagents.
 When the ticket must change a locked file of a merged ticket, as one that its Touches line names, change it in your commit: a later agent may not.
-In `locked`, list each test file of your commit and each locked file of a merged ticket that it changes: file paths only, not test node ids (`tests/x.py`, not `tests/x.py::test_a`). In `red`, give for each test one failure line, copied exactly from the output you printed.
+In `locked`, list each test file of your commit and each locked file of a merged ticket that it changes: file paths only, not test node ids (`tests/x.py`, not `tests/x.py::test_a`). In `red`, give for each red test one failure line, copied exactly from the output you printed.
 
 Write one JSON report at {report} that matches this schema:
 
@@ -31,7 +31,7 @@ Write one JSON report at {report} that matches this schema:
     "not_addressed": {"type": "array", "items": {"type": "object", "required": ["finding", "reason"], "properties": {"finding": {"type": "string", "minLength": 1}, "reason": {"type": "string", "minLength": 1}}}}
   },
   "if": {"properties": {"status": {"enum": ["DONE", "DONE_WITH_CONCERNS"]}}, "not": {"required": ["not_addressed"], "properties": {"not_addressed": {"minItems": 1}}}},
-  "then": {"properties": {"commits": {"minItems": 1}, "locked": {"minItems": 1}, "red": {"minItems": 1}}}
+  "then": {"properties": {"commits": {"minItems": 1}, "locked": {"minItems": 1}}, "if": {"properties": {"concerns": {"maxItems": 0}}}, "then": {"properties": {"red": {"minItems": 1}}}}
 }
 ```
 

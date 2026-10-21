@@ -75,11 +75,22 @@ def _check_out_ticket(ticket: Ticket, slot_number: int, entry: dict, run: Run) -
     return driver_slots.head(slot)
 
 
+def _locked_test_stop(number: str, run: Run) -> dict:
+    """The last `locked-test` question of the ticket; {} when it has none."""
+    asked = [q for q in run.state.read()["run"]["questions"] if (q["ticket"], q["kind"]) == (number, "locked-test")]
+    return asked[-1] if asked else {}
+
+
 def _blocked_report(number: str, run: Run) -> str:
     """The report of the last `locked-test` stop of the ticket: an implementer's or a fixer's."""
-    asked = [q["evidence"][0] for q in run.state.read()["run"]["questions"]
-             if (q["ticket"], q["kind"]) == (number, "locked-test")]
-    return asked[-1] if asked else str(OUT / number / "implementer-0.json")
+    return _locked_test_stop(number, run).get("evidence", [str(OUT / number / "implementer-0.json")])[0]
+
+
+def _overruled(number: str, run: Run) -> list[str]:
+    """The concerns of that report that the operator overruled: what an overrule correction names in
+    `not_addressed` (issue #134)."""
+    concerns = json.loads(Path(_blocked_report(number, run)).read_text())["concerns"]
+    return [concern for concern in concerns if concern.startswith(driver_decisions.CONTRADICTS)]
 
 
 def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
@@ -114,11 +125,23 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, start), slot))
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
+        if check["correction"]:
+            check["findings"] = _overruled(number, run)
+            values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
         if check["correction"] and (restored := run.restore_locked_files(number, slot)):
             values.update(start_sha=driver_slots.head(slot), restored=" ".join(restored))
             notes, check["restored"] = [*notes, "restored"], restored
         with during(f"the {role}"):
-            report = run.agent(role, number, slot, values, notes=notes, check=check)
+            try:
+                report = run.agent(role, number, slot, values, notes=notes, check=check)
+            except Blocked:
+                if check["correction"]:
+                    # The ruling did not take: the operator rules on the same locked test again (issue #134).
+                    run.ask(number, "locked-test", [_locked_test_stop(number, run)["subject"]],
+                            _blocked_report(number, run))
+                raise
+        for item in report.get("not_addressed", []):
+            ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":
             facts.update(driver_review.written(slot, entry, report["locked"], report.get("fixtures", []),
