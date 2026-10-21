@@ -69,12 +69,15 @@ def _log_findings(job: Job, findings: list[dict]) -> list[dict]:
 def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> list[dict]:
     """Run the (role, model entry) pairs of `cast` at the same time in the one slot. Returns their reports.
     A role that stops (BLOCKED, NEEDS_CONTEXT) asks a `review-stopped` question, unless an `accept` ruling on an
-    earlier stop of that role lets the review go on with its report."""
+    earlier stop of that role lets the review go on with its report. A role whose report the driver rejects two
+    times asks a `review-rejected` question; after `retry`, its first prompt says why (issue #136)."""
     number = job.ticket.number
     values, running = job.pointers(job.round - 1), [role for role, _ in cast]
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
-    errors, stops = {}, {}
-    accepted = driver_decisions.accepted(job.run.state.read()["run"]["questions"], number, "review-stopped")
+    errors, stops, rejected = {}, {}, {}
+    state = job.run.state.read()
+    accepted = driver_decisions.accepted(state["run"]["questions"], number, "review-stopped")
+    before = state["tickets"][number]["rejected"]  # role -> why the driver rejected it before the ruling
 
     def call(role: str, entry: str) -> dict:
         # A full review (no fix range) must give a mutation proof for each locked test file, not for a locked fixture
@@ -82,8 +85,10 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
         full = not job.previous and role == "reviewer"
         notes = ["rereview"] if job.previous else ["full-review"] if full else []
         notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
+        notes += ["rejected"] * (role in before)
         try:
-            return job.run.agent(role, job.ticket.number, job.slot, values, entry=entry, fix_round=job.round,
+            return job.run.agent(role, job.ticket.number, job.slot, {**values, "rejection": before.get(role, "")},
+                                 entry=entry, fix_round=job.round,
                                  notes=notes, check={"full": True, "locked": locked} if full else {},
                                  alone=lambda: len(running) == 1)
         except Stopped as stopped:
@@ -93,7 +98,8 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
             stops[role] = str(stopped)
             errors[role] = f"the {role}: {stopped}"
             return {}
-        except Blocked as blocked:
+        except Blocked as blocked:  # the driver rejected its report two times
+            rejected[role] = str(blocked)
             errors[role] = f"the {role}: {blocked}"
             return {}
         finally:
@@ -105,6 +111,10 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
         first = next(role for role, _ in cast if role in stops)
         job.run.ask(number, "review-stopped", [stops[role] for role, _ in cast if role in stops],
                     str(OUT / number / f"{first}-{job.round}.json"))
+    elif rejected:
+        first = next(role for role, _ in cast if role in rejected)
+        job.run.ask(number, "review-rejected", [errors[role] for role, _ in cast if role in rejected],
+                    str(OUT / number / f"{first}-{job.round}.json"), rejected=rejected)
     if errors:
         raise Blocked("; ".join(errors[role] for role, _ in cast if role in errors))
     return reports
@@ -121,6 +131,8 @@ def _review(job: Job) -> list[dict]:
         cast.append(("correctness", driver_agents.correctness_entry(run.models)))
     reports = run.read_only(number, job.slot, job.values["branch"], job.tip,
                             lambda: _run_reviewers(job, cast, tested(state)))
+    if state["rejected"]:
+        run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
     for (role, _), report in zip(cast, reports):
         found += _log_findings(job, [{**finding, "source": role} for finding in report["findings"]])
         job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}

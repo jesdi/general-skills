@@ -569,3 +569,60 @@ def test_a_fixer_that_stops_asks_the_operator_and_retry_runs_its_round_again(tmp
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
     assert rig.state()["tickets"]["01"]["round"] == 1 and len(rig.calls("01", "fixer")) == 2
     assert rig.led("Ruling: 01 fix round runs again (retry): the fixer reported NEEDS_CONTEXT")
+
+
+# ---------------------------------------------------------------- a review report rejected twice; a question of a merged ticket
+
+REJECTED = "01-review-rejected-1"
+NO_PROOF = "mutations: no mutation proof for the locked test file tests/test_01b.py"
+
+
+def test_a_review_report_rejected_twice_asks_the_operator_and_retry_resumes_it(tmp_path):
+    """Issue #136: a reviewer that gave no mutation proof for a second locked file, two times, was a dead end."""
+    # Both attempts give a proof for tests/test_01.py only; the third reviewer is the unscripted one, with every proof.
+    steps = plan(**{"01/test-writer": [two_locked()], "01/reviewer": [review("01"), review("01")]})
+    rig = Inside(tmp_path, ONE).run(steps)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    (question,) = rig.state()["run"]["questions"]
+    assert (question["id"], question["recommended"]) == (REJECTED, "retry")
+    assert [o["id"] for o in question["options"]] == ["retry", "redesign"]
+    assert question["evidence"][0] == ".agent/implement/01/reviewer-0.json"
+    assert question["subject"] == f"the reviewer: {NO_PROOF}"
+    rig.run(steps, "--answer", f"{REJECTED}=retry")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert len(rig.calls("01", "reviewer")) == 3
+    assert rig.led(f"Ruling: 01 review runs again (retry): the reviewer: {NO_PROOF}")
+    assert NO_PROOF in rig.calls("01", "reviewer")[2]["prompt"]
+
+
+def test_a_test_writer_report_that_locks_a_file_it_deleted_is_rejected(tmp_path):
+    """Issue #136: the correction of ticket 21 deleted a locked file and still listed it in `locked`; the driver
+    accepted it, and no reviewer could prove that file."""
+    deleted = two_locked()
+    deleted["git_after"] = [["add", "-A"], ["commit", "-q", "-m", "test: 01 both"], ["rm", "-q", "tests/test_01b.py"]]
+    rig = Inside(tmp_path, ONE).run(plan(**{"01/test-writer": [deleted, two_locked()]}))
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert rig.led("Ticket 01: test-writer ran on", "locked path tests/test_01b.py is not a file at the tip of")
+    assert len(rig.calls("01", "test-writer")) == 2 and len(rig.calls("01", "reviewer")) == 1
+
+
+def test_a_question_of_a_ticket_that_merged_is_dropped_and_does_not_park_the_run(tmp_path, capsys):
+    """Issue #136: the operator set a stopped ticket to `merge` by hand; its question stayed open, with exit 2."""
+    rig = Inside(tmp_path, ONE).run(steps(stops()))
+    assert rig.code == 2, rig.ledger()
+    capsys.readouterr()
+    path = rig.repo / ".agent/implement/state.json"
+    state = json.loads(path.read_text())
+    state["tickets"]["01"]["phase"] = "merge"
+    path.write_text(json.dumps(state))
+    rig.run(steps(stops()))
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert decisions(rig)["questions"] == [] and IMPLEMENTER_STOPPED not in capsys.readouterr().out
+    assert rig.led(f"Ticket 01: the question {IMPLEMENTER_STOPPED} is dropped: the ticket merged.")
+
+
+def test_dropping_the_questions_of_merged_tickets_keeps_the_answered_ones_and_those_of_other_tickets():
+    state = {"tickets": {"01": {"phase": "merged"}, "02": {"phase": "blocked"}},
+             "run": {"questions": [asked(), {**asked(stop=2), "id": "01-x", "answer": "accept"}, asked(ticket="02")]}}
+    assert [q["id"] for q in driver_decisions.drop_merged(state)] == ["01-locked-test-1"]
+    assert [q["id"] for q in state["run"]["questions"]] == ["01-x", "02-locked-test-1"]

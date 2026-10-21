@@ -174,6 +174,24 @@ def test_locked_path_absent_from_the_commit_is_a_violation(world):
     assert any("tests/test_other.py" in e for e in errors), errors
 
 
+def test_a_locked_path_that_the_commits_delete_is_a_violation(world):
+    """Issue #136: a correction deleted a locked file and still listed it, so no review could prove it."""
+    shas, check, tmp_path = world
+    root = tmp_path / "slot"
+    git(root, "rm", "-q", "tests/test_export.py")
+    git(root, "commit", "-q", "-m", "drop the test")
+    assert check("test-writer", writer(shas), start=shas["base"]) == [
+        "locked path tests/test_export.py is not a file at the tip of ticket/01: list in `locked` only files you keep"]
+
+
+def test_a_full_review_needs_no_proof_for_a_locked_file_that_is_not_at_the_tip(world):
+    shas, check, _ = world
+    locked = ["tests/test_export.py", "tests/test_gone.py"]
+    assert check("reviewer", reviewer(), start=shas["impl"], full=True, locked=locked) == []
+    assert check("reviewer", reviewer(mutations=[]), start=shas["impl"], full=True, locked=locked) == [
+        "mutations: no mutation proof for the locked test file tests/test_export.py"]
+
+
 def test_red_line_absent_from_the_log_is_a_violation(world):
     shas, check, _ = world
     assert check("test-writer", writer(shas), start=shas["base"]) == []
