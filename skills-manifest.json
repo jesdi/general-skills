@@ -1,7 +1,13 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-21T18:30:23.850Z",
+  "generatedAt": "2026-10-22T11:14:54.556Z",
   "skills": [
+    {
+      "name": "babysit-pr",
+      "version": "0.1.0",
+      "hash": "sha256-6da121d1648ed363c265dcf9b3faa6ca79f1a3e639050b52643a6867f71e8370",
+      "description": "Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr <pr-url>`."
+    },
     {
       "name": "backlog",
       "version": "0.1.8",
@@ -46,9 +52,15 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.38",
-      "hash": "sha256-01334d43e5591f2aee50bb5838f8e769f57623c9ae0362b326b2aa3bdbfedaa1",
+      "version": "0.1.39",
+      "hash": "sha256-303cb5ea3c05a8f5e3b127780d772e8aa808de618801f468093a6d7f40781259",
       "description": "Implement a specification in code."
+    },
+    {
+      "name": "pr-risk",
+      "version": "0.1.0",
+      "hash": "sha256-54b54a42738571c346a040326cde2d314d0239dca3ce42323d2b8434dbe9d5f9",
+      "description": "Merge-risk block of a PR body. Use when a PR body needs its ```merge-risk v1 block parsed or validated, with every error named."
     },
     {
       "name": "pr-visual-diff",
