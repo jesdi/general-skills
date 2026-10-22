@@ -152,7 +152,8 @@ def api(args):
         return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
                      "user": {"login": st["user"]},
                      "title": st.get("title", ""), "body": st.get("body", ""),
-                     "head": {"sha": st.get("head_sha", "head1")}}, jq, include)
+                     "head": {"sha": st.get("head_sha", "head1")},
+                     "base": {"ref": st.get("base_ref", "main"), **({"sha": st["base_sha"]} if "base_sha" in st else {})}}, jq, include)
     if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
         log(False)
         return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
