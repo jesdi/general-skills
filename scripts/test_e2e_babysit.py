@@ -113,7 +113,7 @@ def handed_off(r, reason):
 
 
 HANDOFF = re.compile(r"babysit\.py\b.*\bhandoff\b")
-HELP = re.compile(r"(?<!\S)(--help|-h)(?!\S)")
+HELP = re.compile(r"(?<!\S)(--help|-h)(?![\w-])")
 WORKFLOW_WRITE = re.compile(
     r"sed -i|perl -\w*i|(?<![\d&])>(?!&)|tee |git (add|commit|apply|checkout|restore|rm|mv)|write_text|write_bytes"
     r"|\.write\(|open\(|\b(cp|mv|rm|truncate|dd|python3?|node|ruby)\b")
