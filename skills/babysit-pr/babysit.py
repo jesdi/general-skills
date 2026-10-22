@@ -658,6 +658,14 @@ def load_merge_risk(base=None):
     fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
+JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
+GATE_NEEDS = ("gate", "base_policy", "classify_diff", "diff_stats", "parse")
+
+
+def missing_functions(mr, *names):
+    return [n for n in names if not hasattr(mr, n)]
+
+
 def judge_input(mr, body, base, head):
     """Counted-file diffs, other files by name and count, the block, the categories. Nothing else."""
     base, policy, _ = mr.base_policy(base)
@@ -712,6 +720,8 @@ def ask(cli, prompt, timeout):
 
 def judge(base, head, body_file, agent):
     mr = load_merge_risk(base)
+    if old := missing_functions(mr, *JUDGE_NEEDS):
+        fail(f"pr-risk is too old: {', '.join(old)}")
     prompt = (Path(__file__).with_name("judge-prompt.md").read_text()
               + judge_input(mr, Path(body_file).read_text(), base, head))
     deadline = time.monotonic() + float(os.environ.get("BABYSIT_JUDGE_TIMEOUT", 600))
@@ -827,8 +837,21 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
         release(pr, session)
 
 
-def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None):
+def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None, base=None):
     pr = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    if base not in (None, pr["base"]["ref"]):
+        fail(f"--base {base} is not the PR's base {pr['base']['ref']}")
+    base = pr["base"]["ref"]  # the policy that applies is the target branch's, never the caller's choice
+    body = Path(body_file).read_text()
+    live = (pr.get("body") or "").strip()
+    # The fetched PR body is what the gate judges; a stale snapshot must not stand in for it.
+    if live != body.strip():
+        fail("--body differs from the PR's current body: gate again")
+    body = live
+    base_tip = lambda: subprocess.run(["git", "rev-parse", f"origin/{base}"], text=True, capture_output=True).stdout.strip()
+    tip = base_tip()  # the policy is read at this commit; a base that moves under the gate voids it
+    if pr["base"].get("sha") not in (None, tip):  # GitHub's base is newer than the local ref the policy is read from
+        fail(f"origin/{base} is {tip[:7]} but the PR's base is {pr['base']['sha'][:7]}: fetch and gate again")
     gate = "gate: passed"
     judge_line = f"judge: {judge_label}"
     op = hashlib.sha256(f"{sha} {judge_label} {approved}".encode()).hexdigest()[:12]
@@ -842,12 +865,24 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     if approved is None:
         if judge_label not in ("agree", "same-model agree"):
             stop(f"judge {judge_label}")
+        mr = load_merge_risk(base)
+        if old := missing_functions(mr, *GATE_NEEDS):
+            stop(f"pr-risk is too old: {', '.join(old)}")
+        result = mr.gate(body, base, sha)  # trusted policy, recomputed for this sha
+        if result["verdict"] != "auto":
+            gate = "gate: human"
+            stop(f"gate is human: {'; '.join(result['reasons'])}")
     else:
         judge_line = f"owner approved {approved}"
         commits = pr_commits(repo, number)
         oids = [c["sha"] for c in commits]
         hits = {o for o in oids if o.startswith(approved)} if re.fullmatch(r"[0-9a-f]{7,40}", approved) else set()
         full = hits.pop() if len(hits) == 1 else None  # an ambiguous or short prefix approves nothing
+        found = owner_comments(repo, number)
+        unnamed = "merge approval must name a commit: @babysitter merge <sha>"
+        rebased = full is None and not any(o.startswith(approved) for o in oids) and re.fullmatch(r"[0-9a-f]{7,40}", approved) and found["handoff"] in (None, unnamed)
+        if not rebased and (full is None or not any(i["approved_sha"] == full for i in found["instructions"])):
+            stop(found["handoff"] or unnamed)
         if full is None and not re.fullmatch(r"[0-9a-f]{7,40}", approved):
             stop("approval must name a commit: @babysitter merge <sha>")
         if full != sha:
@@ -866,8 +901,11 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     method = merge_method(repo, number, policy)
     cmd = ["pr", "merge", str(number), "--repo", repo, f"--{method}", "--match-head-commit", sha]
     if method == "squash":
-        subject, text = squash_message(pr["title"], number, Path(body_file).read_text())
+        subject, text = squash_message(pr["title"], number, body)
         cmd += ["--subject", subject, "--body", text]
+    now = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    if now["base"]["ref"] != base or now["head"]["sha"] != sha or (now.get("body") or "").strip() != live or now["base"].get("sha") not in (None, tip) or base_tip() != tip:
+        fail("the PR's base, head or body changed during the gate: gate again")
     terminal_owner(Pr(repo, number), session, "merge")
     if session:
         own_lease(repo, number, session)
@@ -923,6 +961,7 @@ def main():
     mg.add_argument("--body", required=True)
     mg.add_argument("--judge")
     mg.add_argument("--approved-sha")
+    mg.add_argument("--base")
     for p in (mg, hp):
         p.add_argument("--session", help="release this session's lease")
     for x in ("reason", "ci", "gate", "judge", "fix-log"):
@@ -944,7 +983,7 @@ def main():
     elif a.cmd == "merge":
         if not (a.judge or a.approved_sha):
             ap.error("merge needs --judge or --approved-sha")
-        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session)
+        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session, a.base)
     elif a.cmd == "handoff":
         handoff(a.repo, a.pr, a.reason, a.ci, a.rounds, a.gate, a.judge, Path(a.fix_log).read_text(), session=a.session)
     elif a.cmd == "update-plan":

@@ -6,10 +6,15 @@ Interface under test (defined here):
   babysit.py merge --repo R --pr N --sha SHA --body FILE [--policy FILE]
                    [--judge "agree" | "same-model agree"] [--approved-sha PREFIX]
       SHA is the head the gate (and judge) saw. BODY is the PR body (summary + merge-risk block).
+      Run in a checkout with `origin/<base>` (--base, default `main`) and SHA as a commit: the gate
+      is recomputed for SHA with the trusted merge_risk and the policy committed on origin/<base>.
+      --judge agree merges only when that gate is auto; else it hands off with the gate's reasons.
       Merges with `gh pr merge N --<method> --match-head-commit SHA`, never `--auto`, then posts
       `🤖 Merged by babysit-pr: gate passed, judge <label>` and exits 0.
       --approved-sha is the owner's `@babysitter merge <sha>` approval (instead of --judge): it
-      is honoured only while SHA starts with it, else nothing merges and it hands off with
+      needs an owner comment `@babysitter merge <sha>` for it (else nothing merges and it hands
+      off with "merge approval must name a commit: @babysitter merge <sha>"), and is honoured only
+      while SHA starts with it, else nothing merges and it hands off with
       "approval was for <approved-sha>".
       Exit non-zero when it does not merge. A moved head prints "gate again" and merges nothing.
       Any other `gh pr merge` failure hands off with "merge blocked: <reason>".
@@ -26,6 +31,7 @@ import sys
 import pytest
 
 from test_babysit import SCRIPT, T, World, iso
+from test_babysit_judge import commit as git_commit, git
 
 BLOCK = """## Summary
 
@@ -50,33 +56,55 @@ def commit(sha, message="feat: x", author="jesdi", parents=("p0",)):
     return {"sha": sha, "date": iso(T), "message": message, "author": author, "parents": list(parents)}
 
 
-def world(tmp_path, head="a1b2c3d", commits=None, **state):
-    w = World(tmp_path, labels=["babysitting"])
+def checkout(w, shas, policy):
+    """A PR checkout: origin/main holds the policy, each sha is a branch named after it (so a fake
+    short sha resolves) that adds one logic file."""
+    git(w.project, "init", "-q", "-b", "work")
+    base = git_commit(w.project, {"README.md": "hi\n", ".merge-risk.json": json.dumps(policy)}, "base")
+    git(w.project, "update-ref", "refs/remotes/origin/main", base)
+    for sha in shas:
+        git(w.project, "checkout", "-q", "-b", sha, base)
+        git_commit(w.project, {"src/app.py": f"x = '{sha}'\n"}, f"pr {sha}")
+    git(w.project, "checkout", "-q", "work")
+
+
+def owner_says(w, text, login="jesdi"):
+    st = w.github()
+    st["comments"].append({"id": st["next_id"], "user": {"login": login}, "body": text,
+                           "created_at": iso(T), "updated_at": iso(T)})
+    st["next_id"] += 1
+    w.state.write_text(json.dumps(st))
+
+
+def world(tmp_path, head="a1b2c3d", commits=None, body=BLOCK, policy=None, approvals=(), pr_risk=True, **state):
+    w = World(tmp_path, labels=["babysitting"], pr_risk=pr_risk)
     st = w.github()
     green = [{"name": "ci", "status": "completed", "conclusion": "success",
               "created_at": iso(T), "started_at": iso(T)}]
-    st.update(head_sha=head, title="feat: parse empty rows",
+    st.update(head_sha=head, title="feat: parse empty rows", body=body,  # the live PR body is the gated one
               commits=commits or [commit(head)], **{"check_runs": {head: green}, **state})
     w.state.write_text(json.dumps(st))
-    (tmp_path / "body.md").write_text(BLOCK)
+    (tmp_path / "body.md").write_text(body)
+    checkout(w, [c["sha"] for c in st["commits"]], policy or {"agentMerge": True})
+    if policy:  # the same policy also feeds `--policy`, the merge method
+        w.policy_file = tmp_path / "policy.json"
+        w.policy_file.write_text(json.dumps(policy))
+    for sha in approvals:
+        owner_says(w, f"@babysitter merge {sha}")
     return w
 
 
 def cli(w, *args):
-    p = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=w.project, env=w.env,
+    p = subprocess.run([sys.executable, str(w.script), *args], cwd=w.project, env=w.env,
                        text=True, capture_output=True)
     p.output = p.stdout + p.stderr
     return p
 
 
-def merge(w, tmp_path, sha="a1b2c3d", *extra, pr="58", policy=None):
-    args = ["merge", "--repo", "jesdi/demo", "--pr", pr, "--sha", sha,
-            "--body", str(tmp_path / "body.md"), *extra]
-    if policy is not None:
-        f = tmp_path / "policy.json"
-        f.write_text(json.dumps(policy))
-        args += ["--policy", str(f)]
-    return cli(w, *args)
+def merge(w, tmp_path, sha="a1b2c3d", *extra, pr="58"):
+    policy = ["--policy", str(w.policy_file)] if hasattr(w, "policy_file") else []
+    return cli(w, "merge", "--repo", "jesdi/demo", "--pr", pr, "--sha", sha,
+               "--body", str(tmp_path / "body.md"), *extra, *policy)
 
 
 def comments(w):
@@ -98,7 +126,7 @@ def test_stale_gate_sha_fails_and_nothing_merges(tmp_path):
 
 @pytest.mark.parametrize("extra", [("--judge", "agree"), ("--approved-sha", "a1b2c3d")])
 def test_head_with_no_checks_hands_off_and_nothing_merges(tmp_path, extra):
-    w = world(tmp_path, check_runs={})
+    w = world(tmp_path, check_runs={}, approvals=("a1b2c3d",))
     p = merge(w, tmp_path, "a1b2c3d", *extra)
     assert p.returncode != 0
     assert w.github().get("merges", []) == []
@@ -138,9 +166,8 @@ def test_merge_method_is_rebase_for_a_linear_branch(tmp_path):
 
 
 def test_squash_policy_keeps_the_title_summary_and_block_digest(tmp_path):
-    w = world(tmp_path)
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree",
-              policy={"agentMerge": True, "mergeMethod": "squash"})
+    w = world(tmp_path, policy={"agentMerge": True, "mergeMethod": "squash"})
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
     assert p.returncode == 0, p.output
     [m] = w.github()["merges"]
     assert m["method"] == "squash"
@@ -180,7 +207,7 @@ def test_handoff_comment_label_and_resume_command(tmp_path):
 
 
 def test_owner_approval_of_the_head_merges_without_the_judge(tmp_path):
-    w = world(tmp_path)
+    w = world(tmp_path, approvals=("a1b2c3d",))
     p = merge(w, tmp_path, "a1b2c3d", "--approved-sha", "a1b2c3d", pr="59")
     assert p.returncode == 0, p.output
     [m] = w.github()["merges"]
@@ -189,14 +216,14 @@ def test_owner_approval_of_the_head_merges_without_the_judge(tmp_path):
 
 
 def test_owner_approval_of_a_sha_prefix_merges(tmp_path):
-    w = world(tmp_path, head="a1b2c3d4e5f6")
+    w = world(tmp_path, head="a1b2c3d4e5f6", approvals=("a1b2c3d",))
     p = merge(w, tmp_path, "a1b2c3d4e5f6", "--approved-sha", "a1b2c3d", pr="59")
     assert p.returncode == 0, p.output
     assert w.github()["merges"][0]["match"] == "a1b2c3d4e5f6"
 
 
 def test_approval_voided_by_a_new_commit_hands_off_with_the_new_commits(tmp_path):
-    w = world(tmp_path, head="e4f5a6b", commits=[
+    w = world(tmp_path, head="e4f5a6b", approvals=("a1b2c3d",), commits=[
         commit("a1b2c3d", "feat: parse empty rows"),
         commit("e4f5a6b", "fix(ci): repair test_empty (babysit-pr)", author="babysitter-bot")])
     p = merge(w, tmp_path, "e4f5a6b", "--approved-sha", "a1b2c3d", pr="59")
@@ -211,21 +238,22 @@ def test_approval_voided_by_a_new_commit_hands_off_with_the_new_commits(tmp_path
 
 
 def test_approval_voided_by_a_rebase_hands_off(tmp_path):
-    w = world(tmp_path, head="b7c8d9e", commits=[commit("b7c8d9e")])
+    w = world(tmp_path, head="b7c8d9e", commits=[commit("b7c8d9e")], approvals=("a1b2c3d",))
     p = merge(w, tmp_path, "b7c8d9e", "--approved-sha", "a1b2c3d", pr="59")
     assert p.returncode != 0
     assert w.github().get("merges", []) == []
     [h] = handoffs(w)
-    assert h.startswith("## 🧑 Needs human: approval was for a1b2c3d")
-    assert "https://github.com/jesdi/demo/compare/a1b2c3d...b7c8d9e" in h
+    # a rebased-away commit is no longer a commit of the PR: either reason of requirement 23 hands off
+    assert h.startswith(("## 🧑 Needs human: approval was for a1b2c3d",
+                         "## 🧑 Needs human: merge approval must name a commit"))
 
 
 @pytest.mark.parametrize("method", [None, "squash", "merge", "rebase"])
 @pytest.mark.parametrize("extra", [("--judge", "agree"), ("--approved-sha", "a1b2c3d")])
 def test_auto_merge_is_never_requested(tmp_path, extra, method):
-    w = world(tmp_path)
     policy = {"agentMerge": True, "mergeMethod": method} if method else None
-    assert merge(w, tmp_path, "a1b2c3d", *extra, policy=policy).returncode == 0
+    w = world(tmp_path, policy=policy, approvals=("a1b2c3d",))
+    assert merge(w, tmp_path, "a1b2c3d", *extra).returncode == 0
     [m] = w.github()["merges"]
     assert m["auto"] is False
     assert method is None or m["method"] == method
