@@ -835,6 +835,8 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
     repair_if_taken_over(pr, session, lease_boundary)
     if session:
         release(pr, session)
+    print(json.dumps({"status": "handoff", "terminal": True, "reason": reason,
+                      "next": "In Claude Code send PushNotification, then end the turn. Otherwise end the turn now."}))
 
 
 def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None, base=None):
