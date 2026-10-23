@@ -25,6 +25,9 @@ class BadInput(Exception):
     """Invalid input or an unmet precondition: exit 2."""
 
 
+STATE_DIR = ".test-prune"  # the default run state, under the repo root
+STATE_EXCLUDE = f"/{STATE_DIR}/"  # its info/exclude line
+
 LIMIT = 60_000  # characters per PR body or summary block; GitHub refuses a PR body over 65,536
 
 
@@ -87,14 +90,12 @@ class Repo:
         return proc.stdout
 
     def default_state(self) -> Path:
-        """<root>/.test-prune, kept out of git through info/exclude. Not under the git dir: Claude Code
-        refuses an agent's writes there, and the fixer and reviewer write into the state."""
         exclude = self.root / self.git("rev-parse", "--git-path", "info/exclude").strip()
         lines = exclude.read_text().splitlines() if exclude.exists() else []
-        if "/.test-prune/" not in lines:
+        if STATE_EXCLUDE not in lines:
             exclude.parent.mkdir(parents=True, exist_ok=True)
-            exclude.write_text("".join(f"{line}\n" for line in [*lines, "/.test-prune/"]))
-        return self.root / ".test-prune"
+            exclude.write_text("".join(f"{line}\n" for line in [*lines, STATE_EXCLUDE]))
+        return self.root / STATE_DIR
 
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").strip()
