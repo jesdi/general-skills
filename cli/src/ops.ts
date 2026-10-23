@@ -21,8 +21,10 @@ import {
   type ProjectState,
 } from './state.js';
 import { ensureSessionHook, setAutoUpdate } from './hook.js';
-import { installSkill, uninstallSkill } from './store.js';
+import { installSkill, uninstallSkill, withStoreRollback } from './store.js';
+import { readSkillHooks, sayHookNotes, syncSkillHooks, withHookRollback } from './skill-hooks.js';
 import { join } from 'node:path';
+import { withLock } from './lock.js';
 
 export interface CliCtx extends Ctx {
   registryUrl?: string;
@@ -39,6 +41,8 @@ export interface CliCtx extends Ctx {
    * question waits for the next interactive install.
    */
   promptAutoUpdate?: () => Promise<boolean>;
+  /** Where notes for the owner go (hook trust steps); absent means silent. */
+  say?: (msg: string) => void;
 }
 
 export async function fetchSkills(ctx: CliCtx): Promise<FetchLatestResult> {
@@ -60,25 +64,64 @@ async function installFromFetched(
   override: AgentId[] | undefined,
   scope: Scope,
   ctx: CliCtx,
+  clearDeclined = false,
 ): Promise<{ name: string; version: string }> {
   const skill = fetched.manifest.skills.find((s) => s.name === name);
   if (!skill) {
     throw new Error(`@jesdi/skills@${fetched.packageVersion} does not contain skill: ${name}`);
   }
-  const state = await loadState(scope, ctx);
-  const entry: InstalledSkill = { version: skill.version, package: fetched.packageVersion };
-  if (override) entry.agents = validateAgents(override);
-  if (state.skills[name]?.pinned) entry.pinned = true;
-  state.skills[name] = entry;
-  const agents = agentsFor(state, name);
-  await installSkill({
-    name,
-    sourceDir: join(fetched.skillsDir, name),
-    storeDir: storeDir(scope, ctx),
-    agentDirs: agents.map((a) => agentSkillsDir(a, scope, ctx)),
+  return withLock(storeLock(scope, ctx), async () => {
+    const state = await loadState(scope, ctx);
+    const previous = state.skills[name] ? agentsFor(state, name) : [];
+    const owned = state.skills[name]?.ownedHooks ?? [];
+    const entry: InstalledSkill = { version: skill.version, package: fetched.packageVersion };
+    if (override) entry.agents = validateAgents(override);
+    if (state.skills[name]?.pinned) entry.pinned = true;
+    state.skills[name] = entry;
+    const agents = agentsFor(state, name);
+    const sourceDir = join(fetched.skillsDir, name);
+    // Reconcile the hook configs before the store changes: a failure leaves the
+    // old manifest in place, so a retry still knows what was registered.
+    const before = await readSkillHooks(join(storeDir(scope, ctx), name));
+    const after = await readSkillHooks(sourceDir);
+    const dropped = previous.filter((a) => !agents.includes(a));
+    // A failure after the first config write puts the configs back.
+    const store = {
+      name, storeDir: storeDir(scope, ctx),
+      agentDirs: agents.map((a) => agentSkillsDir(a, scope, ctx)),
+    };
+    const notes = await withStoreRollback(store, () => withHookRollback(scope, ctx, async () => {
+      const left = await syncSkillHooks({ skill: name, agents: dropped, scope, ctx, before, after: [], owned });
+      const synced = await syncSkillHooks({ skill: name, agents, scope, ctx, before, after, owned: left.owned });
+      await installSkill({ ...store, sourceDir });
+      if (synced.owned.length) entry.ownedHooks = synced.owned;
+      if (clearDeclined && scope === 'global') delete (state as GlobalState).declined[name];
+      await saveState(scope, ctx, state);
+      return { ...synced, codexTrust: synced.codexTrust || left.codexTrust };
+    }));
+    sayHookNotes(ctx.say, name, notes);
+    return { name, version: skill.version };
   });
-  await saveState(scope, ctx, state);
-  return { name, version: skill.version };
+}
+
+const storeLock = (scope: Scope, ctx: CliCtx) => `${storeDir(scope, ctx)}.lock`;
+
+/**
+ * Reload, change and save the scope's state under the store lock, the lock an
+ * install holds while it records hook ownership: a writer never saves a stale
+ * snapshot over a concurrent install. Never prompt inside `change`.
+ */
+export async function updateState<T>(
+  scope: Scope,
+  ctx: CliCtx,
+  change: (state: GlobalState | ProjectState) => T,
+): Promise<T> {
+  return withLock(storeLock(scope, ctx), async () => {
+    const state = await loadState(scope, ctx);
+    const out = change(state);
+    await saveState(scope, ctx, state);
+    return out;
+  });
 }
 
 /** A pinned skill changes version only after `unpin`: fail before anything is touched. */
@@ -104,8 +147,10 @@ async function ensureDefaultAgents(scope: Scope, ctx: CliCtx): Promise<void> {
       `no agents configured: add a top-level "agents" to ${file} or pass --agent`,
     );
   }
-  state.agents = validateAgents(await ctx.promptAgents());
-  await saveState(scope, ctx, state);
+  const agents = validateAgents(await ctx.promptAgents());
+  await updateState(scope, ctx, (current) => {
+    if (!current.agents?.length) current.agents = agents;
+  });
 }
 
 /**
@@ -147,15 +192,25 @@ export async function opInstall(
 }
 
 export async function opUninstall(name: string, scope: Scope, ctx: CliCtx): Promise<void> {
-  const state = await loadState(scope, ctx);
-  if (!state.skills[name]) throw new Error(`skill not installed (${scope}): ${name}`);
-  await uninstallSkill({
-    name,
-    storeDir: storeDir(scope, ctx),
-    agentDirs: agentsFor(state, name).map((a) => agentSkillsDir(a, scope, ctx)),
+  await withLock(storeLock(scope, ctx), async () => {
+    const state = await loadState(scope, ctx);
+    if (!state.skills[name]) throw new Error(`skill not installed (${scope}): ${name}`);
+    const agents = agentsFor(state, name);
+    const before = await readSkillHooks(join(storeDir(scope, ctx), name));
+    // Remove the registrations while the manifest still exists: a failure here keeps it for the retry.
+    const { codexTrust } = await withHookRollback(scope, ctx, async () => {
+      const r = await syncSkillHooks({ skill: name, agents, scope, ctx, before, after: [], owned: state.skills[name].ownedHooks ?? [] });
+      await uninstallSkill({
+        name,
+        storeDir: storeDir(scope, ctx),
+        agentDirs: agents.map((a) => agentSkillsDir(a, scope, ctx)),
+      });
+      return r;
+    });
+    sayHookNotes(ctx.say, name, { codexTrust, byHand: false });
+    delete state.skills[name];
+    await saveState(scope, ctx, state);
   });
-  delete state.skills[name];
-  await saveState(scope, ctx, state);
 }
 
 export interface UpdateCandidate {
@@ -181,7 +236,6 @@ export async function opCheckUpdates(scope: Scope, ctx: CliCtx): Promise<UpdateC
 
 export async function opApplyUpdates(names: string[], scope: Scope, ctx: CliCtx): Promise<void> {
   const state = await loadState(scope, ctx);
-  const globalState = await loadGlobalState(ctx);
   for (const name of names) {
     if (!state.skills[name]) throw new Error(`skill not installed (${scope}): ${name}`);
     agentsFor(state, name); // fail before touching anything if the config is unresolvable
@@ -190,10 +244,14 @@ export async function opApplyUpdates(names: string[], scope: Scope, ctx: CliCtx)
   const fetched = await fetchSkills(ctx);
   for (const name of names) {
     // Reinstall with the entry's own shape: an inherited entry stays inherited.
-    await installFromFetched(fetched, name, state.skills[name].agents, scope, ctx);
-    if (globalState.declined[name]) {
-      delete globalState.declined[name];
-      await saveGlobalState(ctx, globalState);
+    await installFromFetched(fetched, name, state.skills[name].agents, scope, ctx, true);
+    if (scope === 'local') {
+      await withLock(storeLock('global', ctx), async () => {
+        const current = await loadGlobalState(ctx);
+        if (!current.declined[name]) return;
+        delete current.declined[name];
+        await saveGlobalState(ctx, current);
+      });
     }
   }
 }
@@ -204,19 +262,19 @@ export async function opSetPinned(
   scope: Scope,
   ctx: CliCtx,
 ): Promise<string> {
-  const state = await loadState(scope, ctx);
-  const entry = state.skills[name];
-  if (!entry) throw new Error(`skill not installed (${scope}): ${name}`);
-  if (pinned) entry.pinned = true;
-  else delete entry.pinned;
-  await saveState(scope, ctx, state);
-  return entry.version;
+  return updateState(scope, ctx, (state) => {
+    const entry = state.skills[name];
+    if (!entry) throw new Error(`skill not installed (${scope}): ${name}`);
+    if (pinned) entry.pinned = true;
+    else delete entry.pinned;
+    return entry.version;
+  });
 }
 
 export async function opDecline(name: string, version: string, ctx: CliCtx): Promise<void> {
-  const globalState = await loadGlobalState(ctx);
-  globalState.declined[name] = version;
-  await saveGlobalState(ctx, globalState);
+  await updateState('global', ctx, (state) => {
+    (state as GlobalState).declined[name] = version;
+  });
 }
 
 export async function opSync(ctx: CliCtx): Promise<{ name: string; version: string }[]> {

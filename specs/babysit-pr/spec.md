@@ -157,10 +157,15 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
     The exception is a comment that starts with `@babysitter` whose author login is the owner and
     that no other account edited: the babysitter acts on it. Its code changes go through the
     ladder and the gate.
-23. An owner comment `@babysitter merge` is the human approval of the head commit at the time
-    of the comment: the babysitter merges a PR with the verdict human when every check of that
-    commit is green and there is no conflict. A later commit (a fix, a rebase, a merge from the
-    base) voids the approval, and the babysitter hands off with "approval was for <sha>". That
+23. An owner comment `@babysitter merge <sha>` is the human approval of the commit it names
+    (a full SHA or an unambiguous prefix of at least 7 characters): the babysitter merges a PR
+    with the verdict human only while that commit is the head, every check of it is green and
+    there is no conflict. The babysitter never infers the approved commit from commit dates or
+    comment times, because GitHub does not say when a commit became the head. A comment
+    `@babysitter merge` without a SHA, or with a SHA that is not a commit of the PR, approves
+    nothing, and the babysitter hands off with "merge approval must name a commit:
+    @babysitter merge <sha>". A later commit (a fix, a rebase, a merge from the base) voids the
+    approval, and the babysitter hands off with "approval was for <sha>". That
     handoff comment lists each commit after the approved one (short SHA, subject, author) and
     links the GitHub compare view `<approved sha>...<head sha>`, so the owner reviews only the
     new commits before approving again.
@@ -654,13 +659,20 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
 #### Scenario: owner approval merges a human PR
 
 - **Given** PR #59 has `door: one-way`, all checks are green and there is no conflict
-- **When** `jesdi` comments "@babysitter merge" and the owner runs `/babysit-pr <url of #59>`
+- **When** `jesdi` comments "@babysitter merge <head sha>" and the owner runs `/babysit-pr <url of #59>`
 - **Then** the babysitter merges #59 without the judge
+
+#### Scenario: owner approval without a SHA
+
+- **Given** PR #59 has `door: one-way`, all checks are green and there is no conflict
+- **When** `jesdi` comments "@babysitter merge" with no SHA
+- **Then** the babysitter does not merge, and hands off with "merge approval must name a commit:
+  @babysitter merge <sha>"
 
 #### Scenario: owner approval with a red check
 
 - **Given** PR #59 head is `a1b2c3d`, the `test` check fails, and `jesdi` comments
-  "@babysitter merge"
+  "@babysitter merge a1b2c3d"
 - **When** the babysitter fixes the test and pushes `e4f5a6b`, and all checks are green
 - **Then** it does not merge, and hands off with "approval was for a1b2c3d"; the comment lists
   `e4f5a6b fix(ci): ... (babysit-pr)` and links

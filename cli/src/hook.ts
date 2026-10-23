@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { withLock } from './lock.js';
 import { storeDir, type Ctx } from './paths.js';
 import { loadGlobalState, saveGlobalState } from './state.js';
 
@@ -23,17 +24,23 @@ cd "$dir" || exit 0
 exit 0
 `;
 
-/** Agent config files that take a `hooks.SessionStart` list, by the directory that owns them. */
+/** Agent config files that take a `hooks.<event>` list, by the directory that owns them. */
 const HOOK_CONFIGS = [
   ['.claude', 'settings.json'],
   ['.codex', 'hooks.json'],
 ] as const;
 
 interface HookGroup {
+  matcher?: string;
   hooks?: { type: string; command: string; timeout?: number }[];
 }
 
-type HookConfig = { hooks?: { SessionStart?: HookGroup[] } };
+type HookConfig = { hooks?: Record<string, HookGroup[]> };
+
+/** The groups registered for an event, in file order. */
+export async function groupsOf(file: string, event: string): Promise<HookGroup[]> {
+  return (await readConfig(file)).hooks?.[event] ?? [];
+}
 
 async function readConfig(file: string): Promise<HookConfig> {
   if (!existsSync(file)) return {};
@@ -44,26 +51,31 @@ async function readConfig(file: string): Promise<HookConfig> {
   }
 }
 
-/** Add the command to the file's SessionStart hooks. False when it is already there. */
-async function register(file: string, command: string): Promise<boolean> {
+/** Add the command to the file's hooks for the event and matcher. False when it is already there. */
+export async function register(file: string, event: string, matcher: string | undefined, command: string): Promise<boolean> {
   const config = await readConfig(file);
-  const groups = ((config.hooks ??= {}).SessionStart ??= []);
-  if (groups.some((g) => g.hooks?.some((h) => h.command === command))) return false;
-  groups.push({ hooks: [{ type: 'command', command, timeout: 10 }] });
+  const groups = ((config.hooks ??= {})[event] ??= []);
+  if (groups.some((g) => g.matcher === matcher && g.hooks?.some((h) => h.command === command))) return false;
+  groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [{ type: 'command', command, timeout: 10 }] });
+  await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(config, null, 2) + '\n');
   return true;
 }
 
-/** Remove the command from the file's SessionStart hooks. False when it is not there. */
-async function unregister(file: string, command: string): Promise<boolean> {
+/**
+ * Remove the command from the file's hooks for the event and matcher. False when it is not there.
+ * `prune` also drops the event's key when no group is left.
+ */
+export async function unregister(file: string, event: string, matcher: string | undefined, command: string, prune = false): Promise<boolean> {
   if (!existsSync(file)) return false;
   const config = await readConfig(file);
-  const groups = config.hooks?.SessionStart ?? [];
+  const groups = config.hooks?.[event] ?? [];
   const kept = groups
-    .map((g) => ({ ...g, hooks: g.hooks?.filter((h) => h.command !== command) }))
+    .map((g) => (g.matcher === matcher ? { ...g, hooks: g.hooks?.filter((h) => h.command !== command) } : g))
     .filter((g, i) => g.hooks?.length || !groups[i].hooks?.length);
   if (JSON.stringify(kept) === JSON.stringify(groups)) return false;
-  config.hooks!.SessionStart = kept;
+  if (prune && !kept.length) delete config.hooks![event];
+  else config.hooks![event] = kept;
   await writeFile(file, JSON.stringify(config, null, 2) + '\n');
   return true;
 }
@@ -78,6 +90,13 @@ function scriptPath(ctx: Ctx): string {
  * config files it changed.
  */
 export async function ensureSessionHook(ctx: Ctx): Promise<string[]> {
+  return withLock(configLock(ctx), () => writeSessionHook(ctx));
+}
+
+/** The lock every writer of the global agent configs holds, the skill installs among them. */
+const configLock = (ctx: Ctx) => `${storeDir('global', ctx)}.lock`;
+
+async function writeSessionHook(ctx: Ctx): Promise<string[]> {
   const script = scriptPath(ctx);
   await mkdir(storeDir('global', ctx), { recursive: true });
   await writeFile(script, SESSION_UPDATE_SCRIPT);
@@ -85,18 +104,22 @@ export async function ensureSessionHook(ctx: Ctx): Promise<string[]> {
   for (const [dir, name] of HOOK_CONFIGS) {
     if (!existsSync(join(ctx.home, dir))) continue;
     const file = join(ctx.home, dir, name);
-    if (await register(file, `sh '${script}'`)) changed.push(file);
+    if (await register(file, 'SessionStart', undefined, `sh '${script}'`)) changed.push(file);
   }
   return changed;
 }
 
 /** Unregister the hook from every agent config and delete the script. Returns the config files it changed. */
 export async function removeSessionHook(ctx: Ctx): Promise<string[]> {
+  return withLock(configLock(ctx), () => deleteSessionHook(ctx));
+}
+
+async function deleteSessionHook(ctx: Ctx): Promise<string[]> {
   const script = scriptPath(ctx);
   const changed: string[] = [];
   for (const [dir, name] of HOOK_CONFIGS) {
     const file = join(ctx.home, dir, name);
-    if (await unregister(file, `sh '${script}'`)) changed.push(file);
+    if (await unregister(file, 'SessionStart', undefined, `sh '${script}'`)) changed.push(file);
   }
   await rm(script, { force: true });
   return changed;
@@ -104,8 +127,10 @@ export async function removeSessionHook(ctx: Ctx): Promise<string[]> {
 
 /** Record the auto-update choice and add or remove the hook to match. Returns the config files it changed. */
 export async function setAutoUpdate(ctx: Ctx, on: boolean): Promise<string[]> {
-  const state = await loadGlobalState(ctx);
-  state.autoUpdate = on;
-  await saveGlobalState(ctx, state);
-  return on ? ensureSessionHook(ctx) : removeSessionHook(ctx);
+  return withLock(configLock(ctx), async () => {
+    const state = await loadGlobalState(ctx);
+    state.autoUpdate = on;
+    await saveGlobalState(ctx, state);
+    return on ? writeSessionHook(ctx) : deleteSessionHook(ctx);
+  });
 }

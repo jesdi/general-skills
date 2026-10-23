@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Fake `gh` for babysit-pr tests. It serves and records GitHub state.
+
+State is the JSON file $GH_FAKE_STATE:
+  now        GitHub's clock (ISO, Z). Every comment written gets created_at/updated_at = now.
+  user       login of `gh api user`
+  next_id    id of the next comment posted
+  comments   [{id, user: {login}, body, created_at, updated_at}]
+  labels     [name] on the PR
+  repo_labels  [name] labels that exist in the repository (optional; when set, assigning a label
+             that is not in it fails 422 like GitHub, and `POST repos/O/R/labels -f name=X` creates it)
+  head_sha   head commit of every PR (default "head1")
+  check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
+  statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
+  required_checks  [name] returned as branch protection contexts of any branch
+  reviews    [{id, user: {login}, state, body, submitted_at}]  (optional)
+  commits    [{sha, date}] oldest first, date = commit time (optional)
+  threads    [{user: {login}, resolved}] review threads (optional)
+  Comments may carry `editor` ({login}) and `last_edited_at` (GraphQL `editor` / `lastEditedAt`).
+  page_size  GraphQL connections return this many nodes per page (cursor = offset); default all
+  threads may carry `more_comments` (true: the thread has comments beyond the page read)
+  title, body  PR title and body (default "" )
+  repo_settings  {allow_rebase_merge, allow_merge_commit, allow_squash_merge} served by `gh api repos/O/R`
+  merge_error  when set, `gh pr merge` fails printing it (e.g. a required approval)
+  merges     recorded successful `gh pr merge` calls: {number, method, match, subject, body, auto}
+  Commits may carry `message`, `author` (login) and `parents` (list of shas; 2 = a merge commit).
+  `gh pr merge N --rebase|--merge|--squash --match-head-commit SHA [--subject S] [--body B]` fails
+  when SHA is not head_sha, like GitHub does.
+  hidden_until_post  comment ids missing from comment lists until the first comment is posted
+             (a race: the other session posts after our first read)
+Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
+Supported: `gh api` (user, pulls/N/reviews, pulls/N/comments (review comments, always empty),
+pulls/N/commits, `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
+issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+
+STATE = os.environ["GH_FAKE_STATE"]
+LOG = os.environ["GH_FAKE_LOG"]
+argv = sys.argv[1:]
+st = json.load(open(STATE))
+
+
+def log(write, unsupported=False):
+    with open(LOG, "a") as f:
+        f.write(json.dumps({"argv": argv, "write": write, "unsupported": unsupported}) + "\n")
+
+
+def save():
+    json.dump(st, open(STATE, "w"))
+
+
+def die(msg, write=False):
+    log(write, unsupported=True)
+    print(f"fake gh: {msg}: gh {' '.join(argv)}", file=sys.stderr)
+    sys.exit(1)
+
+
+def visible():
+    if st.get("posted"):
+        return st["comments"]
+    return [c for c in st["comments"] if c["id"] not in st.get("hidden_until_post", [])]
+
+
+def new_comment(body):
+    c = {"id": st["next_id"], "user": {"login": st["user"]}, "body": body,
+         "created_at": st["now"], "updated_at": st["now"]}
+    st["next_id"] += 1
+    st["comments"].append(c)
+    st["posted"] = True
+    return c
+
+
+def find(cid):
+    for c in st["comments"]:
+        if c["id"] == int(cid):
+            return c
+    die("no such comment")
+
+
+def emit(obj, jq, include=False):
+    if include:
+        print(f"HTTP/2.0 200 OK\nDate: {st['now']}\nContent-Type: application/json\n")
+    if jq:
+        p = subprocess.run(["jq", "-r", jq], input=json.dumps(obj), text=True, capture_output=True)
+        sys.stdout.write(p.stdout)
+        sys.stderr.write(p.stderr)
+        sys.exit(p.returncode)
+    print(json.dumps(obj))
+
+
+def labels_obj():
+    return [{"name": n} for n in st["labels"]]
+
+
+def add_labels(names):
+    if "repo_labels" in st:
+        missing = [n for n in names if n not in st["repo_labels"]]
+        if missing:
+            die(f"HTTP 422: label does not exist in the repository: {missing}", True)
+    for n in names:
+        if n not in st["labels"]:
+            st["labels"].append(n)
+
+
+def remove_label(name):
+    if name in st["labels"]:
+        st["labels"].remove(name)
+
+
+def api(args):
+    method, fields, jq, path, inp, include = None, {}, None, None, None, False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-X", "--method"):
+            method = args[i + 1].upper(); i += 2
+        elif a in ("-f", "-F", "--raw-field", "--field"):
+            k, _, v = args[i + 1].partition("=")
+            if k.endswith("[]"):
+                fields.setdefault(k[:-2], []).append(v)
+            else:
+                fields[k] = v
+            i += 2
+        elif a == "--input":
+            inp = args[i + 1]
+            data = sys.stdin.read() if inp == "-" else open(inp).read()
+            fields.update(json.loads(data)); i += 2
+        elif a in ("--jq", "-q"):
+            jq = args[i + 1]; i += 2
+        elif a in ("-H", "--header", "--cache"):
+            i += 2
+        elif a in ("-i", "--include"):
+            include = True; i += 1
+        elif a.startswith("-"):
+            i += 1
+        else:
+            path = a; i += 1
+    if method is None:
+        method = "POST" if fields else "GET"
+    path = re.sub(r"^/?(repos/[^/]+/[^/]+/)?", "", path or "")
+    write = method != "GET"
+    n = r"(\d+)"
+    if path == "user":
+        log(False); return emit({"login": st["user"]}, jq, include)
+    if m := re.fullmatch(rf"(?:issues|pulls)/{n}", path) and method == "GET":
+        log(False)
+        return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
+                     "user": {"login": st["user"]},
+                     "title": st.get("title", ""), "body": st.get("body", ""),
+                     "head": {"sha": st.get("head_sha", "head1")},
+                     "base": {"ref": st.get("base_ref", "main"), **({"sha": st["base_sha"]} if "base_sha" in st else {})}}, jq, include)
+    if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
+        log(False)
+        return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
+                                             "allow_squash_merge": False}), jq, include)
+    if re.fullmatch(rf"pulls/{n}/reviews", path) and method == "GET":
+        log(False)
+        return emit([{"id": r["id"], "user": r["user"], "state": r["state"], "body": r.get("body", ""),
+                      "submitted_at": r["submitted_at"]} for r in st.get("reviews", [])], jq, include)
+    if re.fullmatch(rf"pulls/{n}/comments", path) and method == "GET":
+        log(False); return emit([], jq, include)
+    if re.fullmatch(rf"pulls/{n}/commits", path) and method == "GET":
+        log(False)
+        return emit([{"sha": c["sha"], "parents": [{"sha": x} for x in c.get("parents", ["p0"])],
+                      "author": {"login": c.get("author", "jesdi")},
+                      "commit": {"message": c.get("message", ""), "committer": {"date": c["date"]}}}
+                     for c in st.get("commits", [])], jq, include)
+    if path == "graphql":
+        log(False)
+        q = fields.get("query", "")
+        def pick(node, sel):  # only the fields the query selects, as the real API does
+            if isinstance(node, dict):
+                return {k: pick(v, sel) for k, v in node.items() if re.search(rf"\b{k}\b", sel)}
+            if isinstance(node, list):
+                return [pick(v, sel) for v in node]
+            return node
+        every = {
+            "comments": [{"databaseId": c["id"], "author": c["user"], "editor": c.get("editor"),
+                          "lastEditedAt": c.get("last_edited_at"), "createdAt": c["created_at"],
+                          "body": c["body"]} for c in visible()],
+            "reviews": [{"databaseId": r["id"], "author": r["user"], "state": r["state"],
+                         "body": r.get("body", ""), "submittedAt": r["submitted_at"],
+                         "editor": r.get("editor"), "lastEditedAt": r.get("last_edited_at")}
+                        for r in st.get("reviews", [])],
+            "reviewThreads": [{"isResolved": t["resolved"], "comments": {"nodes": [{"author": t["user"], "createdAt": t.get("created_at")}],
+                                                                         "pageInfo": {"hasNextPage": t.get("more_comments", False), "endCursor": None}}}
+                              for t in st.get("threads", [])],
+            "commits": [{"commit": {"oid": c["sha"], "committedDate": c["date"]}}
+                        for c in st.get("commits", [])]}
+        m = re.search(r"pullRequest\([^)]*\)\s*\{\s*(\w+)", q)
+        name = m.group(1) if m else None
+        if name not in every:
+            die("graphql query selects no known connection", False)
+        size, start = st.get("page_size") or len(every[name]) or 1, int(fields.get("after") or 0)
+        end = start + size
+        page = {"nodes": pick(every[name][start:end], q),
+                "pageInfo": {"hasNextPage": end < len(every[name]), "endCursor": str(end)}}
+        return emit({"data": {"repository": {"pullRequest": {name: page}}}}, jq, include)
+    if m := re.fullmatch(r"commits/([^/]+)/check-runs", path):
+        log(False)
+        runs = st.get("check_runs", {}).get(m.group(1), [])
+        return emit({"total_count": len(runs), "check_runs": runs}, jq, include)
+    if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
+        log(False)
+        return emit(st.get("statuses", {}).get(m.group(1), []), jq, include)
+    if re.fullmatch(r"branches/[^/]+/protection/required_status_checks", path):
+        log(False)
+        return emit({"strict": False, "contexts": st.get("required_checks", [])}, jq, include)
+    if re.fullmatch(rf"issues/{n}/comments", path):
+        if method == "GET":
+            log(False); return emit(visible(), jq, include)
+        if method == "POST":
+            log(True); c = new_comment(fields.get("body", "")); save(); return emit(c, jq, include)
+    if m := re.fullmatch(r"issues/comments/(\d+)", path):
+        c = find(m.group(1))
+        if method == "GET":
+            log(False); return emit(c, jq, include)
+        if method in ("PATCH", "PUT"):
+            log(True)
+            c["body"] = fields.get("body", c["body"]); c["updated_at"] = st["now"]
+            c["editor"] = {"login": st["user"]}
+            c["last_edited_at"] = st["now"]
+            save(); return emit(c, jq, include)
+        if method == "DELETE":
+            log(True); st["comments"].remove(c); save(); return
+    if path == "labels" and method == "POST":
+        name = fields.get("name", "")
+        if name in st.get("repo_labels", []):
+            die("HTTP 422: already_exists", True)
+        log(True); st.setdefault("repo_labels", []).append(name); save()
+        return emit({"name": name}, jq, include)
+    if re.fullmatch(rf"issues/{n}/labels", path):
+        if method == "GET":
+            log(False); return emit(labels_obj(), jq, include)
+        if method == "POST":
+            log(True); add_labels(fields.get("labels", [])); save(); return emit(labels_obj(), jq, include)
+        if method == "PUT":
+            log(True); st["labels"] = list(fields.get("labels", [])); save(); return emit(labels_obj(), jq, include)
+        if method == "DELETE":
+            log(True); st["labels"] = []; save(); return
+    if m := re.fullmatch(rf"issues/{n}/labels/(.+)", path):
+        if method == "DELETE":
+            from urllib.parse import unquote
+            log(True); remove_label(unquote(m.group(2))); save(); return emit(labels_obj(), jq, include)
+    die(f"unsupported api {method} {path}", write)
+
+
+def flag_values(args, *names):
+    out = []
+    for i, a in enumerate(args):
+        if a in names:
+            out.append(args[i + 1])
+        for nm in names:
+            if a.startswith(nm + "="):
+                out.append(a.split("=", 1)[1])
+    return out
+
+
+def pr_like(args):
+    verb = args[0]
+    rest = args[1:]
+    if verb == "view":
+        jq = (flag_values(rest, "--jq", "-q") or [None])[0]
+        comments = [{"id": str(c["id"]), "body": c["body"], "author": c["user"],
+                     "createdAt": c["created_at"], "updatedAt": c["updated_at"]} for c in visible()]
+        log(False)
+        return emit({"labels": labels_obj(), "comments": comments, "state": "OPEN",
+                     "title": st.get("title", ""), "body": st.get("body", ""),
+                     "headRefOid": st.get("head_sha", "head1")}, jq)
+    if verb == "merge":
+        match = (flag_values(rest, "--match-head-commit") or [None])[0]
+        method = next((m for m in ("rebase", "merge", "squash") if f"--{m}" in rest), None)
+        if st.get("merge_error"):
+            log(True); print(st["merge_error"], file=sys.stderr); sys.exit(1)
+        if match != st.get("head_sha", "head1"):
+            log(True); print("Head branch was modified. Review and try the merge again.", file=sys.stderr)
+            sys.exit(1)
+        log(True)
+        st.setdefault("merges", []).append({
+            "number": rest[0], "method": method, "match": match, "auto": "--auto" in rest,
+            "subject": (flag_values(rest, "--subject", "-t") or [None])[0],
+            "body": (flag_values(rest, "--body", "-b") or [None])[0]})
+        save(); return
+    if verb == "comment":
+        body = (flag_values(rest, "--body", "-b") or [""])[0]
+        log(True); new_comment(body); save(); return
+    if verb == "edit":
+        log(True)
+        for lab in flag_values(rest, "--add-label"):
+            add_labels(lab.split(","))
+        for lab in flag_values(rest, "--remove-label"):
+            for x in lab.split(","):
+                remove_label(x)
+        save(); return
+    die("unsupported pr/issue verb", True)
+
+
+if not argv:
+    die("no args")
+if argv[0] == "api":
+    api(argv[1:])
+elif argv[0] in ("pr", "issue") and len(argv) > 1:
+    pr_like(argv[1:])
+else:
+    die("unsupported command")

@@ -97,7 +97,7 @@ describe('agentsFor', () => {
 
   it('errors on an unknown agent id, wherever it comes from', () => {
     const top = base({ agents: ['cursor' as never], skills: { x: { version: '1.0.0' } } });
-    expect(() => agentsFor(top, 'x')).toThrow(/unknown agent: cursor \(expected claude\|opencode\)/);
+    expect(() => agentsFor(top, 'x')).toThrow(/unknown agent: cursor \(expected claude\|codex\|opencode\)/);
     const entry = base({ skills: { x: { version: '1.0.0', agents: ['cursor' as never] } } });
     expect(() => agentsFor(entry, 'x')).toThrow(/unknown agent: cursor/);
   });

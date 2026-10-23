@@ -301,6 +301,7 @@ def _merge(ticket: Ticket, slot: str, run: Run) -> None:
     with run.merging, during("the merge"):
         landing, rulings = _land(ticket, slot, run)
         run.state.update(lambda state: _record_landing(state, number, landing, rulings.adopted()))
+    _drop_merged(run.state)
     for path in rulings.adopted():
         ledger(f"Ticket {number}: by the ruling (adopt), the ticket locks {path}, so its change to that locked file of "
                "a merged ticket landed.")
@@ -331,6 +332,14 @@ def _block(number: str, run: Run, ledger_line: int) -> None:
     run.state.update(change)
     if ask and ask.subjects:
         ledger(f"Ticket {number}: {driver_decisions.decides(ask.kind, len(ask.subjects))} in {DECISIONS}.")
+
+
+def _drop_merged(state: driver_state.State) -> None:
+    """Drop the open questions of each merged ticket: a stopped ticket that the operator set to `merge` has them."""
+    dropped: list[dict] = []
+    state.update(lambda new: dropped.extend(driver_decisions.drop_merged(new)))
+    for question in dropped:
+        ledger(f"Ticket {question['ticket']}: the question {question['id']} is dropped: the ticket merged.")
 
 
 def _halt(run: Run, owner: str, why: str) -> None:
@@ -466,7 +475,7 @@ def _resume(tickets: list[Ticket], state: driver_state.State, pr: str, slots: in
 
 def _publish_questions(run: dict) -> str:
     """Write decisions.json and the review page for the questions of `run` of state.json; "" or the error."""
-    if not run["questions"]:
+    if not (run["questions"] or DECISIONS.exists()):  # a dropped question leaves a file to rewrite
         return ""
     document = driver_decisions.document(run)
     DECISIONS.write_text(json.dumps(document, indent=1) + "\n")
@@ -482,6 +491,7 @@ def _publish_questions(run: dict) -> str:
 
 def _apply_answers(state: driver_state.State, args) -> list[str]:
     """Turn each answer that counts into a ruling and let its ticket go on; [] or the errors that stop the run."""
+    _drop_merged(state)
     run = state.read()["run"]
     questions, document = run["questions"], driver_decisions.document(run)
     if errors := driver_answers.given(args.answer, document):

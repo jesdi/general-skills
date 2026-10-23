@@ -91,6 +91,19 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+    "review-rejected": Kind(
+        True,
+        "Ticket {ticket}: the driver rejected an agent of the review two times: {subject}",
+        "The driver rejected the report of the reviewer or the correctness pass of ticket {ticket}, and the report of "
+        "its rerun too, so the review did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "retry",
+        {"retry": Option(
+            "The review runs again, with each of its agents. The first prompt of the rejected agent says why the "
+            "driver rejected its report.",
+            "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
+         "redesign": Option(
+            "Keep the ticket BLOCKED. The design changes before more work on it.",
+            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     "implementer-stopped": Kind(
         True,
         "Ticket {ticket}: the implementer stopped: {subject}",
@@ -175,6 +188,16 @@ def ruled(questions: list[dict], ticket: str, kind: str) -> dict[str, str]:
 def accepted(questions: list[dict], ticket: str, kind: str) -> list[str]:
     """The subjects of the questions of `kind` on `ticket` that the operator answered `accept`."""
     return [q["subject"] for q in questions if (q["ticket"], q["kind"], q["answer"]) == (ticket, kind, "accept")]
+
+
+def drop_merged(state: dict) -> list[dict]:
+    """Remove the open questions of each merged ticket from `state`: the stop that asked them is over (issue #136).
+    Returns them."""
+    merged = {number for number, entry in state["tickets"].items() if entry["phase"] == "merged"}
+    run = state["run"]
+    dropped = [q for q in run["questions"] if q["answer"] is None and q["ticket"] in merged]
+    run["questions"] = [q for q in run["questions"] if q not in dropped]
+    return dropped
 
 
 def contradicted(role: str, report: dict) -> str:

@@ -6,11 +6,12 @@ import {
   opDecline,
   opInstall,
   opList,
+  updateState,
   type CliCtx,
 } from './ops.js';
 import { type AgentId, type Scope } from './paths.js';
 import { selectAgents } from './prompts.js';
-import { loadState, saveState } from './state.js';
+import { loadState } from './state.js';
 
 export async function runWizard(ctx: CliCtx): Promise<void> {
   p.intro('@jesdi/skills');
@@ -74,11 +75,11 @@ async function settleAgents(
   scope: Scope,
   ctx: CliCtx,
 ): Promise<AgentId[] | undefined> {
-  const state = await loadState(scope, ctx);
-  const current = state.agents ?? [];
+  const current = (await loadState(scope, ctx)).agents ?? [];
   if (current.length === 0) {
-    state.agents = chosen;
-    await saveState(scope, ctx, state);
+    await updateState(scope, ctx, (state) => {
+      if (!state.agents?.length) state.agents = chosen;
+    });
     return undefined;
   }
   const sameSet = chosen.length === current.length && chosen.every((a) => current.includes(a));

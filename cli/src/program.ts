@@ -84,7 +84,7 @@ async function registerHook(opts: { off?: boolean }, cliCtx: CliCtx): Promise<vo
 }
 
 export function buildProgram(ctx?: CliCtx): Command {
-  const cliCtx: CliCtx = ctx ?? defaultCtx();
+  const cliCtx: CliCtx = { say: (m) => console.log(m), ...(ctx ?? defaultCtx()) };
   const program = new Command('skills-cli');
   program
     .description("Install jesdi's agent skills into Claude Code and OpenCode")
@@ -95,7 +95,7 @@ export function buildProgram(ctx?: CliCtx): Command {
     .argument('<skills...>', 'skill names to install')
     .option(
       '--agent <list>',
-      'comma-separated agents (claude,opencode); written as a per-skill override. ' +
+      'comma-separated agents (claude,codex,opencode); written as a per-skill override. ' +
         'Omit to use the top-level "agents" default (asked once when missing)',
     )
     .option('--global', 'install for the whole machine instead of this project')
