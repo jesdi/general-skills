@@ -15,7 +15,7 @@ from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts
 from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
 from test_review import ONE, STUCK, finding, fix, review
 from test_stops import CONTRA, NEW_TEST, Q1, UNATTENDED, blocked, correction, decisions, stage, steps, write_answers
-from test_walk import impl, plan, tw
+from test_walk import COST, impl, plan, tw
 
 PAGE = ".agent/implement-review.html"
 
@@ -218,14 +218,48 @@ def test_a_correction_that_commits_more_than_the_files_it_lists_is_rejected(tmp_
     scenario = plan(**{"01/test-writer": [two_locked(), correction(), correction()], "01/implementer": [dirty, impl("01")]})
     rig = Inside(tmp_path, ONE).run(scenario)
     rig.run(scenario, "--answer", f"{Q1}=overrule-test")
-    assert rig.code == 1, rig.ledger()
+    assert rig.code == 2, rig.ledger()
     assert rig.led("Ticket 01: BLOCKED at the test-writer: a correction may change only the files it lists in "
                    "`locked`: its commits also change demo/export.py.")
+    # Issue #134: the refused correction asks the locked-test question again, from the same blocked report.
+    (again,) = decisions(rig)["questions"]
+    asked_again = rig.state()["run"]["questions"][-1]
+    assert again["id"] == "01-locked-test-2" and asked_again["subject"] == "tests/test_01.py::test_x"
+    assert asked_again["evidence"][0] == ".agent/implement/01/implementer-0.json"
     assert rig.led(restored(OTHER)) and git(rig.repo, "show", f"ticket/feat%2Fcsv/01:{OTHER}") == OTHER_TEST
     assert len(rig.calls("01", "test-writer")) == 3 and len(rig.calls("01", "implementer")) == 1, "one rerun, no implementer"
     assert "its commits also change demo/export.py" in rig.prompt("test-writer-0")
     assert "feat: 01 rows" not in rig.pr_subjects() and rig.state()["tickets"]["01"]["held"] == {}
 
+
+MUTATION = "FAILED tests/test_01.py::test_x - AssertionError: fn_01 deleted"
+
+
+def test_an_overrule_correction_whose_test_is_green_against_the_tip_reaches_the_review(tmp_path, capsys):
+    # Issue #134: the corrected test is green on the implementer's code, so its red line comes from a reverted mutation.
+    green = {**correction(), "stdout": MUTATION + "\n" + COST}
+    green["report"] = {**green["report"], "red": [{"test": "tests/test_01.py::test_x", "line": MUTATION}]}
+    scenario = plan(**{"01/test-writer": [tw("01"), green, green], "01/implementer": [partial(), impl("01")]})
+    rig = Inside(tmp_path, ONE).run(scenario)
+    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
+    assert rig.code == 0, rig.ledger()
+    assert len(rig.calls("01", "test-writer")) == 2, "the green correction is accepted with no rerun"
+    assert "break the production line that the test protects" in rig.prompt("test-writer-0")
+    assert rig.state()["tickets"]["01"]["phase"] == "merged"
+
+
+def test_an_overrule_correction_may_leave_the_overruled_concern_not_addressed(tmp_path, capsys):
+    keeps = {**correction(), "files": {}, "commit": None, "stdout": COST}
+    del keeps["files"], keeps["commit"]
+    keeps["report"] = {**keeps["report"], "commits": [], "files": [], "locked": [], "red": [],
+                       "not_addressed": [{"finding": CONTRA, "reason": "the test is right"}]}
+    scenario = plan(**{"01/test-writer": [tw("01"), keeps, keeps], "01/implementer": [blocked(), impl("01")]})
+    rig = Inside(tmp_path, ONE).run(scenario)
+    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
+    assert rig.code == 0, rig.ledger()
+    assert len(rig.calls("01", "test-writer")) == 2, "the concern is a target the correction can name"
+    assert f"- {CONTRA}" in rig.prompt("test-writer-0")
+    assert rig.led(f"Ticket 01: the test-writer correction did not correct {CONTRA}: the test is right.")
 
 def test_a_correction_of_its_own_file_leaves_the_work_in_the_tree_to_the_implementer(tmp_path, capsys):
     dirty = {**blocked(), "files": {"demo/export.py": "half = 1\n"}}

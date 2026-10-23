@@ -7,4 +7,3 @@ interfaces, auth, money, data loss, anything hard to revert, or a block that und
 
 Answer with one JSON object and nothing else:
 {"verdict": "agree" | "disagree", "reason": "<one short sentence>"}
-
