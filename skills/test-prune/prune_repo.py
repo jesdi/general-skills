@@ -86,8 +86,15 @@ class Repo:
             raise Fail(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
         return proc.stdout
 
-    def git_dir(self) -> Path:
-        return Path(self.git("rev-parse", "--absolute-git-dir").strip())
+    def default_state(self) -> Path:
+        """<root>/.test-prune, kept out of git through info/exclude. Not under the git dir: Claude Code
+        refuses an agent's writes there, and the fixer and reviewer write into the state."""
+        exclude = self.root / self.git("rev-parse", "--git-path", "info/exclude").strip()
+        lines = exclude.read_text().splitlines() if exclude.exists() else []
+        if "/.test-prune/" not in lines:
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            exclude.write_text("".join(f"{line}\n" for line in [*lines, "/.test-prune/"]))
+        return self.root / ".test-prune"
 
     def head(self) -> str:
         return self.git("rev-parse", "HEAD").strip()

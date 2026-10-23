@@ -3,10 +3,11 @@ import json
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-from prune_harness import PRUNE, PRUNE_BRANCH, arg, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
+from prune_harness import DATE, PRUNE, PRUNE_BRANCH, arg, REFERENCE, STRENGTHEN_BRANCH, R, cand, case, lines_with
 from prune_repo import Fail, Repo
 from prune_review import cap
 from test_prune_strengthen import (COMPUTE, COMPUTE_TEST, DRIFT, DRIFT_TEST, EQUIVALENT_ID, HERFINDAHL, IDS_7_9,
@@ -377,6 +378,28 @@ def test_a_malformed_date_is_recorded_in_the_status(target):
 
     status = target.read_state("status.json")
     assert proc.returncode == 2 and status["exit"] == 2 and "--date must be YYYY-MM-DD" in status["reason"]
+
+
+def test_the_default_state_is_an_ignored_dir_the_agents_can_write(target):
+    """Claude Code refuses an agent's writes under .git/, and the fixer and reviewer write into the state."""
+    def run(*args):
+        return subprocess.run([sys.executable, str(PRUNE), *args], cwd=target.root / "backend", env=target.env(),
+                              capture_output=True, text=True)
+    target.set_candidates([cand(case(1))])
+
+    for _ in range(2):
+        proc = run("collect", "--unattended", "--date", DATE)
+        assert proc.returncode == 0, proc.stderr
+
+    state = target.root / ".test-prune"
+    assert json.loads((state / "status.json").read_text())["commands"][0]["command"] == "collect"
+    assert not (Path(target.git("rev-parse", "--absolute-git-dir").strip()) / "test-prune").exists()
+    assert target.git("status", "--porcelain", "--untracked-files=all") == ""
+    exclude = target.root / target.git("rev-parse", "--git-path", "info/exclude").strip()
+    assert exclude.read_text().splitlines().count("/.test-prune/") == 1
+
+    assert run("batch").returncode == 2  # an argument error, recorded before any Context exists
+    assert "--reviews" in json.loads((state / "status.json").read_text())["reason"]
 
 
 def test_the_cap_skips_a_family_that_does_not_fit_and_takes_later_ones():
