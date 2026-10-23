@@ -35,7 +35,7 @@ class Parser(argparse.ArgumentParser):
 
 def _common():
     common = Parser(add_help=False)
-    common.add_argument("--state", help="run state directory (default: <git dir>/test-prune)")
+    common.add_argument("--state", help="run state directory (default: <repo root>/.test-prune, git-ignored)")
     common.add_argument("--date", help="branch date YYYY-MM-DD (default: today, UTC)")
     return common
 
@@ -65,7 +65,7 @@ class Context:
     def __init__(self, args):
         self.args = args
         self.repo = Repo(Path.cwd())
-        self.state = State(Path(args.state).resolve() if args.state else self.repo.git_dir() / "test-prune")
+        self.state = State(Path(args.state).resolve() if args.state else self.repo.default_state())
         self.date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self.finished = False  # the run is complete: the strengthen loop ended (set by its commands)
 
@@ -177,7 +177,7 @@ def _record_bad_arguments(argv, exc: BadInput) -> None:
     command = next((a for a in argv if a in COMMANDS), None)
     state = _state_arg(argv)
     try:
-        path = Path(state).resolve() if state else Repo(Path.cwd()).git_dir() / "test-prune"
+        path = Path(state).resolve() if state else Repo(Path.cwd()).default_state()
     except BadInput:
         return
     if command:

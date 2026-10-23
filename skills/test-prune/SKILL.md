@@ -27,8 +27,9 @@ The target repo provides the make targets `test`, `mutation`, `mutation-check`,
 python3 "<skill-dir>/prune.py" <command> [--state DIR] [--date YYYY-MM-DD]
 ```
 
-Run it from inside the target repo. State lives in `<git dir>/test-prune/` (outside the working
-tree); each command reads what the previous one wrote there. Exit 0 is done (including nothing to
+Run it from inside the target repo. State lives in `<repo root>/.test-prune/`, which prune.py keeps
+out of git through `info/exclude`; each command reads what the previous one wrote there. Subagents
+write their JSON files there too. Never put it under `.git/`: Claude Code refuses agent writes there. Exit 0 is done (including nothing to
 do), 1 is a failed make target, gate or guard, 2 is bad input or an unmet precondition; the
 message names the offending ids or files. On exit 2 fix the input and rerun the same command; on
 exit 1 stop and report the output.
