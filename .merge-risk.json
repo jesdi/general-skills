@@ -1,0 +1,56 @@
+{
+  "agentMerge": true,
+  "mergeMethod": "rebase",
+  "judgeMaxLines": 1500,
+  "waitMinutes": 60,
+  "alwaysHuman": [
+    "schema/migration",
+    "auth/security",
+    "money",
+    "data-delete",
+    "infra",
+    "ci",
+    "config",
+    "logic"
+  ],
+  "paths": {
+    "auth/security": [
+      ".merge-risk.json",
+      "**/.env*",
+      "skills/pr-risk/**"
+    ],
+    "ci": [
+      ".github/workflows/**",
+      "scripts/check.sh",
+      "scripts/generate-manifest.ts",
+      "scripts/test-python.sh"
+    ],
+    "config": [
+      ".coveragerc",
+      ".crap-gate.json",
+      "external-skills.json",
+      "package.json",
+      "pnpm-workspace.yaml",
+      "requirements-dev.txt",
+      "skills-manifest.json",
+      "tsconfig.json",
+      "vitest.config.ts"
+    ],
+    "deps": [
+      "package.json",
+      "requirements-dev.txt"
+    ],
+    "docs": [
+      "**/*.md"
+    ],
+    "tests": [
+      "tests/**",
+      "skills/**/test_*.py",
+      "skills/**/tests/**",
+      "scripts/test_*.py"
+    ],
+    "ui": [
+      "skills/review-page/template.html"
+    ]
+  }
+}
