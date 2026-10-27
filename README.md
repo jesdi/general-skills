@@ -157,6 +157,10 @@ the upstream copies of those five names alongside them** (`npx skills add
 mattpocock/skills` installs the whole set — deselect those five, or uninstall
 them afterwards). `external-skills.json` lists them under `forks`.
 
+`agents-wayfinder` is a modified copy of the upstream `wayfinder` under its own
+name, so the two can be installed side by side. It hands off each increment as a
+`spec-ready` build issue while the map is still being worked.
+
 ### The box set
 
 `external-skills.json` → `sets.box.external` names the third-party skills the

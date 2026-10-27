@@ -1,8 +1,17 @@
 ---
-name: wayfinder
-description: Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.
+name: agents-wayfinder
+description: Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, resolve them one at a time until the way to the destination is clear, and hand off each increment for building as soon as it is specifiable.
 disable-model-invocation: true
 ---
+
+<!--
+Modified copy of https://github.com/mattpocock/skills/tree/8295b8e10d4cdb6cce772a56dda7b7c37075074d/skills/engineering/wayfinder
+(mattpocock-skills v1.3.1). Copyright (c) 2026 Matt Pocock, MIT — see LICENSE.
+Changes: renamed to agents-wayfinder; the deliverable is built through increments
+handed off as `spec-ready` build issues while wayfinding goes on, instead of after
+the map is done; an increment lands on main, hidden if needed, and on an
+integration branch only for an all-at-once cut-over.
+-->
 
 A loose idea has arrived, too big for one agent session, and wrapped in fog: the way from here to the **destination** isn't visible yet. Wayfinding is about finding that way, not charging at the destination. This skill charts the way as a **shared map** on the repo's issue tracker, then works its **decision tickets** (questions whose resolution is a decision, not slices of a build to execute) one at a time until the route is clear.
 
@@ -10,7 +19,15 @@ The destination varies per effort, and naming it is the first act of charting: i
 
 ## Plan, don't do
 
-Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear, with nothing left to decide before someone goes and does the thing. The pull to just do the work is usually the signal you've reached the edge of the map and it's time to hand off. An effort can override this in its **Notes**, carrying execution into the map itself, but absent that, produce decisions, not deliverables.
+Wayfinder is **planning** by default: each ticket resolves a decision, and the map is done when the way is clear, with nothing left to decide before someone goes and does the thing. The deliverable itself is built through [increments](#increments) handed off as build issues, never inside a ticket. The pull to just do the work is usually the signal that an increment is specifiable, or that you've reached the edge of the map: either way, hand off. An effort can override this in its **Notes**, carrying execution into the map itself, but absent that, tickets produce decisions, not deliverables.
+
+## Increments
+
+An **increment** is one deliverable, built as one PR of at most 5 tickets. It is specifiable once its scope, data shape and seams are decided, usually long before the map is done. Hand it off then: wayfinding goes on in parallel, and what a built increment teaches feeds the decisions still open.
+
+Each increment becomes one **build issue**: written by calling the Skill tool with "to-spec", labelled `spec-ready`, and linked from the map's Decisions so far. A build issue is not a child of the map, so it never joins the frontier. Order between increments uses `Blocked by` edges between build issues: the native edge, plus a `Blocked by: #<n>` line in the blocked build issue's body, which is the edge the `backlog` ranking reads.
+
+An increment lands on main unused or hidden: behind a flag, with no route to it yet, or as a migration that adds and doesn't remove. Only an all-at-once cut-over, which cannot land hidden, targets a `feat/<name>` integration branch, rebased on main after each merge and merged to main through one final PR. Name that branch in the build issue.
 
 ## Refer by name
 
@@ -39,9 +56,10 @@ The whole map at low resolution, loaded once per session. Open tickets are **not
 
 ## Decisions so far
 
-<!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
+<!-- the index: one line per closed ticket or build issue, enough to judge relevance, then zoom the link for the detail it holds -->
 
 - [<closed ticket title>](link): <one-line gist of the answer>
+- [<build issue title>](link): <the increment it builds>
 
 ## Not yet specified
 
@@ -123,6 +141,7 @@ User invokes with a map (URL or number). A ticket is **optional**: without one, 
 2. Choose the ticket. If the user named one, use it. Otherwise take the first frontier ticket in order. **Claim it**: assign it to yourself before any work.
 3. Resolve it as the type its `wayfinder:<type>` label names (see [Ticket Types](#ticket-types)). Read the label, not just the body: the body never states the type. **Zoom as needed**: fetch the full body of any related or closed ticket on demand; call the Skill tool for whichever skills the `## Notes` block names. If in doubt, call the Skill tool twice, for "grilling" and "domain-modeling".
 4. Record the resolution: post the answer as a **resolution comment**, **close** the issue, and **append a context pointer** to the map's Decisions-so-far.
-5. Add newly-surfaced tickets (create-then-wire); graduate any fog the answer has made specifiable, clearing each graduated patch from **Not yet specified** so it lives only as its new ticket. If the answer reveals that a ticket (this one or another) sits beyond the destination, **rule it out of scope** rather than resolving it on the route. If the decision invalidates other parts of the map, update or delete those tickets.
+5. **Hand off** each increment the resolution has made specifiable (see [Increments](#increments)): write its build issue, append it to Decisions so far, and wire `Blocked by` to the earlier build issues it needs.
+6. Add newly-surfaced tickets (create-then-wire); graduate any fog the answer has made specifiable, clearing each graduated patch from **Not yet specified** so it lives only as its new ticket. If the answer reveals that a ticket (this one or another) sits beyond the destination, **rule it out of scope** rather than resolving it on the route. If the decision invalidates other parts of the map, update or delete those tickets.
 
 The user may run unblocked tickets in parallel, so expect other sessions to be editing the tracker concurrently.
