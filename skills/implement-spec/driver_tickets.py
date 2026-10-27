@@ -113,6 +113,8 @@ def parse(path) -> tuple[list[Ticket], list[str]]:
         return [], [f"{path}: no ticket files (NN-name.md)"]
     tickets = [_read(p) for p in files]
     errors = [e for t in tickets for e in _missing(t, alone=len(tickets) == 1)]
+    if len(tickets) > 5:
+        errors.append(f"{path}: split into increments (maximum 5 tickets; found {len(tickets)})")
     errors += _link(tickets)
     errors += _cycles(tickets)
     return ([], errors) if errors else (tickets, [])
