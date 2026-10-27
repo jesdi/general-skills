@@ -1,7 +1,13 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-23T18:30:59.604Z",
+  "generatedAt": "2026-10-27T14:34:07.257Z",
   "skills": [
+    {
+      "name": "agents-wayfinder",
+      "version": "0.1.0",
+      "hash": "sha256-e323ffadb12c62ca6c9bfadbd20a57d70db2d44d53a52bb1e9fc5100666c0d6b",
+      "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, resolve them one at a time until the way to the destination is clear, and hand off each increment for building as soon as it is specifiable."
+    },
     {
       "name": "babysit-pr",
       "version": "0.1.1",
@@ -52,8 +58,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.40",
-      "hash": "sha256-b55e19f156025a0a30d2a6ba6a28eb66c0d890163a29b3a813e49c3eb8be7ca4",
+      "version": "0.1.41",
+      "hash": "sha256-f3752a9867215a59270a63d59d62922d7b312fd1f3a3c63c09c256fa84ce31a8",
       "description": "Implement a specification in code."
     },
     {
@@ -70,8 +76,8 @@
     },
     {
       "name": "prototype",
-      "version": "0.1.0",
-      "hash": "sha256-211e0e116ff6efbc4589ea7264835855b9495ba535f242733af913903fe7707d",
+      "version": "0.1.1",
+      "hash": "sha256-69ef0e2f8a48288249608e5b01a160202f0980ca0af965ac79b74d8ea1d3fc1e",
       "description": "Build a throwaway prototype to answer a design question, delivered as one self-contained HTML file. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
     },
     {
@@ -106,20 +112,20 @@
     },
     {
       "name": "to-spec",
-      "version": "0.1.0",
-      "hash": "sha256-146048bc0d698b92c330e860dc5c052b4645e1ba69f5b094270632daec82e40b",
+      "version": "0.1.1",
+      "hash": "sha256-9fc1ff62737a71dd614dd23dba8a502a39d74239188a9e561d8b0cf6c2569fe9",
       "description": "Turn the current conversation into a design spec and write it where the next stage reads it: a GitHub issue body labelled spec-ready (after a grilling session), or a dated design file on the current branch (an unattended spec stage). No interview, just synthesis of what you've already discussed."
     },
     {
       "name": "to-tickets",
-      "version": "0.1.5",
-      "hash": "sha256-58d4b24183ba3ff59a97de963ab0cd8bbac91d526941eeb7ec0a84274e918faf",
+      "version": "0.1.6",
+      "hash": "sha256-b8e508cc04da4cb7b2645ae67198ff7b7404970a51bd4d7167366b0e4eec7d5d",
       "description": "Break a spec, plan, or the current conversation into numbered tracer-bullet ticket files under .agent/tickets/, each declaring its blocking edges and acceptance criteria phrased as observable behavior. Use after a spec is approved and before implementation starts."
     },
     {
       "name": "wizard",
-      "version": "0.1.0",
-      "hash": "sha256-ebcd06573861f575707717ef65218b52436256c33a8cb1da12484c5b58ce9294",
+      "version": "0.1.1",
+      "hash": "sha256-442a2ac21dbd866f49212b1f5d28ff434c45359f60f59a2f5ae3d3b8b8835857",
       "description": "Generate an interactive bash wizard that walks a human through steps only they can perform, and that says for every captured value whether it ends up in CI, on the agent-ops box (1Password), or local only. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself."
     }
   ]
