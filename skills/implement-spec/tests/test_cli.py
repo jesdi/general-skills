@@ -160,6 +160,30 @@ def test_blocked_by_unknown_number_names_file_and_number(env, tmp_path):
     assert any("02-quote-fields.md" in l and "07" in l for l in proc.stdout.splitlines())
 
 
+def test_six_tickets_are_refused_before_any_work_starts(env, tmp_path):
+    files = {f"{n:02d}-ticket-{n}.md": ticket(f"{n:02d}", f"Ticket {n}") for n in range(1, 7)}
+    repo = make_repo(tmp_path / "demo", files)
+    before = snapshot(repo)
+
+    proc = drive(env, repo)
+
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "split into increments" in proc.stdout
+    assert_untouched(proc, repo, before, tmp_path)
+
+
+def test_five_tickets_remain_valid_input(env, tmp_path):
+    files = {f"{n:02d}-ticket-{n}.md": ticket(f"{n:02d}", f"Ticket {n}") for n in range(1, 6)}
+    repo = make_repo(tmp_path / "demo", files)
+    before = snapshot(repo)
+
+    proc = drive(env, repo)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max frontier width: 5" in proc.stdout
+    assert_untouched(proc, repo, before, tmp_path)
+
+
 @pytest.mark.parametrize("files, code", [
     (three(**{"02-quote-fields.md": ticket("02", "Quote fields", "07")}), 3),
     (three(), 0),
