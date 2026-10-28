@@ -4,12 +4,16 @@ lower the baseline, and (unattended) open the strengthen PR from the base commit
 from __future__ import annotations
 
 import json
+import re
 
 from prune_repo import KILLED, SURVIVING, BadInput, Fail, Repo, ratchet_lines
 from prune_review import check_reviews, equivalents_section, suggestions_section
 from prune_source import test_sources
 
 TRAILER = "Test-Prune-Item"
+# Read from the whole message, not git's trailer block: git only takes trailers from the
+# last paragraph, and a Co-Authored-By paragraph appended after ours would hide it.
+TRAILER_LINE = re.compile(rf"^{TRAILER}:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 BASELINE = "backend/mutation_baseline.json"
 
 
@@ -52,9 +56,9 @@ def _history(repo, start: str) -> list:
     """[(sha, trailer values, paths)] for every commit since start, oldest first."""
     out = []
     for sha in repo.git("rev-list", "--reverse", f"{start}..HEAD").split():
-        values = repo.git("log", "-1", f"--format=%(trailers:key={TRAILER},valueonly)", sha).split("\n")
+        values = TRAILER_LINE.findall(repo.git("log", "-1", "--format=%B", sha))
         paths = repo.git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
-        out.append((sha, [v.strip() for v in values if v.strip()], paths))
+        out.append((sha, [v for v in values if v], paths))
     return out
 
 
