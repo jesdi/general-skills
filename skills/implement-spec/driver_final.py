@@ -6,7 +6,7 @@ commits with a scoped review, then stop before the push, or push and open the PR
     skipped    why the end-of-run work did not start
     recovery   the PR tip before the rewrite; Run.names names its ref. None when origin had the history already
     tidied     the tip the rewrite made, or the tip as the tickets left it when the history is kept
-    base, onto the default branch of origin and its tip under the history; with no origin: "" and the start of the run
+    base, onto the --base branch (or the default branch of origin) and its tip under the history; with no origin: "" and the start of the run
     commits    {ticket: its commit}
     reviewed   the last tip a review covered
     round      the reviews done
@@ -76,7 +76,7 @@ def _has_origin() -> bool:
     return git(".", "remote", "get-url", "origin").returncode == 0
 
 
-def precondition_errors(push: bool) -> list[str]:
+def precondition_errors(push: bool, base: str | None) -> list[str]:
     """[] or the errors that stop the run before any agent."""
     errors = []
     if not REVIEW_DIFF.exists():
@@ -91,6 +91,9 @@ def precondition_errors(push: bool) -> list[str]:
     if push and not _has_origin():
         errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
                       "add the remote, or run without them to stop before the push")
+    if base and not _has_origin():
+        errors.append(f"--base {base} names a branch of origin, and the repository has no origin remote; "
+                      "add the remote, or run without --base")
     return errors
 
 
@@ -123,29 +126,33 @@ def _last(commits: dict[str, str]) -> str:
 
 # ---------------------------------------------------------------- the rewrite: tidy, rebase, move the branch
 
-def _fetch_base() -> tuple[str, str]:
-    """Fetch every ref of origin. Returns (its default branch, the tip of that branch)."""
-    shown = git(".", "ls-remote", "--symref", "origin", "HEAD")
-    name = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", shown.stdout, re.M)
-    if not name:
-        raise Blocked(f"origin names no default branch: {shown.stderr.strip() or 'git ls-remote shows no HEAD'}")
+def _fetch_base(branch: str | None) -> tuple[str, str]:
+    """Fetch every ref of origin. Returns (`branch`, or without it the default branch of origin, the tip of that
+    branch)."""
+    if not branch:
+        shown = git(".", "ls-remote", "--symref", "origin", "HEAD")
+        name = re.search(r"^ref: refs/heads/(\S+)\s+HEAD$", shown.stdout, re.M)
+        if not name:
+            raise Blocked(f"origin names no default branch: {shown.stderr.strip() or 'git ls-remote shows no HEAD'}")
+        branch = name[1]
     fetched = git(".", "fetch", "-q", "origin")
-    onto = git(".", "rev-parse", "-q", "--verify", f"refs/remotes/origin/{name[1]}^{{commit}}").stdout.strip()
+    onto = git(".", "rev-parse", "-q", "--verify", f"refs/remotes/origin/{branch}^{{commit}}").stdout.strip()
     if fetched.returncode or not onto:
-        raise Blocked(f"git fetch origin did not give refs/remotes/origin/{name[1]}: {fetched.stderr.strip()}")
-    return name[1], onto
+        raise Blocked(f"git fetch origin did not give refs/remotes/origin/{branch}: {fetched.stderr.strip()}")
+    return branch, onto
 
 
 def _base(run: Run) -> tuple[str, str]:
-    """(the default branch of origin, its tip): what the tidied history sits on. With no origin there is no base:
+    """(the --base branch or the default branch of origin, its tip): what the tidied history sits on. With no origin there is no base:
     ("", the commit the run started from)."""
     if not _has_origin():
         ledger("End of run: the repository has no origin remote, so the rebase and the push are skipped; the "
                "tidy, the gate and the final review run.")
         return "", run.state.read()["run"]["start"]
-    base, onto = _fetch_base()
+    base, onto = _fetch_base(run.args.base)
     if base == run.pr:
-        raise Blocked(f"{run.pr} is the default branch of origin: the end of run needs a PR branch")
+        which = "the base branch" if run.args.base else "the default branch of origin"
+        raise Blocked(f"{run.pr} is {which}: the end of run needs a PR branch")
     return base, onto
 
 

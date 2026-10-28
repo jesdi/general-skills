@@ -18,7 +18,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - Each ticket file `NN-name.md` has a title, a **Blocked by** line and a **Seam** line, and the graph has no cycle (`driver_tickets.py`). A ticket needs one criterion or more, unless its Seam is `none — refactor`. A ticket needs a **Touches** line when the set has more than one ticket. The [to-tickets skill](../to-tickets/SKILL.md) has the line format.
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH. For the correctness role, the entry is the first of its list on another provider than the first implementer entry: that list must have such an entry, and its CLI must be on PATH. This applies to every run, also when no ticket has a **Risk** line.
 - The `review-diff` skill is installed next to this one: the final review of every run reads it, and the correctness prompt carries its `correctness.md`, so the pass needs no read of a file that git ignores.
-- With `--push` or `--unattended`, the repository has an `origin` remote.
+- With `--push`, `--unattended` or `--base`, the repository has an `origin` remote.
 - Each model that the run can use answers one short test prompt (the preflight). A model that fails gives one line with its error. `--dry-run` skips the preflight.
 
 A run that stopped is continued with the same command. `state.json` is the only input of a resume.
@@ -42,6 +42,7 @@ A driver before this change named the ticket branches `ticket/<NN>` and the reco
 | `--unattended` | Print no question. Write `--stage-json` for the dispatcher, and push without `--push` when the final review has passed. |
 | `--stage-json FILE` | With `--unattended`: the file that says how the run ended. |
 | `--push` | Local mode: when the final review has passed, push the PR branch and open the PR. Without it nothing is pushed. |
+| `--base BRANCH` | The branch of `origin` that the end of run rebases onto and that the PR goes into. Default: the default branch of `origin`. |
 | `--dry-run` | Validate, print `max frontier width: N`, change nothing. |
 | `--runner SCRIPT` | Test only. The driver calls `<script> <role> <prompt> <report>` in the slot, in place of the CLI. |
 | `--only ROLE` | Test only. Run one role (`test-writer`, `implementer`, `reviewer` or `correctness`) on the first ticket, with no gate and no merge. |
@@ -136,11 +137,11 @@ A red gate on the commit of the implementer or of a fixer is a critical finding 
 The end of run starts only when every ticket is merged and every slot is idle. Its agents work in slot 1.
 
 1. **Tidy.** The driver saves the PR tip in `refs/implement-spec/<key>/recovery`. It then makes one commit for each ticket, in merge order, named `feat(NN): <title>`. Each commit holds the tests, the implementation and the fixes of its ticket. The tree of the new tip must equal the tree of the old tip, or the branch stays as it was.
-2. **Rebase** onto the fetched tip of the default branch of `origin`. A conflict goes to the conflict agent (`prompts/rebase-conflict.md`) once, and the rebased tip is gated.
+2. **Rebase** onto the fetched tip of the `--base` branch, or without it of the default branch of `origin`. A conflict goes to the conflict agent (`prompts/rebase-conflict.md`) once, and the rebased tip is gated.
 3. **Gate**, then the **final-reviewer** (`prompts/final-reviewer.md`) on the whole range, with the method of the `review-diff` skill. It gets ticket observations, minor findings, the must-fix list and the rulings of the operator.
 4. **Fix batch.** Critical and important findings, including every must-fix item, go to one fixer (`prompts/final-fixer.md`). The driver names each of its commits `fix(NN): …` from the ticket in the report. Then the gate, then one scoped review of those commits.
 5. Other findings open after the second review become questions of kind `final-finding`; unresolved must-fix items keep the run blocked. There is no third review.
-6. **Push.** With `--push` or `--unattended`, the driver pushes the reviewed tip once, with no force, and opens the PR with `gh`, ready for review. The **pr-writer** (`prompts/pr-writer.md`) writes the body with the method of the `pr` skill; the driver puts the facts of the run after it: the ticket-to-commit map, the fix commits, the rulings and the review coverage (`prompts/pr-body.md`). The body carries the merge-risk block of the `pr-risk` skill under `## Merge Danger`, above the facts; the driver validates it, runs the pr-writer once more with the errors when it is invalid, and blocks the run, opening no PR, when the second body is invalid too. A push stops before any agent when no `pr` skill or no `pr-risk` skill is next to this skill, in `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` or in `~/.agents/skills`. Without them it prints the two tips and the command to run again with `--push`.
+6. **Push.** With `--push` or `--unattended`, the driver pushes the reviewed tip once, with no force, and opens the PR into the branch of step 2 with `gh`, ready for review. The **pr-writer** (`prompts/pr-writer.md`) writes the body with the method of the `pr` skill; the driver puts the facts of the run after it: the ticket-to-commit map, the fix commits, the rulings and the review coverage (`prompts/pr-body.md`). The body carries the merge-risk block of the `pr-risk` skill under `## Merge Danger`, above the facts; the driver validates it, runs the pr-writer once more with the errors when it is invalid, and blocks the run, opening no PR, when the second body is invalid too. A push stops before any agent when no `pr` skill or no `pr-risk` skill is next to this skill, in `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` or in `~/.agents/skills`. Without them it prints the two tips and the command to run again with `--push`.
 
 History rules:
 
