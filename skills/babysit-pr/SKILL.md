@@ -5,7 +5,7 @@ description: Babysit an open pull request until it is merged or handed to a huma
 
 # babysit-pr
 
-Run with `/babysit-pr <pr-url>`. The PostToolUse hook in `hooks/post-pr-create.sh` asks for this after a ready PR is opened in a repo with `.merge-risk.json`.
+Run with `/babysit-pr <pr-url>`. The PostToolUse hook in `hooks/post-pr-create.sh` asks for this after a ready PR is opened in a repo with `.merge-risk.json`. When a subagent opened the PR, the hook queues it instead, and the Stop hook in `hooks/stop-babysit-pending.sh` asks the main session for it when that session stops.
 
 `babysit.py` is next to this file; every state change below goes through it (`python3 babysit.py <cmd> --repo <owner/name> --pr <n> ...`). Work in a checkout of the PR branch. The base is the PR's `baseRefName`, never a fixed `main`.
 
