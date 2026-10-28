@@ -54,13 +54,13 @@ def baseline_at(target, ref):
     return json.loads(target.show(ref, "backend/mutation_baseline.json"))
 
 
-def strengthen(target, agent_tests, finish_accept, env=None, before=lambda: None):
+def strengthen(target, agent_tests, finish_accept, env=None, before=lambda: None, footer=""):
     """strengthen-start → agent commits → strengthen-verify → strengthen-finish; returns the finish run."""
     before()
     target.ok("strengthen-start", env=env)
     assert target.git("rev-parse", "HEAD").strip() == target.base
     for item, source in agent_tests:
-        target.commit_test(item, source)
+        target.commit_test(item, source, footer=footer)
     before()
     target.ok("strengthen-verify", env=env)
     before()
@@ -107,6 +107,17 @@ def test_strengthen_pr_names_ids_7_and_9_killed_proves_them_surviving_before_and
     assert not [c for c in target.log("gh") if c["argv"][:2] == ["pr", "merge"]]
     assert target.git("rev-parse", "main").strip() == target.base == target.remote_sha("main")
     assert target.git("symbolic-ref", "--short", "HEAD").strip() == "main"
+
+
+def test_a_co_author_paragraph_after_the_item_trailer_does_not_hide_it(target):
+    # Headless Claude Code appends its own last paragraph; git reads trailers from the last one only.
+    target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+
+    finish = strengthen(target, [(COMPUTE, COMPUTE_TEST)], [COMPUTE],
+                        footer="\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+
+    assert finish.returncode == 0, finish.stdout + finish.stderr
+    assert all(i in strengthen_pr(target) for i in IDS_7_9)
 
 
 def test_strengthen_item_whose_ids_are_not_all_killed_is_reverted_and_left_out_of_the_pr(target):

@@ -144,12 +144,12 @@ class Target:
         before()
         return self.ok("batch", "--reviews", str(self.reviews(accept, reasons)), env=env)
 
-    def commit_test(self, item, test_source, file="backend/tests/test_rebalancer.py"):
-        """Strengthen agent: append a test and commit it with the item trailer."""
+    def commit_test(self, item, test_source, file="backend/tests/test_rebalancer.py", footer=""):
+        """Strengthen agent: append a test and commit it with the item trailer (then footer, if any)."""
         path = self.root / file
         path.write_text(path.read_text() + "\n\n" + test_source.strip("\n") + "\n")
         self.git("add", file)
-        self.git("commit", "-q", "-m", f"test: strengthen {item}\n\nTest-Prune-Item: {item}")
+        self.git("commit", "-q", "-m", f"test: strengthen {item}\n\nTest-Prune-Item: {item}" + footer)
 
     # --- observing ---------------------------------------------------------------------
     def git(self, *args):
