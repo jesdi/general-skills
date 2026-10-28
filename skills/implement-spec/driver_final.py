@@ -300,12 +300,14 @@ def _rewrite_once(run: Run, tickets: list[Ticket]) -> None:
 
 # ---------------------------------------------------------------- the final review and the fix batch
 
-def _minor_findings() -> str:
-    """One line per minor finding that a ticket review left for the final review, with its findings file."""
+def _carried_findings() -> str:
+    """Ticket observations and minor findings for the final review, with their evidence files."""
     lines = []
     for path in sorted(OUT.glob("[0-9]*/findings-*.json")):
         lines += [f"- {path}: {_title(finding)}" for finding in json.loads(path.read_text())
                   if finding["severity"] == "minor"]
+    for path in sorted(OUT.glob("[0-9]*/observations-*.json")):
+        lines += [f"- {path}: {_title(finding)}" for finding in json.loads(path.read_text())]
     return "\n".join(dict.fromkeys(lines))
 
 
@@ -321,12 +323,15 @@ def _check_review_is_due(run: Run, final: dict, tip: str) -> None:
 
 
 def _record_review(state: dict, tip: str, to_fix: list[dict], evidence: list[str]) -> None:
-    """The open findings of the first round start the fix batch; those of the second become one question each."""
+    """The first review starts the batch; unresolved must-fix items cannot become accept questions."""
     record, final = state["run"], state["run"]["final"]
     first_round = final["round"] == 0
-    final.update(reviewed=tip, round=final["round"] + 1, open=to_fix if first_round else [])
+    final.update(reviewed=tip, round=final["round"] + 1,
+                 open=to_fix if first_round else [finding for finding in to_fix if finding.get("must_fix")])
     if not first_round:
-        driver_decisions.stop(record, KIND, "", [_title(finding) for finding in to_fix], evidence)
+        other = [finding for finding in to_fix if not finding.get("must_fix")]
+        if other:
+            driver_decisions.stop(record, KIND, "", [_title(finding) for finding in other], evidence)
 
 
 def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict]) -> None:
@@ -344,8 +349,14 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
     ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
            f"{len(to_fix)} critical or important finding{'s are' if len(to_fix) != 1 else ' is'} open.")
     if to_fix and done:
-        ledger(f"End of run: {driver_decisions.decides(KIND, len(to_fix))} in {OUT / 'decisions.json'}: a third "
-               "review round is never started.")
+        questions = len([finding for finding in to_fix if not finding.get("must_fix")])
+        if questions:
+            ledger(f"End of run: {driver_decisions.decides(KIND, questions)} in {OUT / 'decisions.json'}: a third "
+                   "review round is never started.")
+        required = len(to_fix) - questions
+        if required:
+            ledger(f"End of run: {required} required must-fix finding{'s remain' if required != 1 else ' remains'} "
+                   "open after the final fix batch; the run is blocked.")
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
@@ -353,7 +364,8 @@ def _review(run: Run, final: dict, tip: str) -> None:
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(folder, tip)), "review_diff": str(REVIEW_DIFF),
-              "ledger": str(OUT / "ledger.md"), "minors": _minor_findings(), "reviewed": str(final["reviewed"]),
+              "ledger": str(OUT / "ledger.md"), "carried": _carried_findings(), "reviewed": str(final["reviewed"]),
+              "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
               "findings": str(folder / f"findings-{done - 1}.json")}
     # A locked file that differs from the tidied tip is a critical finding. The driver made that tip, and since
@@ -362,7 +374,18 @@ def _review(run: Run, final: dict, tip: str) -> None:
     with during("the final review"):
         report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
             "final-reviewer", FINAL, ".", values, notes=["final-scoped"] if done else [], fix_round=done))
-    _settle_review(run, done, tip, values["range"], found + report["findings"])
+    if not done:
+        carried = final["must_fix"]
+    else:
+        resolved = set(report.get("resolved_must_fix", []))
+        carried = [finding for finding in final["must_fix"] if _title(finding) not in resolved]
+    must_by_key = {(finding["file"], finding["title"]): finding for finding in final["must_fix"]}
+    reported = [{**finding, "must_fix": True, "ticket": must_by_key[key]["ticket"]} if
+                (key := (finding["file"], finding["title"])) in must_by_key else finding
+                for finding in found + report["findings"]]
+    identity = {(finding["file"], finding["title"]) for finding in reported}
+    _settle_review(run, done, tip, values["range"], reported + [finding for finding in carried
+                                                                 if (finding["file"], finding["title"]) not in identity])
 
 
 def _fix_commit_message(commit: str, report: dict) -> str:
@@ -393,10 +416,12 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str) -> dict:
     folder = OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
               "locked": " ".join(_locked_files(run)),
+              "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "findings_list": "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in final["open"])}
     try:
         return run.agent("fixer", FINAL, ".", values, template="final-fixer", fix_round=final["round"],
-                         check={"owners": [ticket.number for ticket in tickets]})
+                         check={"owners": [ticket.number for ticket in tickets],
+                                "must_fix": [_title(finding) for finding in final["must_fix"]]})
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
     except Halted as halted:
@@ -431,6 +456,9 @@ def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
                 run.gate(FINAL, ".", tip)
             _review(run, final, tip)
         elif final["open"]:
+            if final["round"] >= ROUNDS:
+                raise Blocked("the final review still has unresolved must-fix findings: " +
+                              "; ".join(_title(finding) for finding in final["open"]))
             _fix_batch(run, tickets, final, tip)
         else:
             return

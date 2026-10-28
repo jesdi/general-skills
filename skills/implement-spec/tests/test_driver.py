@@ -82,6 +82,7 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     assert run(capsys, "--models", str(models)) == (
         3, "implementer: codex is not on PATH (model entry openai/gpt-sol@medium)\n"
            "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n"
+           "implementer: a second implementer model entry is required for fix round 2\n"
            "correctness: no entry of its list (openai/gpt-sol@medium) is on another provider than the implementer's "
            "first entry openai/gpt-sol@medium; the correctness pass never runs on the implementer's provider\n")
     # Requirement 2 names the first entry only: a later implementer entry whose CLI is missing is no error. For the
@@ -961,6 +962,7 @@ def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(t
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setattr(driver_agents, "PREFLIGHT_MINUTES", 0.02)
     models, _ = driver_agents.load_models(None)
+    models["implementer"][1] = "openai/gpt-6.1-sol@medium"
     models["reviewer"] = ["openai/gpt-astra@medium"]
     assert driver_agents.used_entries(models) == ["claude-opus-5-5@medium", "claude-sonnet-5-5@medium",
                                                   "openai/gpt-6-astra@medium", "openai/gpt-6.1-sol@medium",

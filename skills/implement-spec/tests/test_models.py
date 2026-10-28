@@ -8,7 +8,7 @@ import pytest
 from test_cli import RUN, SKILL, drive, env, make_repo, three  # noqa: F401  (env is a fixture)
 
 STANDARD = {
-    "implementer": ["claude-sonnet-5-5@medium", "openai/gpt-6.1-sol@medium"],
+    "implementer": ["claude-sonnet-5-5@medium", "claude-opus-5-5@medium"],
     "test-writer": ["claude-sonnet-5-5@medium", "openai/gpt-6.1-sol@medium"],
     "reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],
     "final-reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],

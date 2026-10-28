@@ -65,6 +65,8 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
         # The entry of each role whose CLI must be on PATH; entries[0]: an empty list is an error.
         first = {**{role: entries[0] for role, entries in models.items()}, "correctness": correctness_entry(models)}
         found = [_entry_error(role, entry, entry == first[role]) for role, entries in models.items() for entry in entries]
+        if len(models["implementer"]) < 2:
+            found.append("implementer: a second implementer model entry is required for fix round 2")
         if not first["correctness"]:
             found.append(f"correctness: no entry of its list ({', '.join(models['correctness'])}) is on another "
                          f"provider than the implementer's first entry {models['implementer'][0]}; the correctness "
@@ -76,7 +78,7 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
 
 def used_entries(models: dict[str, list[str]]) -> list[str]:
     """Each entry the driver can start an agent on: the first of each role but the explorer, the correctness entry
-    and the second implementer entry (fix rounds 3 and 4)."""
+    and the second implementer entry (fix round 2)."""
     entries = [entries[0] for role, entries in models.items() if role not in ("explorer", "correctness")]
     entries += [correctness_entry(models), *models["implementer"][1:2]]
     return sorted(set(entries))

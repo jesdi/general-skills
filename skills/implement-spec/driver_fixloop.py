@@ -19,7 +19,7 @@ import driver_slots
 from driver_run import OUT, Blocked, Run, Stopped, during, ledger
 from driver_tickets import Ticket
 
-ROUNDS = 4
+ROUNDS = 2
 
 
 @dataclass
@@ -54,9 +54,9 @@ def tested(entry: dict) -> list[str]:
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
-    """The implementer entry of a fix round: the second one from round 3, when the list has one."""
+    """The implementer entry of a fix round: the second one for round 2."""
     entries = models["implementer"]
-    return entries[1] if round > 2 and len(entries) > 1 else entries[0]
+    return entries[1] if round >= 2 else entries[0]
 
 
 def _log_findings(job: Job, findings: list[dict]) -> list[dict]:
@@ -120,6 +120,52 @@ def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> 
     return reports
 
 
+def _prior_open(job: Job) -> dict[tuple[str, str, str], str | None]:
+    """The source, file, title and basis of findings that this re-review may revisit."""
+    if not job.previous:
+        return {}
+    number = job.ticket.number
+    previous = json.loads((OUT / number / f"findings-{job.round - 1}.json").read_text()) if job.previous else []
+    return {(finding["source"], finding["file"], finding["title"]): finding.get("basis")
+            for finding in previous if finding["severity"] in driver_review.OPEN}
+
+
+def _partition_findings(role: str, report: dict, prior: dict, scoped: bool) -> tuple[list[dict], list[dict]]:
+    """On a re-review, only the role's previously open findings stay in ticket scope."""
+    active, deferred = [], []
+    for raw in report["findings"]:
+        finding = {**raw, "source": role}
+        key = (role, finding["file"], finding["title"])
+        if scoped and key not in prior:
+            deferred.append(finding)
+            continue
+        if "basis" not in finding and prior.get(key):
+            finding["basis"] = prior[key]
+        active.append(finding)
+    return active, deferred
+
+
+def _reviewer_results(job: Job, cast: list[tuple[str, str]], reports: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Collect ticket findings, deferred observations, and mutation proofs from both reviewer roles."""
+    prior, found, observations = _prior_open(job), [], []
+    for (role, _), report in zip(cast, reports):
+        active, deferred = _partition_findings(role, report, prior, bool(job.previous))
+        found += active + [{**finding, "source": role, "basis": finding.get("basis", "regression")}
+                           for finding in report.get("regressions", [])]
+        observations += deferred + [{**finding, "source": role} for finding in report.get("observations", [])]
+        job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
+    return found, observations
+
+
+def _store_observations(job: Job, observations: list[dict]) -> None:
+    """Keep deferred evidence for the final reviewer without spending a ticket fix round."""
+    if observations:
+        (OUT / job.ticket.number / f"observations-{job.round}.json").write_text(json.dumps(observations, indent=1) + "\n")
+        for observation in observations:
+            ledger(f"Ticket {job.ticket.number}: deferred {observation['severity']} observation from {observation['source']} "
+                   f"at {observation['file']}:{observation['line']}: {observation['title']}.")
+
+
 def _review(job: Job) -> list[dict]:
     """Review `job.tip`. Returns the findings of the driver and of each reviewer."""
     run, number = job.run, job.ticket.number
@@ -133,9 +179,9 @@ def _review(job: Job) -> list[dict]:
                             lambda: _run_reviewers(job, cast, tested(state)))
     if state["rejected"]:
         run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
-    for (role, _), report in zip(cast, reports):
-        found += _log_findings(job, [{**finding, "source": role} for finding in report["findings"]])
-        job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
+    reviewed, observations = _reviewer_results(job, cast, reports)
+    found += _log_findings(job, reviewed)
+    _store_observations(job, observations)
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
     return found
 
@@ -205,10 +251,8 @@ def _fix(job: Job, findings: list[dict]) -> None:
     job.round += 1
     on = entry(run.models, job.round)
     run.state.ticket(number, phase="fix", round=job.round)
-    if job.round == 3 and on != run.models["implementer"][0]:
-        ledger(f"Ticket {number} round 3: escalated to {on}.")
-    elif job.round == 3:
-        ledger(f"Ticket {number} round 3: the implementer has no next entry, so the round stays on {on}.")
+    if job.round == 2:
+        ledger(f"Ticket {number} round 2: escalated to {on}.")
     with during(f"fix round {job.round}"):
         run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round,
                   check={"fix": [finding["title"] for finding in findings], "red": job.red})
@@ -238,6 +282,39 @@ def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
     return [finding for finding in to_correct if finding["source"] == "driver"]
 
 
+def _save_must_fix(state: dict, number: str, findings: list[dict]) -> None:
+    """Record each carried finding once, even when a ticket resumes at its cap."""
+    saved = state["run"]["final"]["must_fix"]
+    existing = {(item["ticket"], item["file"], item["title"]) for item in saved}
+    for finding in findings:
+        key = (number, finding["file"], finding["title"])
+        if key not in existing:
+            saved.append({**finding, "ticket": number, "must_fix": True})
+            existing.add(key)
+
+
+def _settled_at_landing(finding: dict) -> bool:
+    """The landing has its own restore/adopt question for a merged ticket's locked file."""
+    return (finding["source"] == "driver" and
+            finding["title"].startswith("the ticket changed the locked file of a merged ticket:"))
+
+
+def _at_cap(job: Job, findings: list[dict]) -> bool:
+    """Block unmet criteria; carry other open findings to the required final fix batch."""
+    blocking = [finding for finding in findings if finding.get("basis") != "regression"]
+    if blocking:
+        titles = [f"{finding['title']} ({finding['file']}:{finding['line']})" for finding in blocking]
+        raise Blocked(f"the review: after round {ROUNDS} these findings are open: {'; '.join(titles)}")
+    # A changed locked file of a merged ticket is settled by the landing's restore/adopt ruling.
+    # The final fixer cannot edit that file while it remains protected.
+    carry = [finding for finding in findings if not _settled_at_landing(finding)]
+    if carry:
+        job.run.state.update(lambda state: _save_must_fix(state, job.ticket.number, carry))
+    ledger(f"Ticket {job.ticket.number}: the green gate and met criteria allow merge after round {ROUNDS}; "
+           f"{len(carry)} finding{'s' if len(carry) != 1 else ''} go to the final must-fix list.")
+    return True
+
+
 def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
     state = job.run.state.read()
@@ -245,7 +322,7 @@ def _act_on(job: Job, found: list[dict]) -> bool:
                                              driver_merge.protected(state["tickets"], job.ticket.number))
     to_correct = _unaccepted(job, state, to_correct)
     if job.round == ROUNDS:
-        # No correction after round 4: no fix round could make its new locked tests green, so `accept` could not merge.
+        # No correction at the cap: no fix round could make its new locked tests green.
         to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]
     # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
     locked_file_changed = any(finding["source"] == "driver" for finding in to_fix)
@@ -256,17 +333,14 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     if not to_fix:
         return True
     if job.round == ROUNDS:
-        titles = [f"{finding['title']} ({finding['file']}:{finding['line']})" for finding in to_fix]
-        evidence = OUT / job.ticket.number / f"findings-{ROUNDS}.json"
-        job.run.ask(job.ticket.number, "finding", titles, str(evidence))
-        raise Blocked(f"the review: after round {ROUNDS} these findings are open: {'; '.join(titles)}")
+        return _at_cap(job, to_fix)
     _fix(job, to_fix)
     return False
 
 
 def _gate(job: Job) -> list[dict]:
-    """Gate the tip. A red gate on the implementer's commit or a fixer's commit before round 4 is a finding for the
-    next round; a red gate after round 4 or on a test-writer correction blocks. Returns the findings: the red gate,
+    """Gate the tip. A red gate before round 2 is a finding for the next round;
+    a red gate after round 2 or on a test-writer correction blocks. Returns the findings: the red gate,
     or none."""
     run, number = job.run, job.ticket.number
     job.red = False

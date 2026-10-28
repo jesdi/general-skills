@@ -271,8 +271,8 @@ def std(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def blocked(tmp_path_factory):
-    """The default scenario with a red gate on ticket/feat%2Fcsv/01 that four fix rounds do not make green."""
-    fixes = [fix("01", n) for n in (1, 2, 3, 4)]
+    """The default scenario with a red gate on ticket/feat%2Fcsv/01 that two fix rounds do not make green."""
+    fixes = [fix("01", n) for n in (1, 2)]
     return Rig(tmp_path_factory.mktemp("blocked"), gate={"red": ["ticket/feat%2Fcsv/01"]}).run(plan(**{"01/fixer": fixes}))
 
 
@@ -339,7 +339,7 @@ def test_gate_environment_names_the_pr_branch_and_a_pycache_prefix_under_agent_i
     assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
 
 
-def test_red_gate_blocks_the_ticket_after_round_4_names_the_record_and_launches_no_review(blocked):
+def test_red_gate_blocks_the_ticket_after_round_2_names_the_record_and_launches_no_review(blocked):
     assert blocked.code == 1, blocked.output()
     a1 = blocked.sha("01", "implementer")
     finding = f"Ticket 01: critical finding of kind code from the gate at .agent/implement/01/gate-{a1[:7]}.log:0: "
@@ -347,7 +347,7 @@ def test_red_gate_blocks_the_ticket_after_round_4_names_the_record_and_launches_
     assert re.search(r"exit\D*1", (blocked.repo / f".agent/implement/01/gate-{a1[:7]}.log").read_text())
     last = blocked.calls("01", "fixer")[-1]["sha"]
     assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-{last[:7]}.log" in l], blocked.ledger()
-    assert [c["role"] for c in blocked.calls("01")] == ["test-writer", "implementer"] + ["fixer"] * 4
+    assert [c["role"] for c in blocked.calls("01")] == ["test-writer", "implementer"] + ["fixer"] * 2
     assert blocked.state()["tickets"]["01"]["phase"] == "blocked"
     assert "ticket/feat%2Fcsv/01" in blocked.branches() and "feat: 01 rows" not in blocked.pr_subjects()
 

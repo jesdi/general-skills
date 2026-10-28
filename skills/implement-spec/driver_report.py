@@ -58,6 +58,14 @@ def _owner_errors(report: dict, context: dict) -> list[str]:
                      for commit in report["commits"] if commit["ticket"] not in context["owners"]]
 
 
+def _must_fix_errors(report: dict, context: dict) -> list[str]:
+    """A final fixer must account for every finding carried from a capped ticket."""
+    if report["status"] not in ("DONE", "DONE_WITH_CONCERNS"):
+        return []
+    return [f"addressed_must_fix: missing {title}" for title in context.get("must_fix", [])
+            if title not in report.get("addressed_must_fix", [])]
+
+
 def _present(repo: str, commit: str, paths: list[str]) -> list[str]:
     """The `paths` that are files at `commit`."""
     return _git(repo, "ls-tree", "-r", "--name-only", "-z", commit, "--", *paths, end="\0") if paths else []
@@ -182,7 +190,7 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     if "locked" in report:
         report["locked"] = locked_files(report["locked"])
-    return (_commit_errors(report, context) + _owner_errors(report, context)
+    return (_commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
             + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context)
             + _fixture_errors(report))

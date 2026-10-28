@@ -11,8 +11,8 @@ Interface choices (ticket 05):
 - evidence strings are file pointers: `.agent/implement/<NN>/implementer.json` and `.agent/implement/ledger.md:<line>`,
   the line being a ledger line that names the ticket and BLOCKED.
 - question ids are `<NN>-locked-test-<n>` with n counting per run (the first is 1, a second stop on the ticket is 2),
-  and `<NN>-finding-<n>` for an open finding after round 4. Options: `overrule-test` / `overrule-implementer`
-  (recommended: overrule-implementer), and `accept` / `split` / `redesign`.
+  and a capped ticket with unmet criteria blocks without a finding question. Options for `locked-test` are
+  `overrule-test` / `overrule-implementer` (recommended: overrule-implementer).
 - an implementer is BLOCKED with a `locked-test` stop only when a `concerns` entry starts with "locked test
   contradicts spec:"; any other BLOCKED report is an `implementer-stopped` stop (issue #123).
 - the answers file is `.agent/implement-answers.json` in the schema.md shape: `v`, `stage: "implement"`, `submitted`
@@ -201,45 +201,16 @@ def test_a_blocked_report_that_is_not_a_contradicted_locked_test_is_an_implement
     assert rig.state()["tickets"]["01"]["phase"] == "blocked"
 
 
-# ---------------------------------------------------------------- open findings after round 4
+# ---------------------------------------------------------------- capped ticket
 
-A, B = finding("STUCK-A", line=98), finding("STUCK-B", line=99)
-
-
-def round4(tmp, *extra):
-    rig = Review(tmp)
-    bad = review("01", [A, B])
-    return rig.run(plan(**{"01/reviewer": [bad] * 5, "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}), *extra)
-
-
-def finding_ids(rig):
-    questions = decisions(rig)["questions"]
-    return {name: next(q["id"] for q in questions if name in q["title"] + q["why"]) for name in ("STUCK-A", "STUCK-B")}
-
-
-def test_open_findings_after_round_4_make_one_question_each_and_accept_closes_them(tmp_path):
-    rig = round4(tmp_path)
+def test_unmet_criteria_at_cap_block_without_a_finding_question(tmp_path):
+    rig = Review(tmp_path)
+    bad = review("01", [finding("STUCK-A", line=98), finding("STUCK-B", line=99)])
+    rig.run(plan(**{"01/reviewer": [bad] * 3, "01/fixer": [fix("01", n) for n in (1, 2)]}))
     assert rig.code == 1, rig.output()
-    questions = decisions(rig)["questions"]
-    assert len(questions) == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked"
-    assert all({o["id"] for o in q["options"]} == {"accept", "split", "redesign"} for q in questions)
-    check_page((rig.repo / ".agent/implement-review.html").read_text(), decisions(rig))
-    ids = finding_ids(rig)
-    rig.run({}, "--answer", f"{ids['STUCK-A']}=accept", "--answer", f"{ids['STUCK-B']}=accept")
-    assert rig.code == 0, rig.output()
-    assert rig.led("Ruling", "STUCK-A", "accept") and rig.led("Ruling", "STUCK-B", "accept")
-    assert rig.state()["tickets"]["01"]["phase"] == "merged" and "feat: 01 rows" in rig.pr_subjects()
-    assert len(rig.calls("01", "fixer")) == 4
-
-
-def test_split_and_redesign_keep_the_ticket_blocked_with_the_ruling(tmp_path):
-    rig = round4(tmp_path)
-    ids = finding_ids(rig)
-    rig.run({}, "--answer", f"{ids['STUCK-A']}=split", "--answer", f"{ids['STUCK-B']}=redesign")
-    assert rig.code == 1, rig.output()
-    assert rig.led("Ruling", "STUCK-A", "split") and rig.led("Ruling", "STUCK-B", "redesign")
-    assert rig.state()["tickets"]["01"]["phase"] == "blocked" and "feat: 01 rows" not in rig.pr_subjects()
-    assert len(rig.calls("01", "fixer")) == 4
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked"
+    assert not rig.state()["run"]["questions"]
+    assert len(rig.calls("01", "fixer")) == 2
 
 
 # ---------------------------------------------------------------- unattended

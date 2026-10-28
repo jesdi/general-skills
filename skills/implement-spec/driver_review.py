@@ -53,6 +53,7 @@ def merged_changes(paths: list[str]) -> list[dict]:
     """One critical `fixture` finding per locked file of a merged ticket that the ticket changed. A fixture finding
     goes to a test-writer correction: the driver puts the file back before it and gates that commit."""
     return [{"severity": "critical", "file": path, "line": 1, "kind": "fixture", "source": "driver",
+             "basis": "regression",
              "title": f"the ticket changed the locked file of a merged ticket: {path}",
              "evidence": f"git diff <merge base with the PR branch> -- {path}"} for path in paths]
 

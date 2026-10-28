@@ -5,8 +5,8 @@ reviewer, correctness, fixer, conflict and a second test-writer call; a role it 
 
 Interface choices (ticket 04):
 - the runner replaces the CLI, so a model entry is observed in the ledger: the line of a call names its role and entry.
-- a fix round runs the role `fixer` (report `fixer-<round>.json`) on the implementer's model list: entry 0 in rounds
-  1-2, entry 1 in rounds 3-4. `state.json` `round` counts fix rounds only. The review that follows round K writes
+- a fix round runs the role `fixer` (report `fixer-<round>.json`) on the implementer's model list: entry 0 in round
+  1, entry 1 in round 2. `state.json` `round` counts fix rounds only. The review that follows round K writes
   `reviewer-K.json` (the first review `reviewer-0.json`); a correctness pass writes `correctness-K.json`.
 - `mutations[].test` is `<locked file>::test_x`; a re-review prompt names each mutation proof to repeat as
   `<file>:<line>`, with the line number it has at the new tip.
@@ -164,6 +164,90 @@ def test_a_review_with_only_minor_findings_passes_and_writes_them_to_the_ledger(
     assert plain.led("M-ONE", "minor") and plain.led("M-TWO", "minor")
 
 
+def test_unrelated_important_observation_waits_for_final_review(tmp_path):
+    rig = Review(tmp_path)
+    step = review("01")
+    step["report"]["observations"] = [finding("DUPLICATED-HELPER")]
+
+    rig.run(plan(**{"01/reviewer": [step]}))
+
+    assert rig.code == 0, rig.output()
+    assert not rig.calls("01", "fixer")
+    assert rig.state()["tickets"]["01"]["phase"] == "merged"
+    assert "DUPLICATED-HELPER" in rig.calls("final", "final-reviewer")[0]["prompt"]
+
+
+def test_rereview_defers_newly_noticed_issue_outside_its_open_findings(tmp_path):
+    rig = Review(tmp_path)
+    steps = plan(**{"01/reviewer": [review("01", [finding("HEADER-MISSING")]),
+                                   review("01", [finding("PREEXISTING-NAME")])],
+                    "01/fixer": [fix("01", 1)]})
+
+    rig.run(steps)
+
+    assert rig.code == 0, rig.output()
+    assert len(rig.calls("01", "fixer")) == 1
+    assert "PREEXISTING-NAME" in rig.calls("final", "final-reviewer")[0]["prompt"]
+
+
+def test_rereview_can_open_a_regression_introduced_by_the_fix(tmp_path):
+    rig = Review(tmp_path)
+    after_first = review("01")
+    after_first["report"]["regressions"] = [finding("QUOTING-BROKEN")]
+    steps = plan(**{"01/reviewer": [review("01", [finding("HEADER-MISSING")]), after_first, review("01")],
+                    "01/fixer": [fix("01", 1), fix("01", 2)]})
+
+    rig.run(steps)
+
+    assert rig.code == 0, rig.output()
+    assert len(rig.calls("01", "fixer")) == 2
+    assert "findings-1.json" in rig.calls("01", "fixer")[1]["prompt"]
+    assert "QUOTING-BROKEN" in (rig.folder() / "findings-1.json").read_text()
+
+
+def test_unmet_criterion_blocks_after_two_fixes_while_independent_ticket_continues(tmp_path):
+    rig = Review(tmp_path, three(), {"implementer": [OPUS, FABLE]})
+    steps = plan(**{"01/reviewer": [review("01", [finding("HEADER-MISSING")])] * 3,
+                    "01/fixer": [fix("01", 1), fix("01", 2)]})
+
+    rig.run(steps)
+
+    assert rig.code == 1, rig.output()
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked"
+    assert rig.state()["tickets"]["03"]["phase"] == "merged"
+    assert len(rig.calls("01", "fixer")) == 2
+    assert rig.led("fixer", FABLE)
+    assert not rig.state()["run"]["questions"]
+
+
+def test_new_criterion_failure_caused_by_first_fix_blocks_at_cap(tmp_path):
+    rig = Review(tmp_path, models={"implementer": [OPUS, FABLE]})
+    after_first = review("01")
+    after_first["report"]["regressions"] = [{**finding("FOOTER-MISSING"), "basis": "criterion"}]
+    steps = plan(**{"01/reviewer": [review("01", [finding("HEADER-MISSING")]), after_first,
+                                     review("01", [finding("FOOTER-MISSING")])],
+                    "01/fixer": [fix("01", 1), fix("01", 2)]})
+
+    rig.run(steps)
+
+    assert rig.code == 1, rig.output()
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked"
+    assert not rig.state()["run"]["final"]["must_fix"]
+
+
+def test_red_gate_after_second_fix_blocks_the_ticket(tmp_path):
+    rig = Review(tmp_path, models={"implementer": [OPUS, FABLE]}, gate={"subjects": ["fix: 01 round 2"]})
+    steps = plan(**{"01/reviewer": [review("01", [finding("HEADER-MISSING")])] * 2,
+                    "01/fixer": [fix("01", 1), fix("01", 2)]})
+
+    rig.run(steps)
+
+    assert rig.code == 1, rig.output()
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked"
+    assert len(rig.calls("01", "fixer")) == 2
+    assert any(record["exit"] == 1 for record in rig.gates())
+
+
 # ---------------------------------------------------------------- fix loop
 
 STUCK = finding("STUCK")
@@ -171,29 +255,29 @@ STUCK = finding("STUCK")
 
 @pytest.fixture(scope="module")
 def escalated(tmp_path_factory):
-    """One important finding survives the re-reviews after rounds 1 and 2; round 3 is clean."""
+    """One important finding survives round 1; round 2 on the next model closes it."""
     rig = Review(tmp_path_factory.mktemp("esc"), ONE, {"implementer": [OPUS, FABLE]})
     bad = review("01", [STUCK])
-    return rig.run(plan(**{"01/reviewer": [bad, bad, bad, review("01")],
-                           "01/fixer": [fix("01", n) for n in (1, 2, 3)]}))
+    return rig.run(plan(**{"01/reviewer": [bad, bad, review("01")],
+                           "01/fixer": [fix("01", n) for n in (1, 2)]}))
 
 
-def test_round_3_starts_a_fresh_implementer_on_the_next_model(escalated):
+def test_round_2_starts_a_fresh_implementer_on_the_next_model(escalated):
     assert escalated.code == 0, escalated.output()
-    assert escalated.led("01 round 3: escalated to claude-fable-5-1@high")
-    assert not escalated.led("round 1: escalated") and not escalated.led("round 2: escalated")
-    assert len(escalated.led("fixer", OPUS)) == 2 and len(escalated.led("fixer", FABLE)) == 1
-    assert escalated.state()["tickets"]["01"]["round"] == 3
+    assert escalated.led("01 round 2: escalated to claude-fable-5-1@high")
+    assert not escalated.led("round 1: escalated")
+    assert len(escalated.led("fixer", OPUS)) == 1 and len(escalated.led("fixer", FABLE)) == 1
+    assert escalated.state()["tickets"]["01"]["round"] == 2
 
 
 def test_each_round_ends_with_one_gate_record_and_a_re_review_scoped_to_the_fix(escalated):
     tips = [escalated.sha("01", "implementer")] + [c["sha"] for c in escalated.calls("01", "fixer")]
     commits = [g["commit"] for g in escalated.gates()]
-    assert len(tips) == 4 and all(commits.count(t) == 1 for t in tips), commits
+    assert len(tips) == 3 and all(commits.count(t) == 1 for t in tips), commits
     assert all((escalated.folder() / f"gate-{t[:7]}.log").exists() for t in tips)
     reviews = escalated.calls("01", "reviewer")
-    assert len(reviews) == 4
-    for k in (1, 2, 3):
+    assert len(reviews) == 3
+    for k in (1, 2):
         assert tips[k - 1][:7] in reviews[k]["prompt"] and tips[k][:7] in reviews[k]["prompt"], k
 
 
@@ -207,28 +291,28 @@ def gate_rule(prompt, gate):
 def test_the_implementer_and_each_fixer_get_the_gate_command_and_run_it_before_they_report(escalated):
     gate = str(escalated.rig / "gate")
     agents = escalated.calls("01", "implementer") + escalated.calls("01", "fixer")
-    assert len(agents) == 4, "the implementer and the fixers of rounds 1, 2 and 3 (the next model)"
+    assert len(agents) == 3, "the implementer and the fixers of rounds 1 and 2 (the next model)"
     for call in agents:
         gate_rule(call["prompt"], gate)
 
 
 def test_reports_are_named_by_role_and_round(escalated):
-    for name in ("reviewer-0", "reviewer-1", "reviewer-2", "reviewer-3", "fixer-1", "fixer-2", "fixer-3"):
+    for name in ("reviewer-0", "reviewer-1", "reviewer-2", "fixer-1", "fixer-2"):
         assert (escalated.folder() / f"{name}.json").exists(), name
 
 
 @pytest.fixture(scope="module")
 def capped(tmp_path_factory):
-    """The three-ticket default; 01's reviewer keeps the same finding through round 4."""
+    """The three-ticket default; 01's reviewer keeps the same criterion finding through round 2."""
     rig = Review(tmp_path_factory.mktemp("cap"), three(), {"implementer": [OPUS, FABLE]})
-    return rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 5,
-                           "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))
+    return rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3,
+                           "01/fixer": [fix("01", n) for n in (1, 2)]}))
 
 
-def test_a_finding_open_after_round_4_blocks_the_ticket_and_the_run_goes_on(capped):
+def test_a_criterion_open_after_round_2_blocks_the_ticket_and_the_run_goes_on(capped):
     assert capped.code == 1, capped.output()
     assert capped.led("01", "BLOCKED", "STUCK")
-    assert len(capped.calls("01", "fixer")) == 4 and len(capped.calls("01", "reviewer")) == 5
+    assert len(capped.calls("01", "fixer")) == 2 and len(capped.calls("01", "reviewer")) == 3
     assert not capped.calls("02"), "02 is blocked by 01"
     assert capped.state()["tickets"]["01"]["phase"] == "blocked"
     assert capped.state()["tickets"]["03"]["phase"] == "merged" and "feat: 03 rows" in capped.pr_subjects()
