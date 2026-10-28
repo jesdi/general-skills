@@ -27,7 +27,7 @@ An **increment** is one deliverable, built as one PR of at most 5 tickets. It is
 
 Each increment becomes one **build issue**: written by calling the Skill tool with "to-spec", labelled `spec-ready`, and linked from the map's Decisions so far. A build issue is not a child of the map, so it never joins the frontier. Order between increments uses `Blocked by` edges between build issues: the native edge, plus a `Blocked by: #<n>` line in the blocked build issue's body, which is the edge the `backlog` ranking reads.
 
-An increment lands on main unused or hidden: behind a flag, with no route to it yet, or as a migration that adds and doesn't remove. Only an all-at-once cut-over, which cannot land hidden, targets a `feat/<name>` integration branch, rebased on main after each merge and merged to main through one final PR. Name that branch in the build issue.
+An increment lands on main unused or hidden: behind a flag, with no route to it yet, or as a migration that adds and doesn't remove. Only an all-at-once cut-over, which cannot land hidden, targets a `feat/<name>` integration branch, rebased on main after each merge and merged to main through one final PR. `<name>` uses only letters, digits and `/ . _ -`. Push that branch to origin before handing off its build issue, and give the issue body the line `Base: feat/<name>` on its own: the agent that builds the issue reads its base branch from the first such line. A build issue landing on main carries no `Base:` line.
 
 ## Refer by name
 
