@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-28T10:05:57.289Z",
+  "generatedAt": "2026-10-28T10:09:20.689Z",
   "skills": [
     {
       "name": "agents-wayfinder",
-      "version": "0.1.0",
-      "hash": "sha256-e323ffadb12c62ca6c9bfadbd20a57d70db2d44d53a52bb1e9fc5100666c0d6b",
+      "version": "0.1.1",
+      "hash": "sha256-6b55d58e51da25f0b61bca29f9672c162dd9143553b36f31398d47b19b044b50",
       "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, resolve them one at a time until the way to the destination is clear, and hand off each increment for building as soon as it is specifiable."
     },
     {
