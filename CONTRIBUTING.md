@@ -35,8 +35,8 @@ pnpm check
 
 This command runs the TypeScript and Python suites once with branch coverage,
 builds the CLI, checks types, then scores every changed runtime function with
-CRAP. `.crap-gate.json` uses the same limits as our other repositories: existing
-functions must score at most 15 and new functions at most 9. It compares the
+CRAP. `.crap-gate.json` holds every changed function, existing or new, to a
+score of at most 9. It compares the
 working tree with the merge-base of `origin/main`; fetch that ref before checking
 a fresh clone. Tests and declarations are excluded from scoring. Reports and
 logs stay in the ignored `.crap/` directory.
