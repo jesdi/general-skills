@@ -1,5 +1,5 @@
 {
-  "thresholds": { "existing": 15, "new": 9 },
+  "thresholds": { "existing": 9, "new": 9 },
   "base": "origin/main",
   "targets": [
     {
