@@ -52,5 +52,15 @@ root="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$cwd
 url="$(printf '%s' "$payload" | jq -r '.tool_response | if type == "object" then .stdout // "" else . // "" end' |
   grep -Eo 'https://[^ /]+/[^ /]+/[^ /]+/pull/[0-9]+' | tail -n 1)"
 [ -n "$url" ] || exit 0
+# In a subagent the nudge would die with it (its brief may even forbid merging):
+# queue the URL for the session, whose stop hook (stop-babysit-pending.sh) babysits it.
+session="$(printf '%s' "$payload" | jq -r 'select(.agent_id // "" | . != "") | .session_id // ""' | tr -c 'A-Za-z0-9_-' '_')"
+if [ -n "$session" ]; then
+  dir="${TMPDIR:-/tmp}/babysit-pr-pending"
+  mkdir -p "$dir" && printf '%s\n' "$url" >> "$dir/$session" || exit 0
+  jq -n --arg url "$url" '{hookSpecificOutput: {hookEventName: "PostToolUse",
+    additionalContext: "A pull request was opened: \($url). The session that started you babysits it when it stops; do not run /babysit-pr yourself. Give the URL in your report."}}'
+  exit 0
+fi
 jq -n --arg url "$url" '{hookSpecificOutput: {hookEventName: "PostToolUse",
   additionalContext: "A pull request was opened. Run `/babysit-pr \($url)`."}}'

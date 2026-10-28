@@ -5,6 +5,11 @@
         "matcher": "Bash",
         "hooks": [{ "type": "command", "command": "hooks/post-pr-create.sh" }]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "type": "command", "command": "hooks/stop-babysit-pending.sh" }]
+      }
     ]
   }
 }
