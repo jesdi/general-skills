@@ -110,6 +110,43 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     assert (len(rig.calls()), len(rig.gates())) == (calls + 1, gates), "the one agent of the pushes is the pr-writer"
 
 
+def test_a_base_branch_takes_the_place_of_the_default_branch_for_the_rebase_and_the_pr(tmp_path):
+    rig = Inside(tmp_path, ONE)
+    rig.move_base({"docs.md": "main docs\n"})
+    clone = rig.tmp / "base-clone"
+    git(clone, "checkout", "-q", "-b", "integration", rig.start)
+    (clone / "integration.md").write_text("integration\n")
+    git(clone, "add", "-A")
+    git(clone, "commit", "-q", "-m", "integration moves")
+    git(clone, "push", "-q", "origin", "integration")
+    onto = ref(rig.origin, "refs/heads/integration")
+    rig.run(plan(), "--push", "--base", "integration")
+    assert rig.code == 0, rig.out + "\n".join(rig.ledger())
+    assert (rig.final()["base"], rig.final()["onto"]) == ("integration", onto)
+    assert git(rig.repo, "merge-base", "--is-ancestor", onto, "feat/csv") == ""
+    assert not (rig.repo / "docs.md").exists(), "the default branch is not under the history"
+    (pr,) = rig.prs()
+    assert pr["argv"][2:6] == ["--base", "integration", "--head", "feat/csv"]
+
+
+@pytest.mark.parametrize("base, error", [
+    ("nowhere", "git fetch origin did not give refs/remotes/origin/nowhere: "),
+    ("feat/csv", "feat/csv is the base branch: the end of run needs a PR branch."),
+])
+def test_a_base_branch_that_cannot_hold_the_pr_stops_the_end_of_run_before_the_recovery_point(tmp_path, base, error):
+    rig = Inside(tmp_path, ONE)
+    git(rig.repo, "push", "-q", "origin", "feat/csv")
+    rig.run(plan(), "--base", base)
+    assert rig.code == 1 and not rig.recovery(), rig.out
+    assert rig.led("End of run: BLOCKED at " + error)
+
+
+def test_a_base_branch_needs_an_origin(tmp_path):
+    rig = Inside(tmp_path, ONE, remote=False)
+    rig.run(plan(), "--base", "integration")
+    assert rig.code == 3 and "--base integration names a branch of origin, and the repository has no origin" in rig.out
+
+
 def test_the_final_review_does_not_start_while_a_ticket_is_not_merged_and_the_ledger_says_so_once(tmp_path):
     rig = Inside(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan())

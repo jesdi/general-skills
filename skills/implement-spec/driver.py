@@ -3,7 +3,7 @@
 
     sh run.sh --gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
               [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--push]
-              [--dry-run]
+              [--base BRANCH] [--dry-run]
 
 Run it in the PR worktree. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of
 run is BLOCKED, 2 = parked on a question, 3 = usage or validation error, 4 = stopped by a CLI failure. README.md has the method and the files of
@@ -624,6 +624,8 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                         "run ended that is parked (exit 2) or has a BLOCKED ticket (exit 1)")
     parser.add_argument("--push", action="store_true", help="local mode: when the final review has passed, push "
                         "the PR branch to origin and open the PR; without it nothing is pushed")
+    parser.add_argument("--base", metavar="BRANCH", help="the branch of origin the end of run rebases onto and "
+                        "the PR goes into (default: the default branch of origin)")
     parser.add_argument("--only", choices=ONLY, help="test only: run this one role on the first ticket")
     args = parser.parse_args(argv)
     args.argv = list(sys.argv[1:] if argv is None else argv)  # for the rerun command the driver prints
@@ -656,7 +658,7 @@ def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[s
     models, model_errors = driver_agents.load_models(args.models)
     tickets, ticket_errors = driver_tickets.parse(args.tickets)
     errors += model_errors + ticket_errors + driver_review.precondition_errors(tickets)
-    errors += driver_final.precondition_errors(args.push or args.unattended)
+    errors += driver_final.precondition_errors(args.push or args.unattended, args.base)
     for error in errors:
         print(error)
     return None if errors else (tickets, models, kept)
