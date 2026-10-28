@@ -30,6 +30,7 @@ describe('Python check runner', () => {
     const { root, log, env } = fixture();
     execFileSync('sh', [runner], { cwd: root, env });
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
+      '-c import sys; sys.exit(sys.version_info < (3, 10))',
       '-m coverage erase',
       '-m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q',
       '-m coverage run -a -m pytest skills/implement-spec -q',
@@ -40,10 +41,11 @@ describe('Python check runner', () => {
     ]);
   });
 
-  it('preserves the interpreter selected by an active virtual environment', () => {
+  it('uses the interpreter of an active virtual environment and stops when it is older than 3.10', () => {
     const { root, log, env } = fixture();
     const result = spawnSync('sh', [runner], { cwd: root, env: { ...env, VIRTUAL_ENV: '/active' } });
-    expect(result.status).toBe(99);
+    expect(result.status).toBe(2);
+    expect(result.stderr.toString()).toContain('older than Python 3.10');
     expect(readFileSync(log, 'utf8')).toBe('host\n');
   });
 
@@ -52,6 +54,7 @@ describe('Python check runner', () => {
     const result = spawnSync('sh', [runner], { cwd: root, env: { ...env, PYTHON_TEST_EXIT: '1' } });
     expect(result.status).toBe(1);
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
+      '-c import sys; sys.exit(sys.version_info < (3, 10))',
       '-m coverage erase',
       '-m coverage run -m pytest skills/backlog skills/crap-gate skills/pr-risk -q',
     ]);

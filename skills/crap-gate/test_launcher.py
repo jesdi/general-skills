@@ -41,7 +41,46 @@ def test_bad_download_is_rejected_before_execution(tmp_path):
     assert "checksum mismatch" in proc.stderr
     assert json.loads(proc.stdout)["error"]["kind"] == "tooling"
     assert not list((tmp_path / "cache").rglob("uv.tar.gz"))
+    assert not [f for f in (tmp_path / "cache").rglob("uv") if f.is_file()]
     assert not list((tmp_path / "cache").rglob(".download.*"))
+
+
+def test_launcher_copy_is_byte_identical_to_shared_launcher():
+    root = LAUNCHER.parents[2]
+    assert (LAUNCHER.parent / "launcher.sh").read_bytes() == (root / "shared/launcher.sh").read_bytes()
+
+
+def test_first_online_run_caches_pinned_runtime_under_xdg_and_second_run_downloads_nothing(tmp_path):
+    real_curl = shutil.which("curl")
+    # Probe the network apart from the launcher, so a broken download URL or
+    # Python install fails this test instead of skipping it.
+    probe = subprocess.run([real_curl, "--silent", "--head", "--max-time", "15", "https://github.com"],
+                           capture_output=True)
+    if probe.returncode != 0:
+        pytest.skip("network access to github.com is required")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "curl.log"
+    curl = bin_dir / "curl"
+    curl.write_text(f'#!/bin/sh\necho "$@" >> "{log}"\nexec "{real_curl}" "$@"\n')
+    curl.chmod(0o755)
+    xdg = tmp_path / "x"
+    env = {k: v for k, v in os.environ.items() if k not in ("CRAP_GATE_CACHE_DIR", "CRAP_GATE_OFFLINE")}
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", XDG_CACHE_HOME=str(xdg))
+
+    def run():
+        return subprocess.run(["/bin/sh", str(LAUNCHER), "--help"], env=env, cwd=tmp_path,
+                              text=True, capture_output=True, timeout=600)
+
+    first = run()
+    assert first.returncode == 0, first.stderr
+    assert [f for f in (xdg / "crap-gate/uv/0.12.13").rglob("uv") if f.is_file()]
+    assert list((xdg / "crap-gate/python").glob("*3.13.7*"))
+    log.write_text("")
+    second = run()
+    assert second.returncode == 0, second.stderr
+    assert "downloading" not in second.stderr
+    assert log.read_text() == ""
 
 
 @pytest.fixture
