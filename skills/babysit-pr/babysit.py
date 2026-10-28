@@ -897,6 +897,12 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
                     extra += "\n".join(f"- `{c['sha']}` {c['commit']['message'].splitlines()[0]} ({who(c)})"
                                         for c in commits[oids.index(full) + 1:]) + "\n"
             stop(f"approval was for {approved}", extra)
+    # PRs into this head branch would land on a branch already merged, so their work never reaches the base.
+    head_ref = pr["head"]["ref"]
+    stacked = gh("api", f"repos/{repo}/pulls", "-X", "GET", "-f", "state=open", "-f", f"base={head_ref}",
+                 "--paginate", "--jq", ".[].number").split()
+    if stacked:
+        stop(f"open PRs still target {head_ref}: {', '.join('#' + n for n in stacked)}")
     state = ci_state(repo, number, 0)
     if state != "green":
         stop(f"CI is {state} at merge time")

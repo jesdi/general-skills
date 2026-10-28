@@ -122,3 +122,22 @@ def test_saved_body_does_not_stand_in_for_an_empty_live_body(tmp_path):
     assert p.returncode != 0
     assert merged(w) == []
     assert not any("Merged by babysit-pr" in c["body"] for c in w.github()["comments"])
+
+
+def test_open_prs_into_the_head_branch_hand_off_and_nothing_merges(tmp_path):
+    # the final PR of a feat/<name> cut-over: increments #57 and #58 still target its head branch
+    w = world(tmp_path, head_ref="feat/new-cart",
+              open_prs=[{"number": 57, "base": "feat/new-cart"}, {"number": 60, "base": "main"},
+                        {"number": 61, "base": "feat/new-cart"}])
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    assert p.returncode != 0
+    assert merged(w) == []
+    [h] = handoffs(w)
+    assert h.splitlines()[0] == "## 🧑 Needs human: open PRs still target feat/new-cart: #57, #61"
+
+
+def test_open_prs_into_other_branches_do_not_block_the_merge(tmp_path):
+    w = world(tmp_path, head_ref="feat/new-cart", open_prs=[{"number": 60, "base": "main"}])
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    assert p.returncode == 0, p.output
+    assert len(merged(w)) == 1

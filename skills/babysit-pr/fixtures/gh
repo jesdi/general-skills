@@ -22,6 +22,8 @@ State is the JSON file $GH_FAKE_STATE:
   title, body  PR title and body (default "" )
   repo_settings  {allow_rebase_merge, allow_merge_commit, allow_squash_merge} served by `gh api repos/O/R`
   merge_error  when set, `gh pr merge` fails printing it (e.g. a required approval)
+  head_ref   head branch of every PR (default "feature")
+  open_prs   [{number, base}] served by `gh api pulls -X GET -f state=open -f base=B` (filtered by base)
   merges     recorded successful `gh pr merge` calls: {number, method, match, subject, body, auto}
   Commits may carry `message`, `author` (login) and `parents` (list of shas; 2 = a merge commit).
   `gh pr merge N --rebase|--merge|--squash --match-head-commit SHA [--subject S] [--body B]` fails
@@ -30,7 +32,7 @@ State is the JSON file $GH_FAKE_STATE:
              (a race: the other session posts after our first read)
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
 Supported: `gh api` (user, pulls/N/reviews, pulls/N/comments (review comments, always empty),
-pulls/N/commits, `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
+pulls/N/commits, pulls (open list), `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
 issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
 """
 import json
@@ -152,8 +154,12 @@ def api(args):
         return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
                      "user": {"login": st["user"]},
                      "title": st.get("title", ""), "body": st.get("body", ""),
-                     "head": {"sha": st.get("head_sha", "head1")},
+                     "head": {"sha": st.get("head_sha", "head1"), "ref": st.get("head_ref", "feature")},
                      "base": {"ref": st.get("base_ref", "main"), **({"sha": st["base_sha"]} if "base_sha" in st else {})}}, jq, include)
+    if path == "pulls" and method == "GET" and fields.get("state") == "open":
+        log(False)
+        return emit([{"number": p["number"], "base": {"ref": p["base"]}} for p in st.get("open_prs", [])
+                     if fields.get("base") in (None, p["base"])], jq, include)
     if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
         log(False)
         return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,

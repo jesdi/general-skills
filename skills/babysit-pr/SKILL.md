@@ -45,7 +45,7 @@ Push only after the ladder passes, then wait for CI on the new head. If a resolu
 
 ## Handoff
 
-`python3 babysit.py handoff ...` posts `## 🧑 Needs human: <reason>`, adds `needs-human`, releases the lease, and prints JSON with `status: handoff`, `terminal: true`, and the reason. `merge` can also perform this handoff before exiting with an error (for example, judge disagreement or a blocked merge). This terminal JSON is the completion signal even on a nonzero exit; proceed straight to notification and end the turn.
+`python3 babysit.py handoff ...` posts `## 🧑 Needs human: <reason>`, adds `needs-human`, releases the lease, and prints JSON with `status: handoff`, `terminal: true`, and the reason. `merge` can also perform this handoff before exiting with an error (for example, judge disagreement, a blocked merge, or open PRs that still target this PR's head branch). This terminal JSON is the completion signal even on a nonzero exit; proceed straight to notification and end the turn.
 
 Finish any worktree cleanup before calling `handoff` or `merge`, and run either command alone: a shell suffix would keep working after a terminal result. After a completed handoff, the only remaining tool call in Claude Code is `PushNotification` with the reason (notification-specific tool discovery is allowed). Then end the turn immediately. In Codex, end the turn immediately. This completion rule takes precedence over inherited instructions for memory writes, session summaries, cleanup or verification; those are work after handoff.
 
