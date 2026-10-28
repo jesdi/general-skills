@@ -34,7 +34,7 @@ import pytest
 from test_cli import SKILL, git, ticket
 from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, review
 from test_stops import UNATTENDED, decisions, stage
-from test_walk import impl, plan, tw
+from test_walk import fix, impl, plan, tw
 
 SCOPED = HOOKED.replace('("reviewer", "correctness")', '("reviewer", "correctness", "final-reviewer")')
 RUNNER = SCOPED.replace(
@@ -295,6 +295,59 @@ def test_two_findings_make_one_fixer_batch_of_fix_commits_on_top_of_the_unchange
     assert [r["subject"] for r in fixed.commits(reviewed)] == ["fix(02): quote embedded commas", "fix(02): escape quotes"]
     assert len(fixed.commits(fixed.start, reviewed)) == 3
     assert ref(fixed.repo, "feat/csv~2") == reviewed
+
+
+def test_green_ticket_carries_cap_finding_into_required_final_fix(tmp_path):
+    rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
+    recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
+    scoped = final()
+    scoped["report"]["resolved_must_fix"] = ["MERGED-QUOTING-REGRESSION (demo/export.py:99)"]
+    batch = fixer(fn("02"), "restore quoting", ticket_of="02")
+    batch["report"]["addressed_must_fix"] = ["MERGED-QUOTING-REGRESSION (demo/export.py:99)"]
+    steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
+                    "final/final-reviewer": [final(), scoped], "final/fixer": [batch]})
+
+    rig.run(steps)
+
+    assert rig.code == 0, rig.output()
+    assert rig.state()["tickets"]["02"]["phase"] == "merged"
+    assert not rig.state()["run"]["questions"]
+    assert "MERGED-QUOTING-REGRESSION" in rig.final_calls("fixer")[0]["prompt"]
+    assert len(rig.final_calls("fixer")) == 1
+
+
+def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
+    rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
+    recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
+    batch = fixer(fn("02"), "attempt quoting fix", ticket_of="02")
+    batch["report"]["addressed_must_fix"] = ["MERGED-QUOTING-REGRESSION (demo/export.py:99)"]
+    steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
+                    "final/final-reviewer": [final(), final(finding("MERGED-QUOTING-REGRESSION"))],
+                    "final/fixer": [batch]})
+
+    rig.run(steps)
+
+    assert rig.code == 1, rig.output()
+    assert not rig.state()["run"]["questions"]
+    assert [item["title"] for item in rig.state()["run"]["final"]["open"]] == ["MERGED-QUOTING-REGRESSION"]
+    assert not rig.pushes() and not rig.prs()
+    rig.run(steps)
+    assert rig.code == 1 and len(rig.final_calls("fixer")) == 1
+    assert not rig.pushes() and not rig.prs()
+
+
+def test_final_fix_batch_rejects_an_unaddressed_must_fix(tmp_path):
+    rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
+    recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
+    steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
+                    "final/final-reviewer": [final()],
+                    "final/fixer": [fixer(fn("02"), "attempt quoting fix", ticket_of="02")]})
+
+    rig.run(steps)
+
+    assert rig.code == 1, rig.output()
+    assert not rig.pushes() and not rig.prs()
+    assert any("addressed_must_fix: missing MERGED-QUOTING-REGRESSION (demo/export.py:99)" in line for line in rig.ledger())
 
 
 def test_the_fixer_of_the_final_review_gets_the_gate_command_and_runs_it_before_it_reports(fixed):

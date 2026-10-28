@@ -87,6 +87,10 @@ def models_file(tmp_path, **overrides):
     entries = {role: ["anthropic/claude-opus-5@medium"] for role in ROLES}
     entries["correctness"] = ["openai/gpt-sol@medium"]
     entries.update(overrides)
+    if len(entries["implementer"]) == 1:
+        first = entries["implementer"][0]
+        next_entry = "anthropic/claude-opus-5@medium" if first.startswith("openai/") else "openai/gpt-sol@medium"
+        entries["implementer"] = [first, next_entry]
     path = tmp_path / "models.json"
     path.write_text(json.dumps(entries))
     return path
@@ -226,6 +230,22 @@ def test_models_file_naming_a_provider_without_its_cli_exits_3(env, tmp_path):
     proc = drive(env, repo, "--tickets", ".agent/tickets", "--gate", "make check", "--models", str(models), "--dry-run")
     assert proc.returncode == 3, proc.stderr
     assert any("implementer" in l and "codex" in l for l in proc.stdout.splitlines())
+
+
+def test_one_implementer_model_is_rejected_before_any_agent(env, tmp_path):
+    repo = make_repo(tmp_path / "demo", three())
+    models = models_file(tmp_path)
+    entries = json.loads(models.read_text())
+    entries["implementer"] = ["anthropic/claude-opus-5@medium"]
+    models.write_text(json.dumps(entries))
+    before = snapshot(repo)
+
+    proc = drive(env, repo, "--tickets", ".agent/tickets", "--gate", "make check", "--models", str(models),
+                 "--dry-run")
+
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "second implementer" in proc.stdout
+    assert_untouched(proc, repo, before, tmp_path)
 
 
 @pytest.mark.parametrize("link", ["directory", "file"])

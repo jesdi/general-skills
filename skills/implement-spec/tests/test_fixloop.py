@@ -18,6 +18,7 @@ import driver_review
 import test_review
 from conftest import GIT
 from test_cli import three
+from test_final import RUNNER, final, fixer, fn
 from test_review import FABLE, ONE, OPUS, RISKY, SOL, STUCK, correct, finding, fix, review
 from test_walk import impl, plan, tw
 
@@ -89,6 +90,24 @@ def test_a_risky_ticket_gets_both_agents_and_one_merged_findings_file(tmp_path):
     assert json.loads((rig.folder("02") / "findings-1.json").read_text()) == []
 
 
+def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
+    rig = Inside(tmp_path, RISKY)
+    (rig.rig / "run-agent").write_text(RUNNER)
+    regression = {**finding("QUOTING-REGRESSION"), "basis": "regression"}
+    scoped = final()
+    scoped["report"]["resolved_must_fix"] = ["QUOTING-REGRESSION (demo/export.py:99)"]
+    batch = fixer(fn("02"), "restore quoted fields", ticket_of="02")
+    batch["report"]["addressed_must_fix"] = ["QUOTING-REGRESSION (demo/export.py:99)"]
+
+    rig.run(plan(**{"02/reviewer": [review("02", [regression])] * 3,
+                    "02/fixer": [fix("02", 1), fix("02", 2)],
+                    "final/final-reviewer": [final(), scoped], "final/fixer": [batch]}))
+
+    assert rig.code == 0, rig.ledger()
+    assert [item["title"] for item in rig.state()["run"]["final"]["must_fix"]] == ["QUOTING-REGRESSION"]
+    assert "QUOTING-REGRESSION" in rig.prompt("fixer-1", "final")
+
+
 def test_correctness_entry_is_the_first_of_another_provider_than_the_implementers():
     models = {"implementer": ["opus@medium"], "correctness": ["opus@high", "openai/a@low", "openai/b@low"]}
     assert driver_agents.correctness_entry(models) == "openai/a@low"
@@ -113,7 +132,7 @@ def test_a_changed_locked_file_is_fixed_before_a_fixture_finding_is_corrected(tm
     rig = Inside(tmp_path)
     locked = tw("01")["files"]
     cheat = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", "tests/test_01.py": "# edited\n"})
-    stale = finding("STALE", "minor", kind="fixture", file="tests/test_01.py")
+    stale = finding("STALE", "important", kind="fixture", file="tests/test_01.py")
     correction = {**tw("01"), "files": {"tests/test_01.py": "# corrected\n"}, "commit": "test: 01 fixture fix"}
     rig.run(plan(**{"01/implementer": [cheat], "01/test-writer": [tw("01"), correction],
                     "01/reviewer": [review("01", [stale]), review("01", [stale]), review("01")],
@@ -330,15 +349,15 @@ def test_a_fixer_that_reports_a_wrong_locked_test_opens_the_locked_test_question
 
 def test_the_fix_rounds_count_from_0_after_an_overruled_test(tmp_path):
     stuck = review("01", [STUCK])
-    steps = plan(**{"01/reviewer": [stuck] * 5 + [review("01")],
-                    "01/fixer": [fix("01", 1), fix("01", 2), fix("01", 3), fixer_stops(), fix("01", 5)],
+    steps = plan(**{"01/reviewer": [stuck, stuck, review("01")],
+                    "01/fixer": [fixer_stops(), fix("01", 1)],
                     "01/test-writer": [tw("01"), OVERRULED], "01/implementer": [impl("01"), AGAIN]})
     rig = Inside(tmp_path).run(steps)
-    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 4, rig.ledger()
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 1, rig.ledger()
     rig.run(steps, "--answer", "01-locked-test-1=overrule-test")
-    # The corrected tests are a new contract: the first finding on them gets a fix round, not the round-4 stop.
+    # The corrected tests are a new contract: the first finding on them gets a fresh fix round.
     assert rig.code == 0, rig.ledger()
-    assert rig.state()["tickets"]["01"]["round"] == 1 and not rig.led("after round 4")
+    assert rig.state()["tickets"]["01"]["round"] == 1 and not rig.led("after round 2")
 
 
 def test_a_fixture_correction_that_is_rejected_asks_the_operator(tmp_path):
@@ -583,21 +602,20 @@ def touches_01(n):
                                "tests/test_01.py": LOCKED_01 + f"# fix {n}\n"})
 
 
-def changed_at_round_4(tmp_path, name, files=None, gate=None):
-    """Ticket 02 whose fixer of round 4 changes the locked file of merged ticket 01: the review after it finds the
-    change, and with no round left it is a `finding` question, which the operator accepts."""
-    steps = plan(**{"02/reviewer": [review("02", [STUCK])] * 4 + [review("02")],
-                    "02/fixer": [fix("02", 1), fix("02", 2), fix("02", 3), touches_01(4)]})
+def changed_at_cap(tmp_path, name, files=None, gate=None):
+    """Ticket 02 changes a merged ticket's locked file in its second fix. The finding is carried to the final
+    must-fix list, while the landing still requires a ruling about that file."""
+    steps = plan(**{"02/reviewer": [review("02", [STUCK])] * 2 + [review("02")],
+                    "02/fixer": [fix("02", 1), touches_01(2)]})
     rig = Inside(under(tmp_path, name), files or three(), gate=gate).run(steps, parallel="1")
-    assert rig.code == 1 and asked(rig) == {"02-finding-1": ["accept", "split", "redesign"]}, rig.ledger()
-    assert rig.state()["run"]["questions"][0]["subject"].startswith("the ticket changed the locked file of a merged ticket")
-    return rig.run(steps, "--answer", "02-finding-1=accept", parallel="1"), steps
+    assert rig.code == 2 and asked(rig) == {f"{MERGED_LOCKED}-1": ["restore", "adopt", "redesign"]}, rig.ledger()
+    return rig, steps
 
 
 def test_an_accepted_change_to_a_merged_ticket_locked_file_asks_at_the_landing_and_restore_lands_it(tmp_path):
     """Issue #116, comment 1: `accept` sent the ticket to its landing, which the landing check refused with no
     question, so no answer could merge it."""
-    rig, steps = changed_at_round_4(tmp_path, "restore")
+    rig, steps = changed_at_cap(tmp_path, "restore")
     assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
     assert rig.led("Ticket 02: BLOCKED at the merge: locked file changed: tests/test_01.py.")
     assert asked(rig) == {f"{MERGED_LOCKED}-1": ["restore", "adopt", "redesign"]}
@@ -611,15 +629,15 @@ def test_an_accepted_change_to_a_merged_ticket_locked_file_asks_at_the_landing_a
 
 
 def test_adopt_lands_the_change_to_the_merged_ticket_locked_file_and_the_ticket_locks_it(tmp_path):
-    rig, steps = changed_at_round_4(tmp_path, "adopt")
+    rig, steps = changed_at_cap(tmp_path, "adopt")
     rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=adopt", parallel="1")
     assert rig.code == 0, rig.ledger()
-    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 4\n"
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 2\n"
     assert "tests/test_01.py" in rig.state()["tickets"]["02"]["locked"] and rig.led("by the ruling (adopt)")
 
 
 def test_redesign_keeps_the_ticket_blocked_at_its_landing(tmp_path):
-    rig, steps = changed_at_round_4(tmp_path, "redesign")
+    rig, steps = changed_at_cap(tmp_path, "redesign")
     rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=redesign", parallel="1")
     assert rig.code == 1 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
     assert on_pr(rig, "tests/test_01.py") == LOCKED_01 and not asked(rig)
@@ -629,7 +647,7 @@ def test_a_restore_that_turns_the_merge_gate_red_is_taken_back_and_asks_again_wi
     """The ticket's code needs its change to the file: the restore commit leaves the ticket branch and the question
     comes back with the options left, so the stop still has an answer."""
     two = {name: text for name, text in three().items() if not name.startswith("03")}  # 02 lands as a fast-forward
-    rig, steps = changed_at_round_4(tmp_path, "red", files=two, gate={"subjects": [LANDING_RESTORE]})
+    rig, steps = changed_at_cap(tmp_path, "red", files=two, gate={"subjects": [LANDING_RESTORE]})
     rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=restore", parallel="1")
     assert rig.code == 2 and rig.led("Ticket 02: BLOCKED at the merge: the gate is red on"), rig.ledger()
     assert asked(rig) == {f"{MERGED_LOCKED}-2": ["adopt", "redesign"]}
@@ -638,18 +656,18 @@ def test_a_restore_that_turns_the_merge_gate_red_is_taken_back_and_asks_again_wi
     fixer = rig.calls("02", "fixer")[-1]["sha"]
     assert rig.state()["tickets"]["02"]["tip"] == fixer and on_pr(rig, "tests/test_01.py") == LOCKED_01
     rig.run(steps, "--answer", f"{MERGED_LOCKED}-2=adopt", parallel="1")
-    assert rig.code == 0 and on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 4\n", rig.ledger()
+    assert rig.code == 0 and on_pr(rig, "tests/test_01.py") == LOCKED_01 + "# fix 2\n", rig.ledger()
 
 
 # ---------------------------------------------------------------- the rounds
 
-def test_four_rounds_then_blocked_with_the_escalation_at_round_3(tmp_path):
+def test_two_rounds_then_blocked_with_the_escalation_at_round_2(tmp_path):
     rig = Inside(tmp_path, three(), {"implementer": [OPUS, FABLE]})
-    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 5, "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))
-    assert rig.code == 1 and rig.state()["tickets"]["01"]["round"] == 4
-    assert rig.led("BLOCKED at the review: after round 4 these findings are open: STUCK (demo/export.py:99).")
-    assert rig.ledger().count(f"Ticket 01 round 3: escalated to {FABLE}.") == 1
-    assert [len(rig.led("fixer ran on", entry)) for entry in (OPUS, FABLE)] == [2, 2]
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3, "01/fixer": [fix("01", n) for n in (1, 2)]}))
+    assert rig.code == 1 and rig.state()["tickets"]["01"]["round"] == 2
+    assert rig.led("BLOCKED at the review: after round 2 these findings are open: STUCK (demo/export.py:99).")
+    assert rig.ledger().count(f"Ticket 01 round 2: escalated to {FABLE}.") == 1
+    assert [len(rig.led("fixer ran on", entry)) for entry in (OPUS, FABLE)] == [1, 1]
     tips = [rig.sha("01", "implementer")] + [call["sha"] for call in rig.calls("01", "fixer")]
     assert [gate["commit"] for gate in rig.gates() if gate["branch"] == "ticket/feat%2Fcsv/01"] == tips
     assert rig.state()["tickets"]["01"]["tip"] == tips[-1] and not rig.calls("02")
@@ -779,26 +797,24 @@ def test_a_gate_that_exits_with_any_other_code_is_red_without_running_again(tmp_
     assert record.count("exit: ") == 1 and f"\nexit: {exit}\nafter: clean\n" in record
 
 
-def test_a_red_gate_on_the_fixer_commit_of_round_4_blocks_the_ticket(tmp_path):
-    rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 4"]})
-    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 4, "01/fixer": [fix("01", n) for n in (1, 2, 3, 4)]}))
+def test_a_red_gate_on_the_fixer_commit_of_round_2_blocks_the_ticket(tmp_path):
+    rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 2"]})
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 2, "01/fixer": [fix("01", n) for n in (1, 2)]}))
     last = rig.calls("01", "fixer")[-1]["sha"]
     assert f"BLOCKED at the gate: the gate is red on {last[:7]}" in blocked(rig)
-    assert len(rig.calls("01", "reviewer")) == 4 and not (rig.folder() / "findings-4.json").exists()
+    assert len(rig.calls("01", "reviewer")) == 2 and not (rig.folder() / "findings-2.json").exists()
 
 
-def test_round_3_stays_on_its_entry_when_the_implementer_has_no_next_entry(tmp_path):
+def test_one_implementer_entry_is_invalid_before_agents_start(tmp_path):
     rig = Inside(tmp_path, ONE, {"implementer": [OPUS]})
-    rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 3 + [review("01")], "01/fixer": [fix("01", n) for n in (1, 2, 3)]}))
-    assert rig.code == 0, rig.ledger()
-    assert rig.led(f"Ticket 01 round 3: the implementer has no next entry, so the round stays on {OPUS}.")
-    assert len(rig.led("fixer ran on", OPUS)) == 3
+    rig.models.write_text(json.dumps({**json.loads(rig.models.read_text()), "implementer": [OPUS]}))
+    rig.run(plan())
+    assert rig.code == 3 and not rig.calls()
 
 
 def test_the_escalation_takes_the_next_entry_of_the_list():
     models = {"implementer": ["a@low", "openai/b@low", "c@low"]}
-    assert [driver_fixloop.entry(models, n) for n in (1, 2, 3, 4)] == ["a@low", "a@low", "openai/b@low", "openai/b@low"]
-    assert driver_fixloop.entry({"implementer": ["a@low"]}, 3) == "a@low"
+    assert [driver_fixloop.entry(models, n) for n in (1, 2)] == ["a@low", "openai/b@low"]
 
 
 def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path):
@@ -831,8 +847,10 @@ def test_a_full_review_after_a_correction_names_each_locked_file_that_needs_a_pr
     vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
     correction = {**first, "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
     correction["report"] = {**first["report"], "files": ["tests/test_01.py"], "locked": ["tests/test_01.py"]}
+    regression = review("01", lines=())
+    regression["report"]["regressions"] = [vacuous]
     rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first, correction], "01/fixer": [fix("01", 1)],
-                                       "01/reviewer": [both([STUCK]), review("01", [vacuous], lines=()), both()]}))
+                                       "01/reviewer": [both([STUCK]), regression, both()]}))
     assert rig.code == 0, rig.ledger()
     order = [call["role"] for call in rig.calls("01")]
     assert order == ["test-writer", "implementer", "reviewer", "fixer", "reviewer", "test-writer", "reviewer"]
@@ -1072,7 +1090,7 @@ def test_a_re_review_names_only_the_proofs_the_fix_made_due(tmp_path):
     assert "no proof is due): demo/export.py:12 demo/export.py:30\n" in rig.prompt("reviewer-1")
     assert "no proof is due): demo/export.py:30\n" in rig.prompt("reviewer-2")
     old, new = rig.sha("01", "implementer"), rig.calls("01", "fixer")[0]["sha"]
-    assert f"The fix is {old}..{new}: review only the lines it changed" in rig.prompt("reviewer-1")
+    assert f"The fix is {old}..{new}: check only whether your own critical or important findings" in rig.prompt("reviewer-1")
 
 
 def test_a_proof_follows_its_line_through_inserts_and_deletes(tmp_path):

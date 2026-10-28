@@ -7,13 +7,15 @@ Range: {range}
 Gate record of the driver for {start_sha}: {gate}
 Review method: {review_diff}
 Ledger of the run, one sentence per event: {ledger}
-Minor findings that the ticket reviews left for this review, each with its findings file:
-{minors}
+Deferred observations and minor findings from ticket reviews, each with its evidence file:
+{carried}
+Must-fix findings carried from tickets that merged at the cap:
+{must_fix_list}
 Rulings of the operator:
 {rulings}
 
 Review the range with the method of the review-diff skill in the file above, with the spec as its spec path. The gate of that method is done: check that the gate record names {start_sha}, a clean status and exit 0, and run the gate yourself, in a copy as below, only when it does not.
-Decide for each minor finding in the list whether it is still true at {start_sha}; report each one that is, with the severity it has now. A ruling is settled: do not report what a ruling accepted.
+Decide for each carried observation whether it is still true at {start_sha}; report each one that is, with the severity it has now. Every must-fix finding stays open until the fix batch addresses it and the scoped review verifies it. A ruling does not settle a must-fix finding. In the scoped review, list each item you verified closed in `resolved_must_fix` exactly as shown in the must-fix list, including its file and line; report each unresolved one in `findings`.
 Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `code`, `test`, or `fixture`.
 Do not commit. Leave the branch and the tree as you found them.
 
@@ -27,7 +29,8 @@ Write one JSON report at {report} that matches this schema:
     "status": {"enum": ["DONE", "DONE_WITH_CONCERNS", "NEEDS_CONTEXT", "BLOCKED"]},
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
-    "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "file", "line", "title", "evidence", "kind"], "properties": {"severity": {"enum": ["critical", "important", "minor"]}, "file": {"type": "string"}, "line": {"type": "integer"}, "title": {"type": "string", "minLength": 1}, "evidence": {"type": "string", "minLength": 1}, "kind": {"enum": ["code", "fixture", "test"]}}}}
+    "findings": {"type": "array", "items": {"type": "object", "required": ["severity", "file", "line", "title", "evidence", "kind"], "properties": {"severity": {"enum": ["critical", "important", "minor"]}, "file": {"type": "string"}, "line": {"type": "integer"}, "title": {"type": "string", "minLength": 1}, "evidence": {"type": "string", "minLength": 1}, "kind": {"enum": ["code", "fixture", "test"]}}}},
+    "resolved_must_fix": {"type": "array", "items": {"type": "string"}}
   }
 }
 ```

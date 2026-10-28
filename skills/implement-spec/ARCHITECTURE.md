@@ -133,18 +133,18 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   an agent is reaped, the run stops. No group gets a signal after its leader is reaped.
 - A role gets one rerun. The rerun prompt is the first prompt, the rejection, then the same ending again.
   A timeout doubles the time of the rerun.
-- Fix rounds stop at 4, and round 3 goes to the next implementer entry. The correctness pass never runs on the
+- Fix rounds stop at 2, and round 2 goes to the next implementer entry. The correctness pass never runs on the
   provider of the implementer.
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
-  it blocks only after round 4. A red gate on a test-writer correction blocks.
+  it blocks after round 2. A red gate on a test-writer correction blocks.
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
   stays the source of truth: an agent's run of the gate counts for nothing.
 - A finding that a correction reports in `not_addressed` goes to the fixer of the same round as kind `code`
   (`driver_fixloop._correct` rewrites it in the findings file): the test needs a production change first, so a
   second correction could not close it.
-- No test-writer correction runs after round 4 (`driver_fixloop._act_on`): its findings become `finding` questions
-  with the others. A correction there would add red locked tests that no fix round makes green, and `accept` could
-  not merge the ticket.
+- No test-writer correction runs after round 2 (`driver_fixloop._act_on`): a red gate or an unmet criterion blocks
+  the ticket. Other open findings go to the final must-fix list when the gate is green. A correction at the cap
+  would add locked tests that no fix round could make green.
 - A correction that does not close its findings (the next review finds one again, or the driver rejects its
   report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
   `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the

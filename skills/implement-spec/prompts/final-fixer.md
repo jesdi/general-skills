@@ -7,8 +7,10 @@ Locked files: {locked}
 Findings file of the final review: {findings}
 Findings to fix:
 {findings_list}
+Must-fix findings carried from ticket reviews:
+{must_fix_list}
 
-Fix each finding in the list as one batch, in one commit or in several. Leave the minor findings of the findings file.
+Fix each finding in the list as one batch, in one commit or in several. List every must-fix item you addressed in `addressed_must_fix` exactly as shown in the must-fix list, including its file and line; an omitted item rejects the batch. Leave the minor findings of the findings file.
 Each commit belongs to one ticket: the ticket whose criterion or code the commit changes. A fix for two tickets is two commits.
 Never edit a locked file: each one stays as it is at {start_sha}, and a locked file that differs is a critical finding of the next review.
 Use targeted tests while you work.
@@ -27,6 +29,7 @@ Write one JSON report at {report} that matches this schema:
     "commits": {"type": "array", "items": {"type": "object", "required": ["sha", "ticket"], "properties": {"sha": {"type": "string", "pattern": "^[0-9a-f]{7,40}$"}, "ticket": {"type": "string", "pattern": "^[0-9]+$"}}}},
     "files": {"type": "array", "items": {"type": "string"}},
     "concerns": {"type": "array", "items": {"type": "string"}},
+    "addressed_must_fix": {"type": "array", "items": {"type": "string"}},
     "green": {"type": "array", "items": {"type": "string"}}
   },
   "if": {"properties": {"status": {"enum": ["DONE", "DONE_WITH_CONCERNS"]}}},
