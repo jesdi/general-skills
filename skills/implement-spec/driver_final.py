@@ -422,7 +422,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
                 "final-reviewer", FINAL, ".", values, entry=driver_agents.correctness_entry(run.models), fix_round=done))
         else:
             report = _lenses(run, values, tip)
-    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(found + report["findings"]),
+    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(report["findings"], found),
                                                                      _carried_must_fix(final, done, report)))
 
 
@@ -476,10 +476,11 @@ def _run_lenses(run: Run, values: dict[str, str], kept: dict[str, dict]) -> tupl
     return reports, [errors[role] for role in driver_agents.LENSES if role in errors]
 
 
-def _merged(found: list[dict]) -> list[dict]:
-    """`found` with each (file, line, title) once: the more severe finding stays, a tie keeps the earlier one."""
+def _merged(reviewed: list[dict], driver: list[dict]) -> list[dict]:
+    """The `reviewed` findings, then the `driver` ones, with each (file, line, title) once: the more severe finding
+    stays, a tie keeps the earlier one, so the driver's loses a tie with a reviewer's."""
     kept: dict[tuple, dict] = {}
-    for finding in found:
+    for finding in reviewed + driver:
         key = (finding["file"], finding["line"], finding["title"])
         if key not in kept or SEVERITIES.index(finding["severity"]) < SEVERITIES.index(kept[key]["severity"]):
             kept[key] = finding
