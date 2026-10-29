@@ -238,16 +238,20 @@ def _refused(number: str, run: Run, landing: _Landing, rulings: _Rulings) -> Non
         raise Blocked("; ".join(f"locked file changed: {path}" for path in changed))
 
 
-def _red_landing(number: str, slot: str, run: Run, rulings: _Rulings, record: str) -> None:
-    """A red merge gate after `restore` or `adopt` rulings: the restore commit leaves the ticket branch, and each
-    ruled file is asked again, without the option that was tried."""
-    if rulings.paths:
-        if run.state.read()["tickets"][number]["tip"] != rulings.before:
-            driver_review.restore(slot, run.names.ticket(number), rulings.before)
-            run.state.ticket(number, tip=rulings.before)
-            ledger(f"Ticket {number}: the merge gate is red after the restore, so the driver took the restore commit "
-                   f"back: the ticket tip is {rulings.before[:7]} again.")
-        run.ask(number, MERGED_LOCKED, list(rulings.paths), record)
+def _red_landing(number: str, slot: str, run: Run, rulings: _Rulings, commit: str, record: str) -> None:
+    """A red full gate on `commit`, the commit that would land. After `restore` or `adopt` rulings, the restore
+    commit leaves the ticket branch, and each ruled file is asked again, without the option that was tried. Else it
+    is a finding of the fix loop, inside the cap."""
+    if not rulings.paths:
+        git(slot, "checkout", "-q", run.names.ticket(number))  # the fixer works on the ticket branch
+        driver_fixloop.red_landing(run, number, slot, commit, record)
+    if run.state.read()["tickets"][number]["tip"] != rulings.before:
+        driver_review.restore(slot, run.names.ticket(number), rulings.before)
+        run.state.ticket(number, tip=rulings.before)
+        ledger(f"Ticket {number}: the merge gate is red after the restore, so the driver took the restore commit "
+               f"back: the ticket tip is {rulings.before[:7]} again.")
+    run.ask(number, MERGED_LOCKED, list(rulings.paths), record)
+    raise Blocked(f"the full gate is red on {commit[:7]}, record {record}")
 
 
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool, rulings: _Rulings) -> _Landing:
@@ -263,8 +267,7 @@ def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool, rul
         # does not count. When the checkout fails, the slot is on another commit and the gate refuses to run.
         git(slot, "checkout", "-q", "--detach", landing.commit)
         if record := run.red_gate(number, slot, landing.commit, driver_gate.FULL):
-            _red_landing(number, slot, run, rulings, record)
-            raise Blocked(f"the full gate is red on {landing.commit[:7]}, record {record}")
+            _red_landing(number, slot, run, rulings, landing.commit, record)
     return landing
 
 
@@ -355,10 +358,15 @@ def _run_ticket(ticket: Ticket, slot_number: int, run: Run) -> bool:
     try:
         _run_roles(ticket, slot_number, run)
         if not run.args.only:
-            # A ticket that an earlier run left in `merge` has passed its review.
-            if run.state.read()["tickets"][number]["phase"] != "merge":
-                driver_fixloop.run(ticket, slot, run, _prompt_values(ticket, slot, run))
-            _merge(ticket, slot, run)
+            while True:
+                # A ticket that an earlier run left in `merge` has passed its review.
+                if run.state.read()["tickets"][number]["phase"] != "merge":
+                    driver_fixloop.run(ticket, slot, run, _prompt_values(ticket, slot, run))
+                try:
+                    _merge(ticket, slot, run)
+                    break
+                except driver_fixloop.Unlanded:
+                    pass  # the merge lock is released and the next fix round has started: its fixer runs now
     except Blocked as blocked:
         _block(number, run, ledger(f"Ticket {number}: BLOCKED at {blocked}."))
         print(f"{ticket.file}: BLOCKED at {blocked}")

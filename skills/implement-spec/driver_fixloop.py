@@ -59,9 +59,9 @@ def entry(models: dict[str, list[str]], round: int) -> str:
     return entries[1] if round >= 2 else entries[0]
 
 
-def _log_findings(job: Job, findings: list[dict]) -> list[dict]:
+def _log_findings(number: str, findings: list[dict]) -> list[dict]:
     for finding in findings:
-        ledger(f"Ticket {job.ticket.number}: {finding['severity']} finding of kind {finding['kind']} from the "
+        ledger(f"Ticket {number}: {finding['severity']} finding of kind {finding['kind']} from the "
                f"{finding['source']} at {finding['file']}:{finding['line']}: {finding['title']}.")
     return findings
 
@@ -171,7 +171,7 @@ def _review(job: Job) -> list[dict]:
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
     merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
-    found = _log_findings(job, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
+    found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
     cast = [("reviewer", "")]
     if job.ticket.risk:
         cast.append(("correctness", driver_agents.correctness_entry(run.models)))
@@ -180,7 +180,7 @@ def _review(job: Job) -> list[dict]:
     if state["rejected"]:
         run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
     reviewed, observations = _reviewer_results(job, cast, reports)
-    found += _log_findings(job, reviewed)
+    found += _log_findings(number, reviewed)
     _store_observations(job, observations)
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
     return found
@@ -244,20 +244,28 @@ def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> l
     return list(code.values())
 
 
-def _fix(job: Job, findings: list[dict]) -> None:
+def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
     """Run the next fix round: a fixer on the implementer's list, for `findings`. A fixer that makes no commit gives
-    a reason per finding, and the review of the same tip checks them (issue #123)."""
+    a reason per finding, and the review of the same tip checks them (issue #123). `landing` is the commit whose full
+    gate was red at the landing, when that started the round."""
     run, number = job.run, job.ticket.number
     job.round += 1
     on = entry(run.models, job.round)
-    run.state.ticket(number, phase="fix", round=job.round)
+    run.state.ticket(number, phase="fix", round=job.round, landing=landing or None)
     if job.round == 2:
         ledger(f"Ticket {number} round 2: escalated to {on}.")
+    values, notes = job.pointers(job.round - 1), []
+    if landing:
+        record = driver_gate.record_path(OUT / number, driver_gate.FULL, landing)
+        values.update(landing_sha=landing[:7], landing_record=os.path.relpath(record, job.slot))
+        notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
+    red = (f"the fast gate is red on {job.tip[:7]}" if job.red else
+           f"the full gate is red on {landing[:7]}" if landing else "")
     with during(f"fix round {job.round}"):
-        run.agent("fixer", number, job.slot, job.pointers(job.round - 1), entry=on, fix_round=job.round,
-                  check={"fix": [finding["title"] for finding in findings], "red": job.red})
+        run.agent("fixer", number, job.slot, values, entry=on, fix_round=job.round, notes=notes,
+                  check={"fix": [finding["title"] for finding in findings], "red": red})
     before, job.tip = job.tip, driver_slots.head(job.slot)
-    run.state.ticket(number, tip=job.tip)
+    run.state.ticket(number, tip=job.tip, landing=None)
     followed = driver_review.follow(job.slot, before, job.tip, job.proofs)
     due = {proof for proof, changed in followed.items() if changed}
     if job.red:
@@ -338,6 +346,33 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     return False
 
 
+class Unlanded(Exception):
+    """The full gate is red on the commit that would land, and the next fix round of the ticket has started."""
+
+
+def red_landing(run: Run, number: str, slot: str, commit: str, record: str) -> None:
+    """The full gate is red on `commit`, the commit that would land: the PR branch does not move. At round 2 that
+    blocks. Before it, the record is a critical `gate` finding for the next round, which starts in the same write of
+    state.json that leaves the landing, so a resumed run starts that round's fixer and never gates `commit` again.
+    Call it with the ticket branch checked out in the slot: the fixer works there."""
+    entry = run.state.read()["tickets"][number]
+    if entry["round"] == ROUNDS:
+        raise Blocked(f"the full gate is red on {commit[:7]}, record {record}")
+    path = os.path.relpath(record, slot)
+    finding = {"severity": "critical", "file": path, "line": 0, "title": f"the full gate is red on {commit[:7]}",
+               "evidence": f"the output of the gate in {path}", "kind": "code", "source": "gate"}
+    # The fixer reads the findings of the last review: its minor findings stay there for the final review.
+    file = OUT / number / f"findings-{entry['round']}.json"
+    found = json.loads(file.read_text()) if file.exists() else []
+    if finding["title"] not in [old["title"] for old in found]:  # a run stopped before the round gated it again
+        file.write_text(json.dumps(found + [finding], indent=1) + "\n")
+    _log_findings(number, [finding])
+    run.state.ticket(number, phase="fix", round=entry["round"] + 1, landing=commit)
+    ledger(f"Ticket {number}: the full gate is red on {commit[:7]} at the landing, so {run.pr} does not move and fix "
+           f"round {entry['round'] + 1} starts.")
+    raise Unlanded()
+
+
 def _gate(job: Job) -> list[dict]:
     """Fast-gate the candidate tip. A red gate before round 2 is a finding for the next round;
     a red gate after round 2 or on a test-writer correction blocks. Returns the findings: the red gate,
@@ -355,13 +390,17 @@ def _gate(job: Job) -> list[dict]:
     found = [{"severity": "critical", "file": path, "line": 0, "title": f"the fast gate is red on {job.tip[:7]}",
               "evidence": f"the output of the gate in {path}", "kind": "code", "source": "gate"}]
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
-    return _log_findings(job, found)
+    return _log_findings(number, found)
 
 
 def run(ticket: Ticket, slot: str, run: Run, values: dict[str, str]) -> None:
     """Gate, review and fix the ticket tip until a review leaves no finding open."""
     state = run.state.read()["tickets"][ticket.number]
     job = Job(ticket, slot, run, values, state["round"], state["tip"])
+    if state["phase"] == "fix" and state["landing"]:
+        # A red full gate at the landing started this round, and its fixer has not reported yet.
+        job.round -= 1
+        _fix(job, [{"title": f"the full gate is red on {state['landing'][:7]}"}], state["landing"])
     while True:
         found = _gate(job)
         if not found:

@@ -17,7 +17,7 @@ import driver_run
 import driver_review
 import test_review
 from conftest import GIT
-from test_cli import three
+from test_cli import three, ticket
 from test_final import RUNNER, final, fixer, fn
 from test_review import FABLE, ONE, OPUS, RISKY, SOL, STUCK, correct, finding, fix, review
 from test_walk import impl, plan, tw
@@ -792,6 +792,91 @@ def test_a_red_gate_on_the_implementer_commit_starts_fix_round_1_with_the_record
     assert "findings-0.json" in rig.prompt("fixer-1") and rig.state()["tickets"]["01"]["phase"] == "merged"
     assert "The fix is" not in rig.prompt("reviewer-1")  # no review saw the implementer commit: a full review
     assert [gate["commit"] for gate in rig.gates()].count(tip) == 1 and not rig.led("killed by signal")
+
+
+# ---------------------------------------------------------------- a red full gate at landing
+
+def full_red(rig, commit):
+    """The exit of each full gate that the rig's gate logged on `commit`."""
+    return [gate["exit"] for gate in rig.gates("full") if gate["commit"] == commit]
+
+
+def test_a_red_full_gate_at_landing_starts_round_1_and_the_fix_gets_a_fast_gate_a_re_review_and_a_full_gate(tmp_path):
+    rig = Inside(tmp_path, gate={"full": {"subjects": ["feat: 01 rows"]}})
+    rig.run(plan(**{"01/fixer": [fix("01", 1)]}))
+    assert rig.code == 0, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer", "fixer", "reviewer"]
+    tip, fixed = rig.sha("01", "implementer"), rig.sha("01", "fixer")
+    record = f".agent/implement/01/gate-full-{tip[:7]}.log"
+    assert full_red(rig, tip) == [1] and full_red(rig, fixed) == [0]
+    assert [gate["commit"] for gate in rig.gates("fast")] == [tip, fixed]
+    # The PR branch did not move to the red tip: the fixer started with the PR branch at the spec commit.
+    fixer_call = rig.calls("01", "fixer")[0]
+    assert "feat: 01 rows" not in fixer_call["pr_log"] and fixer_call["branch"] == "ticket/feat%2Fcsv/01"
+    *review_findings, gate = json.loads((rig.folder() / "findings-0.json").read_text())
+    assert (gate["source"], gate["severity"], gate["kind"], gate["file"]) == ("gate", "critical", "code", record)
+    assert gate["title"] == f"the full gate is red on {tip[:7]}"
+    assert rig.led(f"Ticket 01: the full gate is red on {tip[:7]} at the landing, so feat/csv does not move and fix "
+                   "round 1 starts.")
+    prompt = rig.prompt("fixer-1")
+    assert "findings-0.json" in prompt and record in prompt and "not on ticket/feat%2Fcsv/01" not in prompt
+    assert f"The fix is {tip}..{fixed}" in rig.prompt("reviewer-1")
+    entry = rig.state()["tickets"]["01"]
+    assert (entry["round"], entry["phase"], entry["landing"]) == (1, "merged", None)
+
+
+def test_a_red_full_gate_on_a_merge_commit_sends_the_fixer_to_the_ticket_branch_with_the_merge_commit(tmp_path):
+    files = {"01-export-rows.md": ticket("01", "Export rows"),
+             "02-quote-fields.md": ticket("02", "Quote fields", touches="`demo/other.py: g`")}
+    rig = Inside(tmp_path, files, gate={"full": {"subjects": ["feat: 02 rows"]}})
+    rig.run(plan(**{"02/implementer": [impl("02", "demo/other.py", wait_pr_moves=True)],
+                    "02/fixer": [fix("02", 1, files={"demo/other.py": "x = 1\n"})]}))
+    assert rig.code == 0, "\n".join(rig.ledger())
+    tip = rig.sha("02", "implementer")
+    (merge,) = [gate["commit"] for gate in rig.gates("full") if gate["exit"]]
+    assert merge != tip and tip not in [gate["commit"] for gate in rig.gates("full")]
+    fixer_call = rig.calls("02", "fixer")[0]
+    assert (fixer_call["branch"], fixer_call["head"]) == ("ticket/feat%2Fcsv/02", tip)
+    prompt = rig.prompt("fixer-1", "02")
+    assert f"{merge[:7]} is not on ticket/feat%2Fcsv/02: it is the merge commit" in prompt
+    assert f"implement/02/gate-full-{merge[:7]}.log" in prompt and "git merge --no-commit --no-ff feat/csv" in prompt
+    assert rig.state()["tickets"]["02"]["phase"] == "merged"
+
+
+def test_a_red_full_gate_at_landing_after_round_2_blocks_the_ticket_and_its_dependent(tmp_path):
+    rig = Inside(tmp_path, three(), gate={"full": {"subjects": ["fix: 01 round 2"]}})
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK]), review("01", [STUCK]), review("01")],
+                    "01/fixer": [fix("01", n) for n in (1, 2)]}))
+    (red,) = [gate["commit"] for gate in rig.gates("full") if gate["exit"]]  # 03 may land first: then a merge commit
+    assert f"BLOCKED at the merge: the full gate is red on {red[:7]}" in blocked(rig), rig.ledger()
+    assert len(rig.calls("01", "fixer")) == 2 and rig.state()["tickets"]["01"]["round"] == 2
+    assert "fix: 01 round 2" not in rig.pr_subjects() and "Ticket 01: merged" not in "".join(rig.ledger())
+    assert not rig.calls("02") and rig.state()["tickets"]["02"]["phase"] == "pending"
+    assert rig.state()["tickets"]["03"]["phase"] == "merged"
+
+
+def test_a_run_stopped_after_a_red_full_gate_at_landing_resumes_with_the_fixer(tmp_path, monkeypatch):
+    rig = Inside(tmp_path, gate={"full": {"subjects": ["feat: 01 rows"]}})
+    real = driver_fixloop.red_landing
+
+    def stop(*args):
+        try:
+            real(*args)
+        except driver_fixloop.Unlanded:
+            raise driver_run.Halted("stopped right after the red landing") from None
+
+    monkeypatch.setattr(driver_fixloop, "red_landing", stop)
+    steps = plan(**{"01/fixer": [fix("01", 1)]})
+    rig.run(steps)
+    assert rig.code == 4 and not rig.calls("01", "fixer"), rig.ledger()
+    entry, tip = rig.state()["tickets"]["01"], rig.sha("01", "implementer")
+    assert (entry["phase"], entry["round"], entry["landing"]) == ("fix", 1, tip)
+    monkeypatch.setattr(driver_fixloop, "red_landing", real)
+    rig.run(steps)
+    assert rig.code == 0, rig.ledger()
+    roles = [call["role"] for call in rig.calls("01")]
+    assert roles == ["test-writer", "implementer", "reviewer", "fixer", "reviewer"]
+    assert full_red(rig, tip) == [1] and rig.state()["tickets"]["01"]["round"] == 1
 
 
 def killed(rig, subject, times, end="os.kill(os.getpid(), signal.SIGTERM)"):
