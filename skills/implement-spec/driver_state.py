@@ -65,6 +65,8 @@ class State:
             for entry in tickets.values():  # a run of an older driver lacks the newer keys
                 for key, value in _ticket().items():
                     entry.setdefault(key, value)
+                if isinstance(entry["rejected"], dict):  # an older driver kept a role -> why record
+                    entry["rejected"] = entry["rejected"].get("reviewer", "")
         return self.update(change)
 
     def update(self, change) -> dict:

@@ -65,8 +65,7 @@ def _run_reviewer(job: Job) -> dict:
     values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
     state = job.run.state.read()
-    # Why the driver rejected the reviewer before the ruling; the role -> reason record of an older driver is not read.
-    before = rejected if isinstance(rejected := state["tickets"][number]["rejected"], str) else ""
+    before = state["tickets"][number]["rejected"]  # why the driver rejected the reviewer before the ruling
     evidence = str(OUT / number / f"reviewer-{job.round}.json")
     notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
