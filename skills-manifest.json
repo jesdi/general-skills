@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-29T00:14:15.372Z",
+  "generatedAt": "2026-10-29T01:26:25.649Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -58,8 +58,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.44",
-      "hash": "sha256-aad49a1a588a184db8c0d46e229075808a2989eb89287e1049c24819a3bb730f",
+      "version": "0.1.45",
+      "hash": "sha256-414150538cb2f16ab2d27a7c49fd1ee49fc92ac009e775afe9df9ebc46348c1f",
       "description": "Implement a specification in code."
     },
     {
