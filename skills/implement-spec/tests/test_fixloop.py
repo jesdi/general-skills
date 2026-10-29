@@ -1278,7 +1278,7 @@ def test_the_templates_of_the_new_roles_hold_a_valid_schema_and_end_with_the_rul
 
 def test_no_template_names_the_ledger_and_the_method_of_step_6_is_in_the_reviewer_prompt():
     # The final review gets the ledger as a pointer (requirement 19); no other prompt names it.
-    final = ("final-reviewer.md", "final-lens.md")
+    final = ("final-reviewer.md", "final-lens.md", "lens-correctness.md")
     for path in driver_report.PROMPTS.glob("*.md"):
         assert ("ledger" in path.read_text().lower()) == (path.name in final), path.name
     reviewer = (driver_report.PROMPTS / "reviewer.md").read_text()
