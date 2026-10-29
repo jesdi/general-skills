@@ -1,5 +1,5 @@
 """Fewer roles, ticket 04: after the fix batch of the final review, one scoped re-review runs, the `final-reviewer`
-role on the entry of the correctness lens. No third round starts.
+role on the other-provider entry of the `final-reviewer` list. No third round starts.
 
 In process, on the rig of test_tidy and test_lenses."""
 import json

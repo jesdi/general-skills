@@ -94,38 +94,40 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
         return {}, [f"--models {path}: {exc!r}"]
 
 
-def correctness_entry(models: dict[str, list[str]]) -> str:
-    """The entry of the final correctness lens: the first `final-reviewer` entry on another provider than the
-    implementer's first entry; "" when there is none."""
+def other_provider_entry(models: dict[str, list[str]]) -> str:
+    """The other-provider entry of the `final-reviewer` list, for the correctness lens and the scoped review: its first
+    entry on another provider than the implementer's first entry; "" when there is none."""
     own = split(models["implementer"][0])[0]
     return next((entry for entry in models["final-reviewer"] if split(entry)[0] != own), "")
 
 
 def lens_entry(models: dict[str, list[str]], role: str) -> str:
-    """The entry of a lens of the final review: the correctness entry for a lens on another provider, else the first
-    `final-reviewer` entry."""
-    return correctness_entry(models) if LENSES[role].other_provider else models["final-reviewer"][0]
+    """The entry of a lens of the final review: the other-provider entry for a lens on another provider, else the
+    first `final-reviewer` entry."""
+    return other_provider_entry(models) if LENSES[role].other_provider else models["final-reviewer"][0]
 
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:
     """Every entry error of the merged lists."""
     # The entries whose CLI must be on PATH; entries[0]: an empty list is an error.
-    first = {(role, entries[0]) for role, entries in models.items()} | {("final-reviewer", correctness_entry(models))}
+    first = {(role, entries[0]) for role, entries in models.items()} | {
+        ("final-reviewer", other_provider_entry(models))}
     found = [_entry_error(role, entry, (role, entry) in first) for role, entries in models.items() for entry in entries]
     if len(models["implementer"]) < 2:
         found.append("implementer: a second implementer model entry is required for fix round 2")
-    if not correctness_entry(models):
+    if not other_provider_entry(models):
         found.append(f"final-reviewer: no entry of its list ({', '.join(models['final-reviewer'])}) is on another "
-                     f"provider than the implementer's first entry {models['implementer'][0]}; the correctness lens "
-                     "of the final review never runs on the implementer's provider")
+                     f"provider than the implementer's first entry {models['implementer'][0]}; its other-provider "
+                     "entry serves the correctness lens of the final review and the scoped review, which never run on "
+                     "the implementer's provider")
     return [error for error in found if error]
 
 
 def used_entries(models: dict[str, list[str]]) -> list[str]:
-    """Each entry the driver can start an agent on: the first of each role, the correctness lens entry and the second
+    """Each entry the driver can start an agent on: the first of each role, the other-provider entry and the second
     implementer entry (fix round 2)."""
     firsts = (entries[0] for entries in models.values())
-    return sorted({*firsts, correctness_entry(models), *models["implementer"][1:2]})
+    return sorted({*firsts, other_provider_entry(models), *models["implementer"][1:2]})
 
 
 def preflight(models: dict[str, list[str]]) -> list[str]:
