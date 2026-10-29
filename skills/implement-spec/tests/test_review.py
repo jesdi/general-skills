@@ -1,27 +1,21 @@
-"""Ticket 04 acceptance tests: review, correctness pass, fix loop, fixture corrections, conflict agent.
+"""Ticket 04 acceptance tests: review, fix loop, fixture corrections, conflict agent.
 
 All through `sh run.sh --runner <script>` on the fixture repository (the rig of test_walk). The fake runner also plays
-reviewer, correctness, fixer, conflict and a second test-writer call; a role it has no script for reports nothing wrong.
+reviewer, fixer, conflict and a second test-writer call; a role it has no script for reports nothing wrong.
 
 Interface choices (ticket 04):
 - the runner replaces the CLI, so a model entry is observed in the ledger: the line of a call names its role and entry.
 - a fix round runs the role `fixer` (report `fixer-<round>.json`) on the implementer's model list: entry 0 in round
   1, entry 1 in round 2. `state.json` `round` counts fix rounds only. The review that follows round K writes
-  `reviewer-K.json` (the first review `reviewer-0.json`); a correctness pass writes `correctness-K.json`.
+  `reviewer-K.json` (the first review `reviewer-0.json`).
 - `mutations[].test` is `<locked file>::test_x`; a re-review prompt names each mutation proof to repeat as
   `<file>:<line>`, with the line number it has at the new tip.
-- an installed skill without a sibling `review-diff/correctness.md` makes the driver exit 3 before any agent, and the
-  message names `review-diff/correctness.md`.
 - a second conflict on one merge: the PR branch moved again while the conflict agent worked.
 """
-import json
-import shutil
-import subprocess
-from pathlib import Path
 
 import pytest
 
-from test_cli import SKILL, ticket, three, git, models_file
+from test_cli import ticket, three, git, models_file
 from test_walk import RUNNER, Rig, fix, impl, plan, tw
 
 # The fake runner of test_walk plus three hooks: `git` runs before the step's files, `git_after` right after them,
@@ -37,7 +31,7 @@ assert HOOKED.count("git_after") == 1 and HOOKED.count('step.get("git", [])') ==
 
 ONE = {"01-export-rows.md": ticket("01", "Export rows")}
 RISKY = {"02-quote-fields.md": ticket("02", "Quote fields", risk="persistence")}
-OPUS, FABLE, SOL = "claude-opus-5@medium", "claude-fable-5-1@high", "openai/gpt-sol@medium"
+OPUS, FABLE = "claude-opus-5@medium", "claude-fable-5-1@high"
 LONG = "".join(f"v{i} = {i}\n" for i in range(1, 41))
 
 
@@ -74,11 +68,6 @@ def review(nn="01", findings=(), lines=(1,), **extra):
     return {"stdout": "".join(p["red"] + "\n" for p in proofs), "report": report, **extra}
 
 
-def correct(findings=(), **extra):
-    report = dict(status="DONE", commits=[], files=[], concerns=[], findings=list(findings))
-    return {"report": report, **extra}
-
-
 def edit(text, **new):
     """`text` with line N replaced (keyword `l<N>`)."""
     lines = text.splitlines(keepends=True)
@@ -102,60 +91,20 @@ def test_a_changed_locked_file_is_a_critical_finding_that_starts_a_fix_round(tmp
     assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == locked["tests/test_01.py"]
 
 
-# ---------------------------------------------------------------- correctness pass
-
-@pytest.fixture(scope="module")
-def pair(tmp_path_factory):
-    """Ticket 02 (Risk: persistence), codex on PATH: reviewer and correctness each wait for the other to start."""
-    rig = Review(tmp_path_factory.mktemp("pair"), RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
-    steps = plan(**{
-        "02/reviewer": [review("02", [finding("R-MINOR", "minor")], touch=["r"], wait=["c"])],
-        "02/correctness": [correct([finding("C-IMPORTANT")], touch=["c"], wait=["r"])],
-        "02/fixer": [fix("02", 1)]})
-    return rig.run(steps)
-
-
-def test_reviewer_and_correctness_run_at_the_same_time_on_their_models(pair):
-    assert pair.code == 0, pair.output()
-    (r,), (c,) = pair.calls("02", "reviewer")[:1], pair.calls("02", "correctness")[:1]
-    assert r["t0"] < c["t1"] and c["t0"] < r["t1"], "each started before the other ended"
-    assert pair.led("reviewer", OPUS) and pair.led("correctness", "gpt-sol@medium")
-
-
-def test_findings_of_both_reports_are_merged_with_their_severities(pair):
-    assert len(pair.calls("02", "fixer")) == 1, "the important finding of the correctness pass starts a round"
-    assert pair.led("R-MINOR", "minor") and pair.led("C-IMPORTANT", "important")
-    assert pair.state()["tickets"]["02"]["phase"] == "merged"
-
-
-# Ticket 08: the pass is never folded into the reviewer. A correctness entry with no CLI on PATH stops the run at the
-# start: test_amendments.py test_a_correctness_entry_whose_cli_is_not_on_path_stops_the_run_before_any_agent.
-
-def test_an_installed_skill_without_review_diff_fails_clearly_before_any_agent(tmp_path):
-    rig = Review(tmp_path, RISKY)
-    copy = tmp_path / "installed/skills/implement-spec"
-    shutil.copytree(SKILL, copy, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "test_*"))
-    (rig.rig / "plan.json").write_text(json.dumps(plan()))
-    args = ["--tickets", ".agent/tickets", "--gate", f"TIER=full {rig.rig / 'gate'}", "--fast-gate", f"TIER=fast {rig.rig / 'gate'}", "--spec", "specs/csv/spec.md",
-            "--models", str(rig.models), "--runner", str(rig.rig / "run-agent")]
-    proc = subprocess.run(["sh", str(copy / "run.sh"), *args], cwd=rig.repo, env=rig.env, text=True,
-                          capture_output=True, timeout=120)
-    assert proc.returncode == 3, proc.stdout + proc.stderr
-    assert "review-diff/correctness.md" in proc.stdout + proc.stderr
-    assert not rig.calls() and not (rig.repo / ".agent/implement/summary.md").exists()
-
+# ---------------------------------------------------------------- the reviewer alone
 
 @pytest.fixture(scope="module")
 def plain(tmp_path_factory):
     """A ticket without a Risk line whose reviewer reports two minor findings."""
-    rig = Review(tmp_path_factory.mktemp("plain"), ONE, {"correctness": [SOL, OPUS]})
+    rig = Review(tmp_path_factory.mktemp("plain"), ONE)
     return rig.run(plan(**{"01/reviewer": [review("01", [finding("M-ONE", "minor"), finding("M-TWO", "minor")])]}))
 
 
-def test_a_ticket_without_a_risk_line_runs_no_correctness_pass(plain):
+def test_a_ticket_without_a_risk_line_is_reviewed_by_one_agent_told_it_names_no_risk(plain):
     assert plain.code == 0, plain.output()
-    assert len(plain.calls("01", "reviewer")) == 1 and not plain.calls("01", "correctness")
-    assert not plain.led("folded")
+    (call,) = plain.calls("01", "reviewer")
+    assert "The ticket names no risk." in call["prompt"]
+    assert [c["role"] for c in plain.calls("01")] == ["test-writer", "implementer", "reviewer"]
 
 
 def test_a_review_with_only_minor_findings_passes_and_writes_them_to_the_ledger(plain):

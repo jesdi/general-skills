@@ -39,7 +39,7 @@ from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no
 from test_stops import UNATTENDED, decisions, stage
 from test_walk import fix, impl, plan, tw
 
-SCOPED = HOOKED.replace('("reviewer", "correctness")', '("reviewer", "correctness", "final-reviewer")')
+SCOPED = HOOKED
 RUNNER = SCOPED.replace(
     'for cmd in step.get("git", []):',
     '''if step.get("wait_pr_has"):

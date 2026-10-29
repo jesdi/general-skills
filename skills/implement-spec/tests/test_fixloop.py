@@ -19,7 +19,7 @@ import test_review
 from conftest import GIT
 from test_cli import three, ticket
 from test_final import RUNNER, final, fixer, fn
-from test_review import FABLE, ONE, OPUS, RISKY, SOL, STUCK, correct, finding, fix, review
+from test_review import FABLE, ONE, OPUS, RISKY, STUCK, finding, fix, review
 from test_walk import impl, plan, tw
 
 
@@ -70,25 +70,46 @@ def blocked(rig, nn="01"):
 
 # ---------------------------------------------------------------- who reviews
 
-def test_a_risky_ticket_gets_both_agents_and_one_merged_findings_file(tmp_path):
-    rig = Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
-    rig.run(plan(**{"02/reviewer": [review("02", [finding("R-MINOR", "minor")])],
-                    "02/correctness": [correct([finding("C-IMPORTANT")])], "02/fixer": [fix("02", 1)]}))
+LEDGER = "two runs at once can both write the ledger"
+INTERLEAVE = {**finding("concurrent writes interleave ledger lines", "critical"), "basis": "criterion"}
+
+
+def ledger_tickets():
+    """Ticket 01 with a Risk line, 02 after it with none, and 03 independent of both."""
+    return three(**{"01-export-rows.md": ticket("01", "Export rows", risk=LEDGER),
+                    "02-quote-fields.md": ticket("02", "Quote fields", "01")})
+
+
+def test_a_risky_ticket_and_a_plain_one_are_each_reviewed_by_the_reviewer_alone(tmp_path):
+    rig = Inside(tmp_path, ledger_tickets()).run(plan())
     assert rig.code == 0, rig.ledger()
-    assert rig.led("Ticket 02: minor finding of kind code from the reviewer at demo/export.py:99: R-MINOR.")
-    assert rig.led("important finding of kind code from the correctness at", "C-IMPORTANT") and rig.led("correctness ran on", SOL)
-    merged = json.loads((rig.folder("02") / "findings-0.json").read_text())
-    assert [(f["source"], f["severity"], f["title"]) for f in merged] == [
-        ("reviewer", "minor", "R-MINOR"), ("correctness", "important", "C-IMPORTANT")]
-    assert ".agent/implement/02/findings-0.json" in rig.prompt("fixer-1", "02")
-    # Both agents review the fix again, each scoped to it; only the reviewer's first report must prove the tests.
-    for role in ("reviewer", "correctness"):
-        again = rig.prompt(f"{role}-1", "02")
-        assert "This is the re-review after fix round 1." in again and "findings-0.json" in again
-        assert again.rstrip().endswith("one ref store.") and "re-review" not in rig.prompt(f"{role}-0", "02")
-    assert driver_review.CORRECTNESS.read_text() in rig.prompt("correctness-0", "02")
-    assert "correctness.md" not in rig.prompt("reviewer-0", "02") and not rig.led("folded")
-    assert json.loads((rig.folder("02") / "findings-1.json").read_text()) == []
+    for nn in ("01", "02"):
+        assert [call["role"] for call in rig.calls(nn) if call["role"] not in ("test-writer", "implementer")] == [
+            "reviewer"], nn
+        assert not list(rig.folder(nn).glob("correctness*")), nn
+    risky = rig.prompt("reviewer-0", "01")
+    assert f"Check the Risk line of the ticket as one more criterion: {LEDGER}." in risky
+    assert "names no risk" not in risky
+    assert "The ticket names no risk." in rig.prompt("reviewer-0", "02")
+
+
+def test_an_unhandled_risk_is_a_criterion_finding_that_starts_fix_round_1(tmp_path):
+    rig = Inside(tmp_path, ledger_tickets())
+    rig.run(plan(**{"01/reviewer": [review("01", [INTERLEAVE])], "01/fixer": [fix("01", 1)]}))
+    assert rig.code == 0, rig.ledger()
+    (found,) = json.loads((rig.folder("01") / "findings-0.json").read_text())
+    assert (found["title"], found["basis"], found["source"]) == (INTERLEAVE["title"], "criterion", "reviewer")
+    assert len(rig.calls("01", "fixer")) == 1 and ".agent/implement/01/findings-0.json" in rig.prompt("fixer-1", "01")
+    assert rig.led("critical finding of kind code from the reviewer", INTERLEAVE["title"])
+
+
+def test_an_unhandled_risk_at_the_cap_blocks_the_ticket_and_an_independent_one_goes_on(tmp_path):
+    rig = Inside(tmp_path, ledger_tickets())
+    rig.run(plan(**{"01/reviewer": [review("01", [INTERLEAVE])] * 3, "01/fixer": [fix("01", n) for n in (1, 2)]}))
+    assert rig.code == 1 and rig.state()["tickets"]["01"]["round"] == 2, rig.ledger()
+    assert rig.led("BLOCKED at the review: after round 2 these findings are open: concurrent writes interleave")
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked" and not rig.calls("02")
+    assert rig.state()["tickets"]["03"]["phase"] == "merged"
 
 
 def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
@@ -107,24 +128,6 @@ def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
     assert rig.code == 0, rig.ledger()
     assert [item["title"] for item in rig.state()["run"]["final"]["must_fix"]] == ["QUOTING-REGRESSION"]
     assert "QUOTING-REGRESSION" in rig.prompt("fixer-1", "final")
-
-
-def test_correctness_entry_is_the_first_of_another_provider_than_the_implementers():
-    models = {"implementer": ["opus@medium"], "correctness": ["opus@high", "openai/a@low", "openai/b@low"]}
-    assert driver_agents.correctness_entry(models) == "openai/a@low"
-    assert driver_agents.correctness_entry({**models, "implementer": ["openai/x@low", "opus@low"]}) == "opus@high"
-    assert driver_agents.correctness_entry({**models, "correctness": ["opus@high", "claude-fable-5@low"]}) == ""
-
-
-def test_a_set_with_a_risk_ticket_needs_review_diff_and_a_set_without_one_does_not(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(driver_review, "CORRECTNESS", tmp_path / "skills/review-diff/correctness.md")
-    rig = Inside(tmp_path, three()).run(plan())
-    assert rig.code == 3 and not rig.calls() and not (rig.repo / ".agent/implement").exists()
-    out = capsys.readouterr().out
-    assert f"{tmp_path}/skills/review-diff/correctness.md is missing: ticket 02 has a Risk line" in out
-    assert "install the review-diff skill next to implement-spec" in out
-    plain = Inside(under(tmp_path, "plain"), ONE).run(plan())
-    assert plain.code == 0 and plain.state()["tickets"]["01"]["phase"] == "merged"
 
 
 # ---------------------------------------------------------------- the locked files
@@ -1049,7 +1052,6 @@ def test_the_locked_file_rule_is_for_the_first_review_only(tmp_path):
     assert driver_report.validate("reviewer", str(path), {**context, "full": True}) == [
         "mutations: no mutation proof for the locked test file tests/a.py",
         "mutations: no mutation proof for the locked test file tests/b.py"]
-    assert driver_report.validate("correctness", str(path), context) == []
 
 
 def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_the_slot(tmp_path):
@@ -1057,7 +1059,7 @@ def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_t
     tip = subprocess.run(["git", "-C", str(rig.repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     (rig.repo / "junk.txt").write_text("x\n")
     context, shared = {"repo": str(rig.repo), "branch": "feat/csv", "start": tip}, lambda: False
-    assert "first revert each edit of the earlier attempt" in driver_run._timeout_lines("correctness", 30, context, shared)
+    assert "first revert each edit of the earlier attempt" in driver_run._timeout_lines("reviewer", 45, context, shared)
     assert (rig.repo / "junk.txt").exists()
     assert "in the tree: continue from it" in driver_run._timeout_lines("fixer", 60, context, shared) and (rig.repo / "junk.txt").exists()
     # `--only reviewer`: one agent
@@ -1337,93 +1339,76 @@ def test_no_template_names_the_ledger_and_the_method_of_step_6_is_in_the_reviewe
         assert sentence in reviewer, sentence
 
 
-def test_the_correctness_prompt_keeps_the_agent_off_the_tree_the_reviewer_edits():
-    text = (driver_report.PROMPTS / "correctness.md").read_text()
-    assert "Read file content from git at {start_sha}" in text and "never from the working tree" in text
-    assert "run no tests" in text
-
-
-def test_the_correctness_pass_reads_the_untracked_inputs_of_the_driver_from_the_working_tree(tmp_path):
-    """Issue 66: the ticket and the findings files are in the ignored .agent/, so git at the tip has none of them."""
-    rig = Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
-    rig.run(plan(**{"02/correctness": [correct([finding("C-IMPORTANT")])], "02/fixer": [fix("02", 1)]}))
-    assert rig.code == 0, rig.ledger()
-    again = rig.prompt("correctness-1", "02")
-    inputs = (".agent/tickets/02-quote-fields.md", ".agent/implement/02/findings-0.json")
-    assert all(path in again for path in inputs), again
-    tracked = subprocess.run(["git", "-C", str(rig.repo), "ls-files", *inputs], capture_output=True, text=True).stdout
-    assert tracked == ""
-    assert "read the spec, the ticket and the findings file from the working tree" in again
-
-
-def test_the_correctness_prompt_carries_the_checks_of_a_review_diff_in_a_gitignored_directory(tmp_path, monkeypatch):
-    """Issue #120: a project-local install is ignored, and the pass may read neither the tree nor git for it."""
-    rig = Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]}, ignore=".my-skills/")
-    checks = rig.repo / ".my-skills/review-diff/correctness.md"
-    checks.parent.mkdir(parents=True)
-    checks.write_text("# Correctness reviewer\n\n| Check | Flag |\n|---|---|\n| Ledger | A row booked twice. |\n")
-    monkeypatch.setattr(driver_review, "CORRECTNESS", checks)
-    rig.run(plan())
-    assert rig.code == 0, rig.ledger()
-    ignored = subprocess.run(["git", "-C", str(rig.repo), "check-ignore", "-q", str(checks)])
-    assert ignored.returncode == 0
-    assert "| Ledger | A row booked twice. |" in rig.prompt("correctness-0", "02")
-
-
 STOPPED = "02-review-stopped-1"
 
 
-def stuck(role, status="NEEDS_CONTEXT"):
+def stuck(status="NEEDS_CONTEXT"):
     """A review step whose report stops: BLOCKED or NEEDS_CONTEXT, with no finding."""
-    step = review("02") if role == "reviewer" else correct()
+    step = review("02")
     step["report"] = {**step["report"], "status": status, "concerns": ["the checks file is absent"]}
     return step
 
 
 def risky(tmp_path):
-    return Inside(tmp_path, RISKY, {"correctness": [SOL, OPUS], "implementer": [OPUS]})
+    return Inside(tmp_path, RISKY)
 
 
-@pytest.mark.parametrize("role", ["reviewer", "correctness"])
-def test_a_review_that_reports_needs_context_asks_the_operator_and_retry_resumes_it(tmp_path, role):
-    """Issue #120: a stopped reviewer or correctness pass was a dead end with no question."""
-    steps = plan(**{f"02/{role}": [stuck(role)]})
+def test_a_review_that_reports_needs_context_asks_the_operator_and_retry_resumes_it(tmp_path):
+    """Issue #120: a stopped reviewer was a dead end with no question."""
+    steps = plan(**{"02/reviewer": [stuck()]})
     rig = risky(tmp_path)
     rig.run(steps)
     assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
-    assert rig.led(f"BLOCKED at the review: the {role}: the {role} reported NEEDS_CONTEXT: the checks file is absent.")
+    assert rig.led("BLOCKED at the review: the reviewer: the reviewer reported NEEDS_CONTEXT: the checks file is absent.")
     (question,) = rig.state()["run"]["questions"]
     assert (question["id"], question["recommended"]) == (STOPPED, "retry")
     assert [o["id"] for o in question["options"]] == ["retry", "accept", "redesign"]
-    assert question["evidence"][0] == f".agent/implement/02/{role}-0.json"
+    assert question["evidence"][0] == ".agent/implement/02/reviewer-0.json"
+    assert "correctness" not in json.dumps(question)
     rig.run(steps, "--answer", f"{STOPPED}=retry")
     assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
-    assert len(rig.calls("02", role)) == 2
-    assert rig.led(f"Ruling: 02 review runs again (retry): the {role} reported NEEDS_CONTEXT")
+    assert len(rig.calls("02", "reviewer")) == 2
+    assert rig.led("Ruling: 02 review runs again (retry): the reviewer reported NEEDS_CONTEXT")
 
 
-def test_an_accepted_review_stop_closes_the_review_with_the_other_reports(tmp_path):
-    steps = plan(**{"02/correctness": [stuck("correctness", "BLOCKED")] * 2,
-                    "02/reviewer": [review("02"), review("02", [finding("R-IMPORTANT")]), review("02")],
-                    "02/fixer": [fix("02", 1)]})
+def test_an_accepted_review_stop_lets_the_review_go_on_with_the_report(tmp_path):
+    steps = plan(**{"02/reviewer": [stuck("BLOCKED")] * 2})
     rig = risky(tmp_path)
     rig.run(steps)
     assert rig.code == 2, rig.ledger()
     rig.run(steps, "--answer", f"{STOPPED}=accept")
     assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
-    # The reviewer's finding still gets its fix round; the stopped pass does not stop the ticket again.
-    assert rig.state()["tickets"]["02"]["round"] == 1 and len(rig.calls("02", "correctness")) == 3
-    assert rig.led("the correctness reported BLOCKED: the checks file is absent", "goes on with the other reports")
+    assert len(rig.calls("02", "reviewer")) == 2
+    assert rig.led("the reviewer reported BLOCKED: the checks file is absent", "goes on with its report")
 
 
 def test_a_review_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
-    steps = plan(**{"02/correctness": [stuck("correctness")]})
+    steps = plan(**{"02/reviewer": [stuck()]})
     rig = risky(tmp_path)
     rig.run(steps)
     assert rig.code == 2, rig.ledger()
     rig.run(steps, "--answer", f"{STOPPED}=redesign")
     assert rig.code == 1 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
-    assert len(rig.calls("02", "correctness")) == 1
+    assert len(rig.calls("02", "reviewer")) == 1
+
+
+def test_a_resumed_review_whose_older_records_name_the_correctness_pass_runs_the_reviewer_alone(tmp_path):
+    """An older driver stopped on its correctness pass: the accepted ruling and the rejection record name it."""
+    steps = plan(**{"02/reviewer": [stuck()] * 2})
+    rig = risky(tmp_path)
+    rig.run(steps)
+    assert rig.code == 2, rig.ledger()
+    path = rig.repo / ".agent/implement/state.json"
+    state = json.loads(path.read_text())
+    (question,) = state["run"]["questions"]
+    question["subject"] = "the correctness reported BLOCKED: the checks file is absent"
+    state["tickets"]["02"]["rejected"] = {"correctness": "no mutation proof"}
+    path.write_text(json.dumps(state))
+    rig.run(steps, "--answer", f"{STOPPED}=accept")
+    # The ruling on the correctness pass does not cover the reviewer, whose stop asks again.
+    assert rig.code == 2 and [q["id"] for q in rig.state()["run"]["questions"]] == [STOPPED, "02-review-stopped-2"]
+    second = rig.calls("02", "reviewer")[1]["prompt"]
+    assert "no mutation proof" not in second and "correctness" not in second
 
 
 def test_the_reviewer_schema_asks_for_one_proof_for_each_locked_test_file_in_the_first_review():

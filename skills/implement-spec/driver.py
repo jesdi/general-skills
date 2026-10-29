@@ -44,7 +44,7 @@ from driver_tickets import Ticket
 STATE = OUT / "state.json"
 DECISIONS = OUT / "decisions.json"
 PAGE = Path(".agent/implement-review.html")
-ONLY = ("test-writer", "implementer", "reviewer", "correctness")  # `--only` is for tests
+ONLY = ("test-writer", "implementer", "reviewer")  # `--only` is for tests
 # The phase of a ticket while a role runs, and the phase it reaches when the role's report is accepted.
 DURING = {"test-writer": "test-writer", "implementer": "implement"}
 AFTER = {"test-writer": "implement", "implementer": "gate"}
@@ -93,13 +93,21 @@ def _overruled(number: str, run: Run) -> list[str]:
     return [concern for concern in concerns if concern.startswith(driver_decisions.CONTRADICTS)]
 
 
+def _risk(ticket: Ticket) -> str:
+    """The reviewer's line on the Risk line of the ticket: one more criterion to check."""
+    if not ticket.risk:
+        return "The ticket names no risk."
+    return (f"Check the Risk line of the ticket as one more criterion: {ticket.risk}. A risk that the diff does not "
+            "handle is an unmet criterion.")
+
+
 def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
     """The pointers every prompt of the ticket gets. An agent works in its slot, so paths are relative to it."""
     folder = OUT / ticket.number
     return {"spec": os.path.relpath(run.args.spec, slot), "seam": ticket.seam, "pr_branch": run.pr,
             "branch": run.names.ticket(ticket.number),
             "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
-            "correctness": driver_review.checks(), "gate": run.args.fast_gate,
+            "risk": _risk(ticket), "gate": run.args.fast_gate,
             "blocked_report": os.path.relpath(_blocked_report(ticket.number, run), slot),
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
 
@@ -688,7 +696,7 @@ def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[s
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)
     tickets, ticket_errors = driver_tickets.parse(args.tickets)
-    errors += model_errors + ticket_errors + driver_review.precondition_errors(tickets)
+    errors += model_errors + ticket_errors
     errors += driver_final.precondition_errors(args.push or args.unattended, args.base)
     for error in errors:
         print(error)

@@ -13,8 +13,7 @@ RUN = SKILL / "run.sh"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 TOOLS = ("sh", "uname", "dirname", "readlink", "git", "env", "mktemp", "curl", "tar", "gzip", "mv", "rm", "mkdir",
          "sha256sum", "shasum", "cat", "chmod", "ln", "date", "basename")
-ROLES = ("explorer", "test-writer", "implementer", "reviewer", "correctness", "fixer", "final-reviewer", "conflict",
-         "pr-writer")
+ROLES = ("test-writer", "implementer", "reviewer", "fixer", "final-reviewer", "conflict", "pr-writer")
 NONE = "None (can start immediately)"
 
 
@@ -85,7 +84,6 @@ def env(tmp_path):
 
 def models_file(tmp_path, **overrides):
     entries = {role: ["anthropic/claude-opus-5@medium"] for role in ROLES}
-    entries["correctness"] = ["openai/gpt-sol@medium"]
     entries.update(overrides)
     if len(entries["implementer"]) == 1:
         first = entries["implementer"][0]

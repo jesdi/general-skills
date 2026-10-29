@@ -1,9 +1,7 @@
 {
-  "explorer": ["claude-sonnet-5-5@medium"],
   "test-writer": ["claude-sonnet-5-5@medium", "openai/gpt-6.1-sol@medium"],
   "implementer": ["claude-sonnet-5-5@medium", "claude-opus-5-5@medium"],
   "reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],
-  "correctness": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],
   "fixer": ["claude-opus-5-5@medium"],
   "final-reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],
   "conflict": ["claude-opus-5-5@medium"],
