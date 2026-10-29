@@ -142,3 +142,11 @@ def test_begin_opens_the_conflicting_merge_on_a_machine_with_no_git_identity(rep
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.delenv("GIT_CONFIG_COUNT")
     assert driver_merge.begin(".", pr_tip) == ["a.txt"]
+
+
+def test_unsigned_lists_the_commits_origin_lacks_only_when_commit_gpgsign_is_on(repo, monkeypatch):
+    repo()
+    tip = sh("git", "rev-parse", "--short", "HEAD")
+    assert driver_merge.unsigned("HEAD") == []
+    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "true")  # the fixture's commit.gpgsign
+    assert driver_merge.unsigned("HEAD") == [tip]

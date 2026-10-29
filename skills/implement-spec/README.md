@@ -148,6 +148,7 @@ History rules:
 - The branch is rewritten once, before the first review, and never after it. Fixes of the final review stay as `fix(NN)` commits.
 - A history that `origin` already has is never rewritten. When `origin` has the PR branch or one of its commits, the driver does no tidy and no rebase. The gate, the final review and a fast-forward push still run.
 - The push happens only when the branch tip is the reviewed tip and that tip has a green gate record.
+- With `commit.gpgsign` on, the driver signs every commit it makes (ticket merges, tidied and renamed commits) with the configured key. The push happens only when every commit that `origin` lacks has a good signature (`%G?` is `G`); otherwise the end of run is BLOCKED and nothing is pushed.
 
 A repository with no `origin` remote skips only step 2 and step 6. The tidied commits stay on the commit that the PR branch had when the run started, and the review range starts there. One ledger sentence says that the rebase and the push were skipped. The driver prints the two tips and ends with exit 0. When you add `origin` after such an end of run, `--push` does not push: the branch is on no base of that remote, so the end of run is BLOCKED.
 
