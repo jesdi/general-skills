@@ -86,7 +86,7 @@ def test_a_final_reviewer_list_with_no_entry_on_another_provider_exits_3_before_
 
 
 def test_without_the_deep_quality_review_skill_the_run_exits_3_before_any_agent(tmp_path, monkeypatch):
-    monkeypatch.setattr(driver_final, "structure_skill", lambda: None)
+    monkeypatch.setattr(driver_final, "_installed", lambda name: None)
     rig = rig_of(tmp_path).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == ("the deep-quality-review skill is missing: the structure lens of the final review follows it; "

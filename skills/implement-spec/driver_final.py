@@ -42,8 +42,6 @@ KIND = "final-finding"
 ROUNDS = 2  # the full review and the scoped one after the fix batch
 # The final review runs through the review-diff skill, which is installed next to this one.
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
-# The source each lens of the full review gives its findings.
-SOURCES = dict(zip(driver_agents.LENSES, ("spec", "correctness", "structure")))
 SEVERITIES = ("critical", "important", "minor")
 
 
@@ -60,9 +58,11 @@ def pr_skill() -> Path | None:
     return _installed("pr")
 
 
-def structure_skill() -> Path | None:
-    """The SKILL.md of the deep-quality-review skill, which the structure lens of the final review follows."""
-    return _installed("deep-quality-review")
+def _method(lens: driver_agents.Lens) -> Path | None:
+    """The file `lens` follows: in review-diff next to this skill, else in its skill where that is installed. None
+    when its skill is not installed."""
+    skill = REVIEW_DIFF if lens.skill == REVIEW_DIFF.parent.name else _installed(lens.skill)
+    return skill and skill.parent / lens.method
 
 
 def pr_risk_skill() -> Path | None:
@@ -87,14 +87,14 @@ def _has_origin() -> bool:
 
 
 def _method_errors() -> list[str]:
-    """One error per missing method of the final review: the files of review-diff and the deep-quality-review skill."""
+    """One error per missing method of the final review: the files of review-diff and the skill of each other lens."""
+    lenses = driver_agents.LENSES.values()
+    beside = [_method(lens) for lens in lenses if lens.skill == REVIEW_DIFF.parent.name]
     errors = [f"{path} is missing: the final review runs through it; install the review-diff skill next to "
-              "implement-spec" for path in (REVIEW_DIFF, REVIEW_DIFF.parent / "spec.md",
-                                            REVIEW_DIFF.parent / "correctness.md") if not path.exists()]
-    if not structure_skill():
-        errors.append("the deep-quality-review skill is missing: the structure lens of the final review follows it; "
-                      "install it with `npx skills add jesdi/general-skills --skill deep-quality-review`")
-    return errors
+              "implement-spec" for path in (REVIEW_DIFF, *beside) if not path.exists()]
+    return errors + [f"the {lens.skill} skill is missing: the {lens.source} lens of the final review follows it; "
+                     f"install it with `npx skills add jesdi/general-skills --skill {lens.skill}`"
+                     for lens in lenses if not _method(lens)]
 
 
 def precondition_errors(push: bool, base: str | None) -> list[str]:
@@ -431,9 +431,7 @@ def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
     findings, each with the source of its lens. A lens with an accepted report for `tip` does not run again, unless
     a lens changed the slot: then all three run again. The accepted reports are kept only once the slot is as the
     review found it."""
-    values = {**values, "spec_method": str(REVIEW_DIFF.parent / "spec.md"), "structure_method": str(structure_skill()),
-              # Inlined: this lens reads from git, and a project-local review-diff sits in an ignored folder (#120).
-              "checks": (REVIEW_DIFF.parent / "correctness.md").read_text()}
+    values = {role: _lens_values(lens, values) for role, lens in driver_agents.LENSES.items()}
     attempts = []
 
     def review() -> tuple[dict[str, dict], list[str]]:
@@ -446,20 +444,28 @@ def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
         {role: {"tip": tip, "report": report} for role, report in reports.items()}))
     if errors:
         raise Blocked("; ".join(errors))
-    return {"findings": [{**finding, "source": source} for role, source in SOURCES.items()
+    return {"findings": [{**finding, "source": lens.source} for role, lens in driver_agents.LENSES.items()
                          for finding in reports[role]["findings"]]}
 
 
-def _run_lenses(run: Run, values: dict[str, str], kept: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
-    """Run each lens with no report in `kept` at the same time. Returns (the report of each lens that has one, why
+def _lens_values(lens: driver_agents.Lens, values: dict[str, str]) -> dict[str, str]:
+    """The prompt values of `lens`: those of the review, its name and its lines of the shared lens prompt."""
+    path = _method(lens)
+    lines = lens.review.format(path=path, text=path.read_text(), start_sha=values["start_sha"], range=values["range"])
+    return {**values, "lens": lens.source, "method": lines}
+
+
+def _run_lenses(run: Run, values: dict[str, dict[str, str]],
+                kept: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+    """Run each lens with no report in `kept` at the same time, each with its `values`. Returns (the report of each lens that has one, why
     each lens that stopped or whose report was rejected twice stops the round)."""
     due = [role for role in driver_agents.LENSES if role not in kept]
     running, reports, errors, halted = list(due), dict(kept), {}, []
 
     def call(role: str) -> None:
         try:
-            reports[role] = run.agent(role, FINAL, ".", values, entry=driver_agents.lens_entry(run.models, role),
-                                      alone=lambda: len(running) == 1)
+            reports[role] = run.agent(role, FINAL, ".", values[role], entry=driver_agents.lens_entry(run.models, role),
+                                      template="final-lens", alone=lambda: len(running) == 1)
         except Stopped as stopped:
             errors[role] = str(stopped)
         except Blocked as blocked:  # the driver rejected its report two times

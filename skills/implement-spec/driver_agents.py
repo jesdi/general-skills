@@ -15,16 +15,48 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
+
+
+@dataclass(frozen=True)
+class Lens:
+    """A lens of the full final review: a role with no model list, on an entry of the `final-reviewer` list."""
+    source: str  # the `source` of its findings, and its name in the prompt
+    skill: str  # the skill that holds its method
+    method: str  # the file of that skill it follows
+    review: str  # its lines of the prompt; {path} is the method file, {text} its content
+    other_provider: bool  # it runs on another provider than the implementer's first entry
+
+
+# A lens that may run tests runs them on a copy: the other lenses work in the same worktree.
+_COPY = ("To run a targeted check off this worktree, make a copy with `git worktree add --detach <temp dir> {start_sha}`, "
+         "run the check there, and remove the copy with `git worktree remove --force <temp dir>` before you report.")
+# In the order a tie of the merge keeps.
+LENSES = {
+    "final-spec": Lens("spec", "review-diff", "spec.md", (
+        "Review the range with the method in {path}, with the spec above as its spec: did the range build what the "
+        "spec asked, no more, no less? The output section of the method does not apply here: your findings go into "
+        "the report.\n" + _COPY), False),
+    "final-correctness": Lens("correctness", "review-diff", "correctness.md", (
+        # Inlined: this lens reads from git, and a project-local review-diff sits in an ignored folder (#120).
+        "Review the range with the checks below: can it lose money, corrupt data, or let the wrong person act? The "
+        "output section of the checks does not apply here: your findings go into the report.\n\n<checks>\n{text}\n"
+        "</checks>\n\nRead file content from git at {start_sha} (`git diff {range}`, `git show {start_sha}:<path>`), "
+        "never from the working tree, and run no tests: other agents work in this worktree while you do. The one "
+        "exception is the input of the driver, which git can lack because `.agent/` is ignored: read the spec, the "
+        "tickets, the ledger and the evidence files from the working tree.\nReport only a defect that you can show "
+        "with a concrete sequence of events."), True),
+    "final-structure": Lens("structure", "deep-quality-review", "SKILL.md", (
+        "Review the range with the method of the deep-quality-review skill in {path}: is the code getting messier? "
+        "Its output section does not apply here: your findings go into the report.\n" + _COPY), False)}
 # Minutes per role.
-TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "final-reviewer": 60, "final-spec": 60,
-            "final-correctness": 60, "final-structure": 60, "conflict": 30, "pr-writer": 20}
+TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "final-reviewer": 60,
+            **dict.fromkeys(LENSES, 60), "conflict": 30, "pr-writer": 20}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
-# The three lenses of the final review have no model list: they run on entries of the `final-reviewer` list.
-LENSES = ("final-spec", "final-correctness", "final-structure")
 READ_ONLY = ("reviewer", "final-reviewer", *LENSES, "pr-writer")
 PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
 # The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
@@ -84,8 +116,9 @@ def correctness_entry(models: dict[str, list[str]]) -> str:
 
 
 def lens_entry(models: dict[str, list[str]], role: str) -> str:
-    """The entry of a lens of the final review: the correctness entry, else the first `final-reviewer` entry."""
-    return correctness_entry(models) if role == "final-correctness" else models["final-reviewer"][0]
+    """The entry of a lens of the final review: the correctness entry for a lens on another provider, else the first
+    `final-reviewer` entry."""
+    return correctness_entry(models) if LENSES[role].other_provider else models["final-reviewer"][0]
 
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:

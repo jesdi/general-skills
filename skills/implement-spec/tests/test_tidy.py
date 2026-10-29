@@ -585,8 +585,7 @@ def test_without_an_origin_the_run_ends_reviewed_and_a_push_is_refused_at_the_st
     assert driver_summary.render({"run": fresh, "tickets": {}}).startswith("0 of 0 tickets are merged into feat/x.\n\n| Measure")
 
 
-@pytest.mark.parametrize("name", ["final-reviewer", "final-spec", "final-correctness", "final-structure", "final-fixer",
-                                  "rebase-conflict"])
+@pytest.mark.parametrize("name", ["final-reviewer", "final-lens", "final-fixer", "rebase-conflict"])
 def test_the_templates_of_the_end_of_run_hold_a_valid_schema_and_end_with_the_rule(name):
     jsonschema.Draft202012Validator.check_schema(driver_report.schema(name))
     text = (driver_report.PROMPTS / f"{name}.md").read_text()

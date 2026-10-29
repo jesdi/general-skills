@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from driver_agents import READ_ONLY
+from driver_agents import LENSES, READ_ONLY
 from driver_report import validate
 
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
@@ -203,5 +203,6 @@ def test_a_read_only_role_lists_no_commits_so_the_commits_it_reviewed_are_not_re
     # Issue #129: the final reviewer read `commits` as the commits under review, and each was refused as not new.
     shas, check, _ = world
     report = {"status": "DONE", "files": [], "concerns": [], "findings": [], "body": "b"}
-    assert check(role, report, start=shas["impl"]) == []
-    assert check(role, {**report, "commits": [shas["tests"], shas["impl"]]}, start=shas["impl"]) == []
+    template = "final-lens" if role in LENSES else role  # the lenses share one prompt
+    assert check(template, report, start=shas["impl"]) == []
+    assert check(template, {**report, "commits": [shas["tests"], shas["impl"]]}, start=shas["impl"]) == []
