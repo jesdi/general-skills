@@ -11,6 +11,7 @@ commits with a scoped review, then stop before the push, or push and open the PR
     reviewed   the last tip a review covered
     round      the reviews done
     open       the findings the fix batch is due for
+    lenses     {lens role: {tip, report}}: the accepted report of each lens of the full review and the tip it covers
     batch      the tip of the fix batch that the driver validated and named
     green_gates, pushed, pr
 """
@@ -23,6 +24,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import driver_agents
@@ -31,7 +33,7 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_tidy
-from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
+from driver_run import FINAL, OUT, Blocked, Halted, Run, Stopped, during, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
@@ -40,6 +42,9 @@ KIND = "final-finding"
 ROUNDS = 2  # the full review and the scoped one after the fix batch
 # The final review runs through the review-diff skill, which is installed next to this one.
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
+# The source each lens of the full review gives its findings.
+SOURCES = dict(zip(driver_agents.LENSES, ("spec", "correctness", "structure")))
+SEVERITIES = ("critical", "important", "minor")
 
 
 def _installed(name: str) -> Path | None:
@@ -53,6 +58,11 @@ def _installed(name: str) -> Path | None:
 def pr_skill() -> Path | None:
     """The SKILL.md of the pr skill, which the PR body follows."""
     return _installed("pr")
+
+
+def structure_skill() -> Path | None:
+    """The SKILL.md of the deep-quality-review skill, which the structure lens of the final review follows."""
+    return _installed("deep-quality-review")
 
 
 def pr_risk_skill() -> Path | None:
@@ -76,24 +86,38 @@ def _has_origin() -> bool:
     return git(".", "remote", "get-url", "origin").returncode == 0
 
 
+def _method_errors() -> list[str]:
+    """One error per missing method of the final review: the files of review-diff and the deep-quality-review skill."""
+    errors = [f"{path} is missing: the final review runs through it; install the review-diff skill next to "
+              "implement-spec" for path in (REVIEW_DIFF, REVIEW_DIFF.parent / "spec.md",
+                                            REVIEW_DIFF.parent / "correctness.md") if not path.exists()]
+    if not structure_skill():
+        errors.append("the deep-quality-review skill is missing: the structure lens of the final review follows it; "
+                      "install it with `npx skills add jesdi/general-skills --skill deep-quality-review`")
+    return errors
+
+
 def precondition_errors(push: bool, base: str | None) -> list[str]:
     """[] or the errors that stop the run before any agent."""
-    errors = []
-    if not REVIEW_DIFF.exists():
-        errors.append(f"{REVIEW_DIFF} is missing: the final review runs through it; install the review-diff skill "
-                      "next to implement-spec")
-    if push and not pr_skill():
-        errors.append("the pr skill is missing: the PR body follows it; install it with "
-                      "`npx skills add mattpocock/skills --skill pr`, or run without --push and --unattended")
-    if push and not pr_risk_skill():
-        errors.append(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
-                      f"{PR_RISK_INSTALL}, or run without --push and --unattended")
-    if push and not _has_origin():
-        errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
-                      "add the remote, or run without them to stop before the push")
+    errors = _method_errors() + (_push_errors() if push else [])
     if base and not _has_origin():
         errors.append(f"--base {base} names a branch of origin, and the repository has no origin remote; "
                       "add the remote, or run without --base")
+    return errors
+
+
+def _push_errors() -> list[str]:
+    """The errors that stop a run that is to push before any agent."""
+    errors = []
+    if not pr_skill():
+        errors.append("the pr skill is missing: the PR body follows it; install it with "
+                      "`npx skills add mattpocock/skills --skill pr`, or run without --push and --unattended")
+    if not pr_risk_skill():
+        errors.append(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
+                      f"{PR_RISK_INSTALL}, or run without --push and --unattended")
+    if not _has_origin():
+        errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
+                      "add the remote, or run without them to stop before the push")
     return errors
 
 
@@ -353,26 +377,33 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
     file = folder / f"findings-{done}.json"
     file.write_text(json.dumps(found, indent=1) + "\n")
     for finding in found:
-        ledger(f"Final review round {done + 1}: {finding['severity']} finding of kind {finding['kind']} at "
-               f"{finding['file']}:{finding['line']}: {finding['title']}.")
+        # A finding of an older driver has no source: its one final reviewer reported it.
+        ledger(f"Final review round {done + 1}: {finding['severity']} finding of kind {finding['kind']} from "
+               f"{finding.get('source', 'final-reviewer')} at {finding['file']}:{finding['line']}: {finding['title']}.")
     to_fix = [finding for finding in found if finding["severity"] in driver_review.OPEN]
     evidence = [str(file), str(folder / f"final-reviewer-{done}.json")]
     run.state.update(lambda state: _record_review(state, tip, to_fix, evidence))
     ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
            f"{len(to_fix)} critical or important finding{'s are' if len(to_fix) != 1 else ' is'} open.")
     if to_fix and done:
-        questions = len([finding for finding in to_fix if not finding.get("must_fix")])
-        if questions:
-            ledger(f"End of run: {driver_decisions.decides(KIND, questions)} in {OUT / 'decisions.json'}: a third "
-                   "review round is never started.")
-        required = len(to_fix) - questions
-        if required:
-            ledger(f"End of run: {required} required must-fix finding{'s remain' if required != 1 else ' remains'} "
-                   "open after the final fix batch; the run is blocked.")
+        _log_open_after_batch(to_fix)
+
+
+def _log_open_after_batch(to_fix: list[dict]) -> None:
+    """The ledger lines of the findings `to_fix` that the scoped review left open: questions, and must-fix items that
+    block the run."""
+    questions = len([finding for finding in to_fix if not finding.get("must_fix")])
+    if questions:
+        ledger(f"End of run: {driver_decisions.decides(KIND, questions)} in {OUT / 'decisions.json'}: a third "
+               "review round is never started.")
+    required = len(to_fix) - questions
+    if required:
+        ledger(f"End of run: {required} required must-fix finding{'s remain' if required != 1 else ' remains'} "
+               "open after the final fix batch; the run is blocked.")
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
-    """One round of the final review on `tip`: the full review, or after it the scoped one."""
+    """One round of the final review on `tip`: the full review by the three lenses, or after it the scoped one."""
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)), "review_diff": str(REVIEW_DIFF),
@@ -384,10 +415,75 @@ def _review(run: Run, final: dict, tip: str) -> None:
     # the tickets' own checks only the conflict agent of the rebase ran, which has the same check.
     found = driver_review.locked_changes(".", final["tidied"], _locked_files(run))
     with during("the final review"):
-        report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-            "final-reviewer", FINAL, ".", values, notes=["final-scoped"] if done else [], fix_round=done))
-    _settle_review(run, done, tip, values["range"], _round_findings(final, found + report["findings"],
+        if done:
+            report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
+                "final-reviewer", FINAL, ".", values, notes=["final-scoped"], fix_round=done))
+        else:
+            report = _lenses(run, values, tip)
+    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(found + report["findings"]),
                                                                      _carried_must_fix(final, done, report)))
+
+
+def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
+    """The full review: the three lenses at the same time in slot 1, inside one read-only check. Returns their
+    findings, each with the source of its lens. A lens with an accepted report for `tip` does not run again, unless
+    a lens changed the slot: then all three run again."""
+    values = {**values, "spec_method": str(REVIEW_DIFF.parent / "spec.md"), "structure_method": str(structure_skill()),
+              # Inlined: this lens reads from git, and a project-local review-diff sits in an ignored folder (#120).
+              "checks": (REVIEW_DIFF.parent / "correctness.md").read_text()}
+    attempts = []
+
+    def review() -> dict[str, dict]:
+        kept = {} if attempts else run.state.read()["run"]["final"]["lenses"]
+        attempts.append(tip)
+        return _run_lenses(run, values, tip, {role: one["report"] for role, one in kept.items() if one["tip"] == tip})
+
+    reports = run.read_only(FINAL, ".", run.pr, tip, review)
+    return {"findings": [{**finding, "source": source} for role, source in SOURCES.items()
+                         for finding in reports[role]["findings"]]}
+
+
+def _run_lenses(run: Run, values: dict[str, str], tip: str, kept: dict[str, dict]) -> dict[str, dict]:
+    """Run each lens with no report in `kept` at the same time, and return the report of each lens. A lens that
+    stops or whose report is rejected twice stops the round, once every lens has ended."""
+    due = [role for role in driver_agents.LENSES if role not in kept]
+    running, errors, halted = list(due), {}, []
+
+    def call(role: str) -> dict:
+        try:
+            report = run.agent(role, FINAL, ".", values, entry=driver_agents.lens_entry(run.models, role),
+                               alone=lambda: len(running) == 1)
+        except Stopped as stopped:
+            errors[role] = str(stopped)
+            return {}
+        except Blocked as blocked:  # the driver rejected its report two times
+            errors[role] = f"the {role}: {blocked}"
+            return {}
+        except Halted as failed:
+            halted.append(failed)
+            return {}
+        finally:
+            running.remove(role)
+        run.state.update(lambda state: state["run"]["final"]["lenses"].update({role: {"tip": tip, "report": report}}))
+        return report
+
+    with ThreadPoolExecutor(len(due) or 1) as pool:
+        reports = dict(zip(due, pool.map(call, due)))
+    if halted:
+        raise halted[0]
+    if errors:
+        raise Blocked("; ".join(errors[role] for role in driver_agents.LENSES if role in errors))
+    return {**kept, **reports}
+
+
+def _merged(found: list[dict]) -> list[dict]:
+    """`found` with each (file, line, title) once: the more severe finding stays, a tie keeps the earlier one."""
+    kept: dict[tuple, dict] = {}
+    for finding in found:
+        key = (finding["file"], finding["line"], finding["title"])
+        if key not in kept or SEVERITIES.index(finding["severity"]) < SEVERITIES.index(kept[key]["severity"]):
+            kept[key] = finding
+    return list(kept.values())
 
 
 def _carried_must_fix(final: dict, done: int, report: dict) -> list[dict]:

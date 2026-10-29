@@ -82,7 +82,7 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     assert len(rig.commits(rig.start, rig.recovery())) == 6
     assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement-spec/feat%2Fcsv/recovery^{tree}")
     assert rig.led("Recovery point: feat/csv was at " + rig.recovery(), ref(rig.repo, "feat/csv^{tree}"))
-    assert rig.led("End of run: final-reviewer ran on", FABLE) and rig.led("End of run: the full gate is green on " + tip[:7])
+    assert rig.led("End of run: final-spec ran on", FABLE) and rig.led("End of run: the full gate is green on " + tip[:7])
     assert {nn: e["tip"] for nn, e in rig.state()["tickets"].items()} == {nn: r["sha"] for nn, r in zip(order, rows)}
     assert f"The final review covers feat/csv up to {tip[:7]}. Nothing is pushed." in rig.out
     assert git(rig.repo, "symbolic-ref", "--short", "HEAD").strip() == "feat/csv" and git(rig.repo, "status", "--short") == ""
@@ -153,7 +153,7 @@ def test_the_final_review_does_not_start_while_a_ticket_is_not_merged_and_the_le
     rig = Inside(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
     rig.run(plan())
     rig.run(plan(), *UNATTENDED)
-    assert rig.code == 1 and not rig.final_calls("final-reviewer") and not rig.recovery()
+    assert rig.code == 1 and not rig.final_calls("final-spec") and not rig.recovery()
     assert rig.led("End-of-run work skipped") == ["End-of-run work skipped: these tickets are not merged: 01, 02."]
     assert "The end-of-run work (rebase, tidy, final review, push) did not run: these tickets are not merged: 01, 02." in rig.out
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
@@ -180,7 +180,7 @@ def test_a_branch_that_cannot_move_to_the_tidied_tip_keeps_the_recorded_ticket_t
     (line,) = rig.led("End of run: BLOCKED at the rewrite: cannot move feat/csv to the tidied tip")
     assert line.endswith(f"the ref moved; feat/csv is unrewritten at its recovery point {rig.recovery()[:7]}.")
     assert rig.branch() == rig.recovery() == rig.state()["tickets"]["01"]["tip"] and not rig.final().get("tidied")
-    assert not rig.final_calls("final-reviewer") and "End of run: BLOCKED at the rewrite" in rig.out
+    assert not rig.final_calls("final-spec") and "End of run: BLOCKED at the rewrite" in rig.out
 
 
 def test_a_tidied_tip_that_left_the_branch_stops_the_end_of_run(tmp_path):
@@ -219,7 +219,7 @@ def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violati
     first["report"]["commits"].pop()
     retry = {"report": dict(first["report"], commits=[{"sha": "$HEAD~1", "ticket": "02"}, {"sha": "$HEAD", "ticket": "01"}])}
     retry["files"] = {"wip.txt": "not committed\n"}
-    rig.run(plan(**{"final/final-reviewer": [final(finding("Q-ONE"), finding("Q-MINOR", "minor")), final()],
+    rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"), finding("Q-MINOR", "minor"))],
                     "final/fixer": [first, retry]}))
     assert rig.code == 1, rig.out
     assert rig.led("End of run: fixer ran on", "is on feat/csv and not in `commits`: each commit of the batch needs its ticket")
@@ -243,7 +243,7 @@ def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violati
 
     stray(rig, "fix(99): by hand")  # a commit with the name of a fix commit and no validated owner
     rig.run(plan(), "--push")
-    assert rig.code == 1 and rig.pushes() == [] and len(rig.final_calls("final-reviewer")) == 1, rig.out
+    assert rig.code == 1 and rig.pushes() == [] and len(rig.final_calls("final-spec")) == 1, rig.out
     assert rig.led("End of run: BLOCKED at the tip", f"is not a tip the driver made: only {reviewed[:7]} gets a review")
 
     git(rig.repo, "reset", "-q", "--hard", reviewed)
@@ -255,7 +255,7 @@ def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violati
 def test_a_fixer_that_times_out_twice_keeps_its_files_and_the_branch_stays_at_the_reviewed_tip(tmp_path):
     rig = Inside(tmp_path, ONE)
     slow = {"files": {"wip.txt": "half done\n"}, "sleep": 30}
-    rig.run(plan(**{"final/final-reviewer": [final(finding("Q-ONE"))], "final/fixer": [slow, slow]}),
+    rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"))], "final/fixer": [slow, slow]}),
             "--timeout", "fixer=0.01", *UNATTENDED)
     reviewed = rig.final()["reviewed"]
     assert rig.code == 1 and rig.pushes() == [] and rig.branch() == reviewed, rig.out
@@ -266,7 +266,7 @@ def test_a_fixer_that_times_out_twice_keeps_its_files_and_the_branch_stays_at_th
 
 def test_a_fix_commit_for_a_ticket_that_is_not_in_the_run_is_a_violation(tmp_path):
     rig = Inside(tmp_path, ONE)
-    rig.run(plan(**{"final/final-reviewer": [final(finding("Q-ONE")), final()],
+    rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"))],
                     "final/fixer": [fixer(fn("01"), "fix(01): named already", ticket_of="09"),
                                     {"report": dict(fixer(fn("01"), "x")["report"], commits=[{"sha": "$HEAD", "ticket": "01"}])}]}))
     assert rig.code == 0, rig.out
@@ -274,26 +274,27 @@ def test_a_fix_commit_for_a_ticket_that_is_not_in_the_run_is_a_violation(tmp_pat
     (row,) = rig.commits(rig.final()["tidied"])
     assert row["subject"] == "fix(01): named already" and rig.final()["reviewed"] == row["sha"] == rig.branch()
     assert rig.led("Fix batch of the final review: 1 commit on", f"{row['sha'][:7]} fix(01): named already.")
-    scoped = rig.final_calls("final-reviewer")[1]["prompt"]
+    (scoped,) = [call["prompt"] for call in rig.final_calls("final-reviewer")]
     assert f"Range: {rig.final()['tidied']}..{row['sha']}\n" in scoped and "This is the scoped review after the fix batch" in scoped
     assert scoped.rstrip().endswith("one ref store.") and ".agent/implement/final/findings-0.json" in scoped
 
 
-def test_a_final_reviewer_that_changes_the_slot_is_restored_and_runs_once_more(tmp_path):
+def test_a_lens_that_changes_the_slot_is_restored_and_every_lens_runs_once_more(tmp_path):
     rig = Inside(tmp_path, ONE)
     dirty = final(finding("DROPPED"), files={"left.txt": "x"})
     moved_head = final(files={"more.txt": "x"}, commit="by the reviewer")
-    rig.run(plan(**{"final/final-reviewer": [dirty, final(finding("KEPT", "minor"))]}))
-    assert rig.code == 0 and len(rig.final_calls("final-reviewer")) == 2 and not (rig.repo / "left.txt").exists(), rig.out
+    rig.run(plan(**{"final/final-spec": [dirty, final(finding("KEPT", "minor"))]}))
+    assert [len(rig.final_calls(role)) for role in ("final-spec", "final-correctness", "final-structure")] == [2, 2, 2]
+    assert rig.code == 0 and not (rig.repo / "left.txt").exists(), rig.out
     assert rig.led("End of run: a read-only role broke its rule: the tree is not as the review found it: left.txt; the "
                    f"driver restored slot 1 to {rig.branch()[:7]} and runs the final review again.")
     assert rig.led("KEPT") and not rig.led("DROPPED") and rig.final()["reviewed"] == rig.branch()
 
 
-def test_a_final_reviewer_that_changes_the_slot_twice_ends_the_run_with_a_clean_slot(tmp_path):
+def test_a_lens_that_changes_the_slot_twice_ends_the_run_with_a_clean_slot(tmp_path):
     rig = Inside(tmp_path, ONE)
     moved_head = final(files={"more.txt": "x"}, commit="by the reviewer")
-    rig.run(plan(**{"final/final-reviewer": [final(files={"left.txt": "x"}), moved_head]}), *UNATTENDED)
+    rig.run(plan(**{"final/final-spec": [final(files={"left.txt": "x"}), moved_head]}), *UNATTENDED)
     tip = rig.final()["tidied"]
     assert rig.code == 1 and rig.final()["reviewed"] is None and rig.branch() == tip, rig.out
     assert rig.led(f"End of run: BLOCKED at the final review: the slot is no longer on feat/csv at {tip[:7]}.")
@@ -305,7 +306,7 @@ def test_a_final_reviewer_that_changes_the_slot_twice_ends_the_run_with_a_clean_
 def test_a_red_gate_on_the_tidied_tip_stops_before_the_final_review(tmp_path):
     rig = Inside(tmp_path, ONE, gate={"red": ["feat/csv"]})
     rig.run(plan(), *UNATTENDED)
-    assert rig.code == 1 and not rig.final_calls("final-reviewer") and rig.pushes() == [], rig.out
+    assert rig.code == 1 and not rig.final_calls("final-spec") and rig.pushes() == [], rig.out
     assert rig.led("End of run: BLOCKED at the gate: the full gate is red on " + rig.branch()[:7])
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["final"]}
     # The fast gate of the ticket tip, the full gate of its fast-forward, and the full gate of the tidied tip.
@@ -316,7 +317,7 @@ def test_a_red_gate_on_the_tidied_tip_stops_before_the_final_review(tmp_path):
 
 def parked(tmp_path, *findings):
     rig = Inside(tmp_path, ONE)
-    steps = plan(**{"final/final-reviewer": [final(*findings), final(*findings)],
+    steps = plan(**{"final/final-spec": [final(*findings)], "final/final-reviewer": [final(*findings)],
                     "final/fixer": [fixer(fn("01"), "first try", ticket_of="01")]})
     return rig.run(steps), steps
 
@@ -331,7 +332,7 @@ def test_open_findings_after_the_second_round_park_the_run_on_one_question_each(
     assert first["evidence"] == [".agent/implement/final/findings-1.json", ".agent/implement/final/final-reviewer-1.json"]
     assert "Question final-finding-1: " in rig.out and rig.state()["run"]["stops"] == 1
     assert rig.led("End of run: the operator decides on 2 questions of kind final-finding")
-    assert len(rig.final_calls("final-reviewer")) == 2 and len(rig.final_calls("fixer")) == 1
+    assert len(rig.final_calls("final-reviewer")) == 1 and len(rig.final_calls("fixer")) == 1
 
     rig.run(steps, "--answer", "final-finding-1=accept")
     assert rig.code == 2 and rig.led("Ruling: final-review finding closed as it is (accept): STILL-OPEN (demo/export.py:99).")
@@ -343,7 +344,7 @@ def test_open_findings_after_the_second_round_park_the_run_on_one_question_each(
     assert "- Ruling: final-review finding closed as it is (accept): ALSO (demo/export.py:99)." in body
     assert f"- {rig.branch()[:7]} fix(01): first try" in body
     assert f"Scoped review after the fix batch: {rig.final()['tidied']}..{rig.branch()}" in body
-    assert len(rig.final_calls("final-reviewer")) == 2, "no third round"
+    assert len(rig.final_calls("final-spec")) == len(rig.final_calls("final-reviewer")) == 1, "no third round"
 
 
 def test_the_answer_fix_keeps_the_finding_open_and_nothing_is_pushed(tmp_path):
@@ -361,7 +362,7 @@ def test_a_commit_after_the_second_review_is_never_reviewed_or_pushed(tmp_path):
     assert rig.code == 0 and all(stop_lines(rig.out))
     stray(rig, "fix(01): by hand")
     rig.run(steps, "--push")
-    assert rig.code == 1 and rig.pushes() == [] and len(rig.final_calls("final-reviewer")) == 2
+    assert rig.code == 1 and rig.pushes() == [] and len(rig.final_calls("final-reviewer")) == 1
     assert rig.led("End of run: BLOCKED at the two review rounds are done and the tip", "is not the reviewed tip")
 
 
@@ -382,7 +383,7 @@ def test_a_base_that_moved_with_no_conflict_is_rebased_onto_with_no_agent_and_on
     assert ref(rig.repo, "feat/csv~3") == base and git(rig.repo, "show", "feat/csv:docs.md") == "base docs\n"
     assert [p.name for p in (rig.repo / ".agent/implement/final").glob("gate-*.log")] == [f"gate-full-{rig.branch()[:7]}.log"]
     assert rig.final()["commits"] == {nn: row["sha"] for nn, row in zip(order, rows)}
-    assert rig.final()["onto"] == base and f"Range: {base}..{rig.branch()}\n" in rig.final_calls("final-reviewer")[0]["prompt"]
+    assert rig.final()["onto"] == base and f"Range: {base}..{rig.branch()}\n" in rig.final_calls("final-spec")[0]["prompt"]
     assert rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"] and stage(rig) == {"stage": "implement", "status": "done"}
 
 
@@ -407,7 +408,7 @@ def test_a_resolved_rebase_keeps_the_ticket_messages_and_gates_the_rebased_tip_a
 def test_a_second_conflict_leaves_the_branch_at_its_recovery_point_with_all_its_commits(tmp_path):
     step = {**RESOLVE, "files": {"demo/export.py": "resolved = 1\n"}, "report": {**RESOLVE["report"], "files": ["demo/export.py"]}}
     rig = moved(tmp_path, {"demo/export.py": "def export_csv():\n    return 'base'\n"}, step)
-    assert rig.code == 1 and len(rig.final_calls("conflict")) == 1 and not rig.final_calls("final-reviewer"), rig.out
+    assert rig.code == 1 and len(rig.final_calls("conflict")) == 1 and not rig.final_calls("final-spec"), rig.out
     recovery = rig.recovery()
     assert rig.branch() == recovery and len(rig.commits(rig.start, recovery)) == 6, "two commits per ticket, as before"
     assert rig.led("End of run: BLOCKED at the rewrite: the rebase onto main conflicts a second time, in demo/export.py; "
@@ -533,8 +534,9 @@ def test_without_the_review_diff_skill_every_repository_stops_before_any_agent(t
     monkeypatch.setattr(driver_final, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")
     rig = Inside(tmp_path, ONE, remote=remote).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
-    assert rig.out == (f"{tmp_path}/review-diff/SKILL.md is missing: the final review runs through it; install the "
-                       "review-diff skill next to implement-spec\n")
+    assert rig.out == "".join(f"{tmp_path}/review-diff/{name} is missing: the final review runs through it; install "
+                              "the review-diff skill next to implement-spec\n"
+                              for name in ("SKILL.md", "spec.md", "correctness.md"))
 
 
 def test_a_push_without_the_pr_skill_stops_before_any_agent_and_a_local_run_does_not_need_it(tmp_path, monkeypatch):
@@ -583,7 +585,8 @@ def test_without_an_origin_the_run_ends_reviewed_and_a_push_is_refused_at_the_st
     assert driver_summary.render({"run": fresh, "tickets": {}}).startswith("0 of 0 tickets are merged into feat/x.\n\n| Measure")
 
 
-@pytest.mark.parametrize("name", ["final-reviewer", "final-fixer", "rebase-conflict"])
+@pytest.mark.parametrize("name", ["final-reviewer", "final-spec", "final-correctness", "final-structure", "final-fixer",
+                                  "rebase-conflict"])
 def test_the_templates_of_the_end_of_run_hold_a_valid_schema_and_end_with_the_rule(name):
     jsonschema.Draft202012Validator.check_schema(driver_report.schema(name))
     text = (driver_report.PROMPTS / f"{name}.md").read_text()
@@ -606,7 +609,7 @@ def test_a_history_that_origin_already_has_is_not_rebased_and_not_tidied(tmp_pat
     assert [r["subject"] for r in rig.commits(published)] == ["test: 01 red", "feat: 01 rows"], "no tidy"
     assert ref(rig.repo, "feat/csv~2") == published and not rig.recovery(), "no rebase, so no recovery point"
     assert len(rig.led("End of run: origin has commits of feat/csv, so its history is kept as it is: no tidy and no rebase")) == 1
-    assert len(rig.final_calls("final-reviewer")) == 1 and rig.led("End of run: the full gate is green on " + rig.branch()[:7])
+    assert len(rig.final_calls("final-spec")) == 1 and rig.led("End of run: the full gate is green on " + rig.branch()[:7])
     assert rig.pushes()[-1] == f"refs/heads/feat/csv {rig.branch()}" and ref(rig.origin, "refs/heads/feat/csv") == rig.branch()
     assert f"- 01: {rig.branch()[:7]} Export rows" in rig.prs()[0]["body"] and stage(rig)["status"] == "done"
 
@@ -619,9 +622,9 @@ def test_a_fix_batch_that_changes_a_locked_test_gives_a_critical_finding_and_is_
     rig = Inside(tmp_path, ONE)
     batch = fixer(fn("01"), "weaken the test", ticket_of="01")
     batch["commits"][0]["files"].update(weak())
-    rig.run(plan(**{"final/final-reviewer": [final(finding("Q-ONE")), final()], "final/fixer": [batch]}), *UNATTENDED)
+    rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"))], "final/fixer": [batch]}), *UNATTENDED)
     assert rig.code == 2 and rig.pushes() == [] and not rig.prs(), rig.out
-    assert rig.led("Final review round 2: critical finding of kind code at tests/test_01.py:1: locked file changed: tests/test_01.py.")
+    assert rig.led("Final review round 2: critical finding of kind code from driver at tests/test_01.py:1: locked file changed: tests/test_01.py.")
     (q,) = decisions(rig)["questions"]
     assert q["title"].endswith("locked file changed: tests/test_01.py (tests/test_01.py:1)")
 
@@ -632,7 +635,7 @@ def test_a_rebase_resolution_that_changes_a_locked_test_leaves_the_branch_at_its
     rig.run(plan(**{"final/conflict": [{**RESOLVE, "files": {"demo/export.py": "x = 1\n", **weak()}}]}), *UNATTENDED)
     assert rig.code == 1 and rig.pushes() == [] and rig.branch() == rig.recovery(), rig.out
     assert rig.led("End of run: BLOCKED at the rewrite: the conflict agent: locked file changed: tests/test_01.py;")
-    assert git(rig.repo, "status", "--short") == "" and not rig.final_calls("final-reviewer")
+    assert git(rig.repo, "status", "--short") == "" and not rig.final_calls("final-spec")
 
 
 def test_a_rebase_with_no_commit_to_replay_puts_each_ticket_on_the_fetched_base(tmp_path, monkeypatch):

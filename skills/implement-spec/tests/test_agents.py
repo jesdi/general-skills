@@ -41,7 +41,8 @@ with calls.open("a") as f:
     f.write(json.dumps(rec) + "\\n")
 plan = json.loads((here / "plan.json").read_text()).get(role, [])
 step = plan[n] if n < len(plan) else {{}}
-if role in ("reviewer", "final-reviewer") and "report" not in step:  # a role the test does not script reports no findings
+# A role the test does not script reports no findings.
+if role in ("reviewer", "final-reviewer", "final-spec", "final-correctness", "final-structure") and "report" not in step:
     step = dict(step, report=dict(status="DONE", commits=[], files=[], concerns=[], findings=[]))
 for cmd in step.get("git", []):
     git(*cmd)

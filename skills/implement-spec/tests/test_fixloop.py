@@ -123,7 +123,7 @@ def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
 
     rig.run(plan(**{"02/reviewer": [review("02", [regression])] * 3,
                     "02/fixer": [fix("02", 1), fix("02", 2)],
-                    "final/final-reviewer": [final(), scoped], "final/fixer": [batch]}))
+                    "final/final-reviewer": [scoped], "final/fixer": [batch]}))
 
     assert rig.code == 0, rig.ledger()
     assert [item["title"] for item in rig.state()["run"]["final"]["must_fix"]] == ["QUOTING-REGRESSION"]
@@ -1277,9 +1277,10 @@ def test_the_templates_of_the_new_roles_hold_a_valid_schema_and_end_with_the_rul
 
 
 def test_no_template_names_the_ledger_and_the_method_of_step_6_is_in_the_reviewer_prompt():
-    # The final reviewer gets the ledger as a pointer (requirement 19); no other prompt names it.
+    # The final review gets the ledger as a pointer (requirement 19); no other prompt names it.
+    final = ("final-reviewer.md", "final-spec.md", "final-correctness.md", "final-structure.md")
     for path in driver_report.PROMPTS.glob("*.md"):
-        assert ("ledger" in path.read_text().lower()) == (path.name == "final-reviewer.md"), path.name
+        assert ("ledger" in path.read_text().lower()) == (path.name in final), path.name
     reviewer = (driver_report.PROMPTS / "reviewer.md").read_text()
     assert "Test each suspicion that the ticket names in its Suspicions line." in reviewer
 

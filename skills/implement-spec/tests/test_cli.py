@@ -84,6 +84,8 @@ def env(tmp_path):
 
 def models_file(tmp_path, **overrides):
     entries = {role: ["anthropic/claude-opus-5@medium"] for role in ROLES}
+    # The correctness lens of the final review runs on another provider than the first implementer entry.
+    entries["final-reviewer"] = ["anthropic/claude-opus-5@medium", "openai/gpt-sol@medium"]
     entries.update(overrides)
     if len(entries["implementer"]) == 1:
         first = entries["implementer"][0]

@@ -29,7 +29,7 @@ assert HOOKED.count("git_after") == 1 and HOOKED.count('step.get("git", [])') ==
 
 ONE = {"01-export-rows.md": ticket("01", "Export rows")}
 RISKY = {"02-quote-fields.md": ticket("02", "Quote fields", risk="persistence")}
-OPUS, FABLE = "claude-opus-5@medium", "claude-fable-5-1@high"
+OPUS, FABLE, ASTRA = "claude-opus-5@medium", "claude-fable-5-1@high", "openai/gpt-6-astra@medium"
 
 
 class Review(Rig):
@@ -107,7 +107,7 @@ def test_unrelated_important_observation_waits_for_final_review(tmp_path):
     assert rig.code == 0, rig.output()
     assert not rig.calls("01", "fixer")
     assert rig.state()["tickets"]["01"]["phase"] == "merged"
-    assert "DUPLICATED-HELPER" in rig.calls("final", "final-reviewer")[0]["prompt"]
+    assert "DUPLICATED-HELPER" in rig.calls("final", "final-spec")[0]["prompt"]
 
 
 def test_rereview_defers_newly_noticed_issue_outside_its_open_findings(tmp_path):
@@ -120,7 +120,7 @@ def test_rereview_defers_newly_noticed_issue_outside_its_open_findings(tmp_path)
 
     assert rig.code == 0, rig.output()
     assert len(rig.calls("01", "fixer")) == 1
-    assert "PREEXISTING-NAME" in rig.calls("final", "final-reviewer")[0]["prompt"]
+    assert "PREEXISTING-NAME" in rig.calls("final", "final-spec")[0]["prompt"]
 
 
 def test_rereview_can_open_a_regression_introduced_by_the_fix(tmp_path):
