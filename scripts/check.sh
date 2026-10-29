@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+pnpm sync-launchers --check
 pnpm test:coverage
 pnpm --filter @jesdi/skills-cli build
 pnpm exec tsc --noEmit

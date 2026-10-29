@@ -5,4 +5,12 @@ description: Measure a Python/pytest suite and score it on five pillars (Protect
 
 # test-weigh-in
 
-Work in progress on `feat/test-weigh-in`: the wrapper and the full instructions come with ticket 04.
+Run the engine through the wrapper:
+
+```sh
+sh <skill-dir>/run.sh <repo-path> [--pytest-args "<options>"]
+```
+
+`<skill-dir>` is the directory holding this file. `<repo-path>` is the Python repo whose suite to weigh. The engine prints the path of the JSON snapshot it wrote, and exits non-zero with a message on stderr when it cannot run.
+
+Relay the engine's output to the user exactly as printed. Do not add interpretation, scores, advice or a summary of your own.
