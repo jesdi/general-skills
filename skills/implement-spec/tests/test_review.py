@@ -281,19 +281,27 @@ def test_each_round_ends_with_one_gate_record_and_a_re_review_scoped_to_the_fix(
         assert tips[k - 1][:7] in reviews[k]["prompt"] and tips[k][:7] in reviews[k]["prompt"], k
 
 
-def gate_rule(prompt, gate):
-    """The line of `prompt` that gives the gate command; it must say to run it before the report."""
+def gate_rule(prompt, gate, locked):
+    """The line of `prompt` that gives the fast gate command; it must say to run it, with the locked files, before
+    the report."""
     (line,) = [l for l in prompt.splitlines() if f"`{gate}`" in l]
     assert "IMPLEMENT_SPEC_BASE=feat/csv" in line and "Before you report DONE" in line, line
+    assert f"IMPLEMENT_SPEC_LOCKED='{locked}'" in line, line
     return line
 
 
-def test_the_implementer_and_each_fixer_get_the_gate_command_and_run_it_before_they_report(escalated):
-    gate = f"TIER=full {escalated.rig / 'gate'}"
+def no_full_gate(rig):
+    """No prompt of any agent of the run names the full gate command: only that command sets TIER=full."""
+    assert rig.calls() and not [call["role"] for call in rig.calls() if "TIER=full" in call["prompt"]]
+
+
+def test_the_implementer_and_each_fixer_get_the_fast_gate_command_and_run_it_before_they_report(escalated):
+    gate = f"TIER=fast {escalated.rig / 'gate'}"
     agents = escalated.calls("01", "implementer") + escalated.calls("01", "fixer")
     assert len(agents) == 3, "the implementer and the fixers of rounds 1 and 2 (the next model)"
     for call in agents:
-        gate_rule(call["prompt"], gate)
+        gate_rule(call["prompt"], gate, "tests/test_01.py")
+    no_full_gate(escalated)
 
 
 def test_reports_are_named_by_role_and_round(escalated):
