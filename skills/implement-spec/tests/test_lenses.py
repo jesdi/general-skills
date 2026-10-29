@@ -7,7 +7,7 @@ import json
 import pytest
 
 import driver_final
-from test_final import final, fixer, fn
+from test_final import Final, final, fixer, fn
 from test_fixloop import inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_review import RISKY, finding, fix, review
 from test_tidy import Inside, tools  # noqa: F401  (tools is an autouse fixture)
@@ -36,8 +36,9 @@ def stopped(status="BLOCKED"):
 
 @pytest.fixture(scope="module")
 def clean(tmp_path_factory):
-    """Two merged tickets and a clean final review: no lens reports a critical or important finding."""
-    rig = rig_of(tmp_path_factory.mktemp("clean"))
+    """Two merged tickets and a clean final review: no lens reports a critical or important finding. A module
+    fixture runs before the autouse fixtures put the rig's CLIs on PATH, so this rig runs the driver as a subprocess."""
+    rig = Final(tmp_path_factory.mktemp("clean"), TWO, MODELS)
     return rig.run(plan(**{"final/final-structure": [final(finding("NAMING", "minor"))]}))
 
 
@@ -49,7 +50,7 @@ def test_spec_and_structure_run_on_the_first_final_reviewer_entry_and_correctnes
 
 
 def test_each_lens_gets_the_gate_record_of_the_tip_writes_its_own_report_and_names_no_other_report(clean):
-    tip, folder = clean.final()["tidied"], clean.repo / ".agent/implement/final"
+    tip, folder = clean.state()["run"]["final"]["tidied"], clean.repo / ".agent/implement/final"
     for role in LENSES:
         (call,) = clean.final_calls(role)
         assert call["head"] == tip and f"final/gate-full-{tip[:7]}.log" in call["prompt"]
@@ -61,7 +62,7 @@ def test_each_lens_gets_the_gate_record_of_the_tip_writes_its_own_report_and_nam
 
 
 def test_a_clean_final_review_runs_no_fix_batch_and_no_scoped_review(clean):
-    final_ = clean.final()
+    final_ = clean.state()["run"]["final"]
     assert not clean.final_calls("fixer") and not clean.final_calls("final-reviewer")
     assert final_["reviewed"] == final_["tidied"] == clean.branch() and final_["open"] == []
     assert [(f["title"], f["source"]) for f in findings_file(clean)] == [("NAMING", "structure")]
