@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-28T12:41:08.065Z",
+  "generatedAt": "2026-10-29T00:14:15.372Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -100,8 +100,8 @@
     },
     {
       "name": "test-prune",
-      "version": "0.1.1",
-      "hash": "sha256-d488bcfbe73b8ed13b6743eacd2c85ad65236fb60a9df95f6b3e8a76f10c0bc2",
+      "version": "0.1.2",
+      "hash": "sha256-d6122a5ad5085f040e331744259896bf84ff7211177fea075747c1b50bf79a0e",
       "description": "Mutation-guided test pruning: a fixer proposes deleting redundant tests and strengthening weak ones, an independent reviewer accepts or rejects each proposal, and prune.py applies the accepted batch behind a cold mutation run and the ratchet. Use when the user says \"prune tests\", \"test-prune\", \"mutation test pruning\" or \"strengthen weak tests\", or when a scheduled job runs it with `--unattended`."
     },
     {
