@@ -18,7 +18,7 @@ import driver_state
 
 from conftest import GIT, ticket
 
-ARGS = ["--gate", "make check", "--dry-run"]
+ARGS = ["--gate", "make check", "--fast-gate", "make check", "--dry-run"]
 
 
 def run(capsys, *args):
@@ -33,9 +33,19 @@ def test_valid_set_prints_the_widest_level(repo, capsys):
 
 def test_a_run_without_dry_run_needs_the_spec(repo, capsys):
     repo(t01=ticket("01"))
-    assert driver.main(["--gate", "make check"]) == 3
+    assert driver.main(["--gate", "make check", "--fast-gate", "make fast"]) == 3
     assert capsys.readouterr().out == "--spec is required: the spec file the prompts point at\n"
     assert "ticket/feat%2Fx/01" not in subprocess.run(["git", "branch"], capture_output=True, text=True).stdout
+
+
+def test_a_run_without_the_fast_gate_stops_before_any_agent_and_changes_nothing(repo, tmp_path, capsys):
+    repo(t01=ticket("01"), t02=ticket("02"), t03=ticket("03"))
+    runner = tmp_path.parent / f"{tmp_path.name}-runner"
+    runner.write_text(f"#!/bin/sh\ntouch {runner}.ran\n")
+    runner.chmod(0o755)
+    assert driver.main(["--gate", "make check", "--spec", "spec.md", "--runner", str(runner)]) == 3
+    assert capsys.readouterr().out.startswith("--fast-gate is required")
+    assert not (tmp_path / ".agent/implement").exists() and not Path(f"{runner}.ran").exists()
 
 
 def test_every_environment_and_ticket_error_is_listed_together(repo, capsys):
@@ -143,7 +153,7 @@ def agents(tmp_path, capsys, body, *args, seam="none — refactor"):
     runner = tmp_path.parent / f"{tmp_path.name}-runner"
     runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{'' if '--only' in args else CLEAN}{body}")
     runner.chmod(0o755)
-    code = driver.main(["--gate", "true", "--spec", "spec.md", "--runner", str(runner), *args])
+    code = driver.main(["--gate", "true", "--fast-gate", "true", "--spec", "spec.md", "--runner", str(runner), *args])
     capsys.readouterr()
     ledger = tmp_path / ".agent/implement/ledger.md"
     return code, ledger_of(tmp_path)
@@ -180,8 +190,9 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
     tip = walked("--short=7")
     assert [line.partition(" for ")[0] for line in ledger] == [
         "Ticket 01: test-writer ran on claude-sonnet-5-5@medium", "Ticket 01: implementer ran on claude-sonnet-5-5@medium",
-        f"Ticket 01: the gate is green on {tip}, record .agent/implement/01/gate-{tip}.log.",
+        f"Ticket 01: the fast gate is green on {tip}, record .agent/implement/01/gate-fast-{tip}.log.",
         "Ticket 01: reviewer ran on openai/gpt-6-astra@medium",
+        f"Ticket 01: the full gate is green on {tip}, record .agent/implement/01/gate-full-{tip}.log.",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
     assert ledger[1].endswith(", cost 0.25 USD: report accepted.")
     assert branches() == ["feat/x"] and "nothing to commit" in subprocess.run(
@@ -214,7 +225,7 @@ def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path
 def test_a_field_of_another_role_is_ignored(repo, tmp_path, capsys, extra):
     repo()
     code, ledger = agents(tmp_path, capsys, f"{COMMIT}fields='\"green\": [], {extra}'\n{REPORT}")
-    assert code == 0 and len(ledger) == 4 and ledger[0].endswith("report accepted.")
+    assert code == 0 and len(ledger) == 5 and ledger[0].endswith("report accepted.")
 
 
 @pytest.mark.parametrize("status", ["BLOCKED", "NEEDS_CONTEXT"])
@@ -373,7 +384,7 @@ def walk(tmp_path, capsys, body, *args, gate="true"):
     runner = tmp_path.parent / f"{tmp_path.name}-runner"
     runner.write_text(f"#!/bin/sh\nrole=$1 prompt=$2 report=$3\n{CLEAN}{body}")
     runner.chmod(0o755)
-    code = driver.main(["--gate", gate, "--spec", "spec.md", "--runner", str(runner), *args])
+    code = driver.main(["--gate", gate, "--fast-gate", gate, "--spec", "spec.md", "--runner", str(runner), *args])
     return code, ledger_of(tmp_path), capsys.readouterr().out
 
 
@@ -397,8 +408,10 @@ def test_two_tickets_run_in_two_slots_and_the_second_merge_is_a_gated_merge_comm
     calls = dict(line.split() for line in Path(f"{tmp_path}-runner.calls").read_text().splitlines())
     assert calls == {"01": str(tmp_path.resolve()), "02": str((tmp_path / ".agent/worktrees/slot-2").resolve())}
     assert len(out_of("git", "rev-list", "--parents", "-n1", walked()).split()) == 3  # a merge commit
-    # Each ticket tip and the merge commit; the fourth gate is that of the end of run, on the tidied tip.
-    assert len([line for line in ledger if "the gate is green" in line]) == 3 and "| gates run | 4 |" in out
+    # A fast gate on each ticket tip, a full gate on the fast-forward and on the merge commit; the fifth gate is the
+    # full gate of the end of run, on the tidied tip.
+    assert len([line for line in ledger if "gate is green" in line]) == 4
+    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out
     assert [line for line in ledger if "merged into feat/x as a merge commit" in line]
     assert {entry["phase"] for entry in state_of(tmp_path)["tickets"].values()} == {"merged"}
     assert branches() == ["feat/x"] and out_of("git", "status", "--porcelain") == ""
@@ -423,8 +436,9 @@ def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gate
     (line,) = [line for line in ledger if "the conflict agent resolved the merge conflict in work.txt at " in line]
     number, tip = line[7:9], walked()
     assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
-    assert f"Ticket {number}: the gate is green on {tip[:7]}, record .agent/implement/{number}/gate-{tip[:7]}.log." in ledger
-    assert "| gates run | 4 |" in out and "| agents, conflict on claude-opus-5-5@medium | 1 |" in out
+    assert (f"Ticket {number}: the full gate is green on {tip[:7]}, record .agent/implement/{number}/gate-full-{tip[:7]}.log."
+            in ledger)
+    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out and "| agents, conflict on claude-opus-5-5@medium | 1 |" in out
     assert dict(state_of(tmp_path)["run"]["landed"])[number] == tip
     prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
     assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")
@@ -466,21 +480,22 @@ def test_a_red_gate_is_a_finding_and_the_ticket_it_blocks_never_starts(repo, tmp
     tip = out_of("git", "rev-parse", "--short=7", "ticket/feat%2Fx/01")
     assert code == 2 and ledger[-2:] == [GAVE_UP, ASKED], out
     assert ledger[1] == (f"Ticket 01: critical finding of kind code from the gate at "
-                         f".agent/implement/01/gate-{tip}.log:0: the gate is red on {tip}.")
-    record = (tmp_path / f".agent/implement/01/gate-{tip}.log").read_text()
+                         f".agent/implement/01/gate-fast-{tip}.log:0: the fast gate is red on {tip}.")
+    record = (tmp_path / f".agent/implement/01/gate-fast-{tip}.log").read_text()
     assert "status: clean\n" in record and "CHECK-OUTPUT\n\nexit: 1\nafter: clean\nend: " in record
-    assert "Ticket 02 is not merged: its phase is pending." in out and "| gates run | 1 |" in out
+    assert "Ticket 02 is not merged: its phase is pending." in out and "| fast gates run | 1 |" in out
+    assert "| full gates run | 0 |" in out
     assert out_of("git", "symbolic-ref", "--short", "HEAD") == "feat/x"
     assert walk(tmp_path, capsys, "exit 9\n")[0] == 2  # a BLOCKED ticket stays BLOCKED on a rerun
 
 
 def test_a_red_merge_gate_blocks_the_ticket_and_the_pr_branch_does_not_move(repo, tmp_path, capsys):
     two(repo)
-    gate = 'test "$(git rev-parse --abbrev-ref HEAD)" != HEAD'  # red on a detached commit: the merge commit
+    gate = '[ -z "$(git rev-parse -q --verify HEAD^2)" ]'  # red on the merge commit
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
     assert code == 1, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
-    assert "BLOCKED at the merge: the gate is red on " in line
+    assert "BLOCKED at the merge: the full gate is red on " in line
     assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 2  # no merge commit landed
     assert len(branches()) == 2 and out_of("git", "status", "--porcelain") == ""
 
@@ -537,12 +552,31 @@ def test_a_resumed_ticket_with_a_settled_gate_merges_without_a_gate_or_an_agent(
     entry = blocked_then_edited(repo, tmp_path, capsys, phase="merge")
     tip = entry["tip"]
     state = state_of(tmp_path)
-    state["tickets"]["01"]["green_gates"] = [tip]
+    state["tickets"]["01"]["green_gates"] = {"fast": [tip], "full": [tip]}
     (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
     # A gate on the ticket branch is still red, so a second gate for the settled commit would block the ticket. The
     # one new gate is that of the end of run, on the PR branch.
     code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/feat%2Fx/01 ]')
-    assert code == 0 and walked() == tip and "| gates run | 2 |" in out
+    # The fast gate of the blocked run, and the full gate of the end of run: the landing finds the green full record.
+    assert code == 0 and walked() == tip and "| fast gates run | 1 |" in out and "| full gates run | 1 |" in out
+    assert not (tmp_path / f".agent/implement/01/gate-full-{tip[:7]}.log").exists()
+
+
+def test_a_run_of_a_driver_with_untiered_gates_resumes_with_its_greens_as_full_gates(repo, tmp_path, capsys):
+    """Schema 2 had one gate, the full one: its green list and its count become the full tier on resume."""
+    tip = blocked_then_edited(repo, tmp_path, capsys, phase="merge")["tip"]
+    state = state_of(tmp_path)
+    state["run"].update(schema=2, gates=4)
+    state["run"]["final"]["green_gates"] = []
+    for entry in state["tickets"].values():
+        entry["green_gates"] = [tip]
+    (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
+    full = tmp_path / f".agent/implement/01/gate-full-{tip[:7]}.log"
+    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/feat%2Fx/01 ]')
+    after = state_of(tmp_path)
+    assert code == 0 and walked() == tip and not full.exists(), out  # the fast-forward ran no gate
+    assert after["run"]["schema"] == 3 and after["tickets"]["01"]["green_gates"] == {"fast": [], "full": [tip]}
+    assert after["run"]["gates"] == {"fast": 0, "full": 5}  # the four of the older run and the end of run
 
 
 def as_older_driver(tmp_path, *numbers):
@@ -801,7 +835,9 @@ def test_a_pr_branch_that_another_hand_moves_during_the_merge_gate_starts_the_la
     subjects = out_of("git", "log", "--format=%s", walked()).splitlines()
     assert "other" in subjects and {"implementer 01", "implementer 02"} <= set(subjects)
     assert len([line for line in ledger if "merged into feat/x as a merge commit" in line]) == 1
-    assert "| gates run | 5 |" in out  # two ticket tips, the stale merge commit, the new one, the end of run
+    # A fast gate on each ticket tip; a full gate on the fast-forward, the stale merge commit, the new one and at the
+    # end of run.
+    assert "| fast gates run | 2 |" in out and "| full gates run | 4 |" in out
 
 
 # Ticket 09, review round 1 (m1, Codex 6): the restart has a bound, and only a stale ref starts it.
@@ -819,7 +855,8 @@ def test_a_pr_branch_that_moves_at_each_merge_gate_blocks_the_ticket_after_the_s
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=MERGE_GATE + MOVE)
     assert code == 1, out
     assert "BLOCKED at the merge: " in merge_blocked(ledger) and "feat/x" in merge_blocked(ledger)
-    assert "| gates run | 4 |" in out  # two ticket tips and two merge commits: the landing is tried two times
+    # Two ticket tips fast; the fast-forward and two merge commits full: the landing is tried two times.
+    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out
     assert out_of("git", "log", "--format=%s", "feat/x").splitlines().count("other") == 2
 
 
@@ -828,8 +865,8 @@ def test_a_red_merge_gate_does_not_start_the_landing_again_when_the_pr_branch_mo
     mark = tmp_path.parent / f"{tmp_path.name}-red"
     gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {MOVE}; exit 1; }}'
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
-    assert code == 1 and "BLOCKED at the merge: the gate is red on " in merge_blocked(ledger), out
-    assert "| gates run | 3 |" in out
+    assert code == 1 and "BLOCKED at the merge: the full gate is red on " in merge_blocked(ledger), out
+    assert "| fast gates run | 2 |" in out and "| full gates run | 2 |" in out
 
 
 def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(repo, tmp_path, capsys):
@@ -845,7 +882,8 @@ def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(r
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
     assert code == 1 and mark.exists(), out
     assert "BLOCKED at the merge: the merge into the PR branch conflicts in work-0" in merge_blocked(ledger)
-    assert not [line for line in ledger if "conflict ran on" in line] and "| gates run | 3 |" in out
+    assert not [line for line in ledger if "conflict ran on" in line]
+    assert "| fast gates run | 2 |" in out and "| full gates run | 2 |" in out
 
 
 def test_the_landing_check_runs_while_the_ticket_holds_the_merge_lock(repo, tmp_path, capsys, monkeypatch):
@@ -876,9 +914,9 @@ def test_a_merge_commit_the_slot_cannot_check_out_is_not_gated_and_does_not_land
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
     assert code == 1, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
-    assert "BLOCKED at the merge: the slot is at " in line and "the gate did not run" in line
+    assert "BLOCKED at the merge: the slot is at " in line and "the full gate did not run" in line
     assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 2  # no merge commit landed
-    assert "| gates run | 2 |" in out
+    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out  # the full one: the fast-forward
 
 
 @pytest.mark.parametrize("gate, after", [
@@ -891,7 +929,7 @@ def test_a_gate_that_changes_the_tree_or_moves_head_is_red(repo, tmp_path, capsy
     assert code == 2 and "from the gate at .agent/implement/01/gate-" in ledger[-4] and ledger[-2:] == [GAVE_UP, ASKED], out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "\nexit: 0\n" in record and after in record
-    assert state_of(tmp_path)["tickets"]["01"]["green_gates"] == []
+    assert state_of(tmp_path)["tickets"]["01"]["green_gates"] == {"fast": [], "full": []}
     assert "by-the-gate" not in out_of("git", "log", "--format=%s", "feat/x")
 
 

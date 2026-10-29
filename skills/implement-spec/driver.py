@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """implement-spec driver: validate the ticket set and the environment, then walk the ticket graph.
 
-    sh run.sh --gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
+    sh run.sh --gate COMMAND --fast-gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
               [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--push]
               [--base BRANCH] [--dry-run]
 
@@ -122,7 +122,8 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
     values = {**_prompt_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
     for role in roles:
         run.state.ticket(number, phase=DURING.get(role, "review"))
-        values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, start), slot))
+        values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, driver_gate.FAST, start),
+                                                                 slot))
         # A test-writer on a ticket that has locked tests is the correction after a ruling.
         check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
         if check["correction"]:
@@ -250,7 +251,7 @@ def _red_landing(number: str, slot: str, run: Run, rulings: _Rulings, record: st
 
 
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool, rulings: _Rulings) -> _Landing:
-    """The commit to land, with the locked-file check passed and the gate green. Call it under the merge lock."""
+    """The commit to land, with the locked-file check passed and the full gate green. Call it under the merge lock."""
     number = ticket.number
     # An earlier try left the slot on its merge commit.
     git(slot, "checkout", "-q", run.names.ticket(number))
@@ -258,12 +259,12 @@ def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool, rul
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
     _refused(number, run, landing, rulings)
     if landing.commit != landing.pr_tip:
-        # No gate has seen a merge commit. A fast-forward to a gated tip finds its green record.
-        # When the checkout fails, the slot is on another commit and the gate refuses to run.
+        # The full gate runs on the commit that lands, a fast-forward as well as a merge commit: a fast green record
+        # does not count. When the checkout fails, the slot is on another commit and the gate refuses to run.
         git(slot, "checkout", "-q", "--detach", landing.commit)
-        if record := run.red_gate(number, slot, landing.commit):
+        if record := run.red_gate(number, slot, landing.commit, driver_gate.FULL):
             _red_landing(number, slot, run, rulings, record)
-            raise Blocked(f"the gate is red on {landing.commit[:7]}, record {record}")
+            raise Blocked(f"the full gate is red on {landing.commit[:7]}, record {record}")
     return landing
 
 
@@ -602,8 +603,11 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     defaults = ", ".join(f"{role} {minutes}" for role, minutes in driver_agents.TIMEOUTS.items())
     parser = _Parser(prog="implement-spec", description="Validate tickets and preconditions, then walk the graph.")
     parser.add_argument("--tickets", default=".agent/tickets", help="directory of NN-name.md ticket files")
-    parser.add_argument("--gate", help="the repo's check command (required); the driver runs it on each commit it "
-                        "is about to trust, with IMPLEMENT_SPEC_BASE set to the PR branch")
+    parser.add_argument("--gate", help="the full gate: the repo's whole check command (required); the driver runs it "
+                        "on each commit that would land and at the end of the run, with IMPLEMENT_SPEC_BASE set to "
+                        "the PR branch")
+    parser.add_argument("--fast-gate", help="the fast gate: the ticket's locked tests, lint and types (required); the "
+                        "driver runs it on each candidate before its review, and the agents run it on their work")
     parser.add_argument("--spec", help="the spec file the prompts point at (required without --dry-run)")
     parser.add_argument("--models", help="JSON file: one ordered list of provider/model@effort per role, "
                         "on top of the skill's models.json")
@@ -648,7 +652,9 @@ def _worktree_errors(slot_1_is_kept: bool) -> list[str]:
 
 def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[str]], dict[str, int]] | None:
     """(the tickets, the models, the kept slots) of a valid call, or None with each error printed."""
-    errors = [] if args.gate else ["--gate is required: the command the driver runs as the gate"]
+    errors = [] if args.gate else ["--gate is required: the command the driver runs as the full gate"]
+    if not args.fast_gate:
+        errors.append("--fast-gate is required: the command the driver and the agents run as the fast gate")
     if not (args.spec or args.dry_run):
         errors.append("--spec is required: the spec file the prompts point at")
     if args.parallel < 1:

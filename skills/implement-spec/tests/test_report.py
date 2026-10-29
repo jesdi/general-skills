@@ -156,7 +156,7 @@ def test_a_fixer_with_nothing_to_change_reports_no_commit_and_a_reason_per_findi
     assert check("fixer", fixer(concerns=reasons[:1]), **fix) == [
         "no commit, and no concern names the finding LOOSE: give each finding a concern that says why it needs no change"]
     assert check("fixer", fixer(concerns=reasons), **fix, red=True) == [
-        f"no commit, and the gate is red on {shas['impl'][:7]}: a fix of a red gate is a commit"]
+        f"no commit, and the fast gate is red on {shas['impl'][:7]}: a fix of a red gate is a commit"]
     # A commit that predates the fixer is still refused, and a commit it made is in `commits`.
     assert check("fixer", fixer(commits=[shas["impl"]], concerns=reasons), **fix)
     assert check("fixer", fixer(concerns=reasons), **{**fix, "start": shas["tests"]}) == [

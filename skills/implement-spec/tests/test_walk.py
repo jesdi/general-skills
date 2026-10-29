@@ -1,15 +1,16 @@
 """Ticket 03 acceptance tests: walk the graph with slots, gate by the driver, merge, resume.
 
-All through `sh run.sh --runner <script> --parallel N [--prepare <cmd>] --gate <cmd>` on the three-ticket fixture
+All through `sh run.sh --runner <script> --parallel N [--prepare <cmd>] --gate <cmd> --fast-gate <cmd>` on the
+three-ticket fixture
 repository. The fake runner plays test-writer and implementer per ticket; it logs, per call, its cwd, branch, HEAD,
-start and end time into `<rig>/calls/`. The gate is a small script that logs its commit, status, branch and
-environment into `<rig>/gates/`. Concurrency is steered with signal files (`touch` / `wait` plan keys), never sleeps.
+start and end time into `<rig>/calls/`. The gate is a small script that logs its tier, commit, status, branch and
+environment into `<rig>/gates/`: both tiers run it, with `TIER=fast` or `TIER=full` in front. Concurrency is steered with signal files (`touch` / `wait` plan keys), never sleeps.
 
 Interface choices (ticket 03):
-- gate record: `.agent/implement/<NN>/gate-<first 7 hex of the commit>.log`.
+- gate record: `.agent/implement/<NN>/gate-<tier>-<first 7 hex of the commit>.log`.
 - `summary.md` sits in `.agent/implement/` and its table is repeated on stdout.
 - `state.json` is `{"tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot}}}`;
-  `green_gates` holds full SHAs (a dict with a `commit` key is accepted too).
+  `green_gates` holds full SHAs per tier: `{"fast": [...], "full": [...]}`.
 
 Ticket 08: this fixture has no `origin`, and a run that merges every ticket now ends with the tidy, one gate on the
 tidied tip and the final review. The history as the walk made it is at `refs/implement-spec/feat%2Fcsv/recovery`: `Rig.walked()` is
@@ -103,8 +104,10 @@ conf = json.loads((rig / "gate.json").read_text())
 (rig / "gates").mkdir(exist_ok=True)
 branch = git("rev-parse", "--abbrev-ref", "HEAD")
 subject = git("log", "-1", "--format=%s")
-code = 1 if conf.get("all") or branch in conf.get("red", []) or subject in conf.get("subjects", []) else 0
-rec = dict(t0=time.time(), cwd=os.path.realpath(os.getcwd()), commit=git("rev-parse", "HEAD"), branch=branch,
+unbranched = branch == "HEAD" and not git("for-each-ref", "--points-at", "HEAD", "refs/heads")  # a commit that no branch holds
+code = 1 if (conf.get("all") or branch in conf.get("red", []) or subject in conf.get("subjects", [])
+             or (conf.get("unbranched") and unbranched)) else 0
+rec = dict(t0=time.time(), tier=os.environ.get("TIER"), cwd=os.path.realpath(os.getcwd()), commit=git("rev-parse", "HEAD"), branch=branch,
            status=git("status", "--short"), base=os.environ.get("IMPLEMENT_SPEC_BASE"),
            pycache=os.environ.get("PYTHONPYCACHEPREFIX"), exit=code)
 print("GATE-OUTPUT-MARK", rec["commit"])
@@ -190,7 +193,8 @@ class Rig:
     def run(self, steps, *extra, parallel="2", watch=False):
         """Run the driver once; with `watch`, read state.json in a tight loop meanwhile (torn reads, snapshots)."""
         (self.rig / "plan.json").write_text(json.dumps(steps))
-        args = ["--tickets", ".agent/tickets", "--gate", str(self.rig / "gate"), "--spec", "specs/csv/spec.md",
+        args = ["--tickets", ".agent/tickets", "--gate", f"TIER=full {self.rig / 'gate'}",
+                "--fast-gate", f"TIER=fast {self.rig / 'gate'}", "--spec", "specs/csv/spec.md",
                 "--models", str(self.models), "--runner", str(self.rig / "run-agent"), "--parallel", parallel, *extra]
         out, err = self.tmp / "out.txt", self.tmp / "err.txt"
         with out.open("w") as o, err.open("w") as e:
@@ -222,10 +226,10 @@ class Rig:
     def sha(self, nn, role):
         return self.calls(nn, role)[0]["sha"]
 
-    def gates(self):
+    def gates(self, tier=None):
         folder = self.rig / "gates"
         rows = [json.loads(p.read_text()) for p in folder.glob("*.json")] if folder.exists() else []
-        return sorted(rows, key=lambda r: r["t0"])
+        return sorted([r for r in rows if tier in (None, r["tier"])], key=lambda r: r["t0"])
 
     def ledger(self):
         path = self.repo / ".agent/implement/ledger.md"
@@ -255,12 +259,9 @@ class Rig:
         return f"exit {self.code}\n{self.out}{self.err}"
 
 
-def commit_of(entry):
-    return entry if isinstance(entry, str) else entry["commit"]
-
-
 def green(state, nn):
-    return {commit_of(e) for e in state["tickets"][nn]["green_gates"]}
+    """The green gates of the ticket as (tier, commit) pairs."""
+    return {(tier, commit) for tier, commits in state["tickets"][nn]["green_gates"].items() for commit in commits}
 
 
 @pytest.fixture(scope="module")
@@ -319,36 +320,45 @@ def test_failing_prepare_exits_3_before_any_agent_naming_slot_and_command(tmp_pa
     assert not rig.calls() and not rig.gates()
 
 
-def test_fast_forward_merge_has_exactly_one_gate_record_and_no_merge_gate(tmp_path):
+def test_a_fast_forward_merge_has_one_fast_and_one_full_record_of_the_ticket_tip(tmp_path):
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}).run(plan())
     assert rig.code == 0, rig.output()
     a1 = rig.sha("01", "implementer")
     assert rig.walked() == a1
     records = sorted((rig.repo / ".agent/implement/01").glob("gate-*.log"))
-    assert [p.name for p in records] == [f"gate-{a1[:7]}.log"]
-    text = records[0].read_text()
-    assert a1[:7] in text and "GATE-OUTPUT-MARK" in text and len(re.findall(r"\d\d:\d\d:\d\d", text)) >= 2
-    assert re.search(r"exit\D*0", text) and not re.search(r"^(\?\?| M|M |A )", text, re.M)
-    (gate,) = rig.walk_gates()
-    assert (gate["commit"], gate["status"], gate["cwd"]) == (a1, "", str(rig.repo.resolve()))
+    assert [p.name for p in records] == [f"gate-fast-{a1[:7]}.log", f"gate-full-{a1[:7]}.log"]
+    for tier, record in zip(("fast", "full"), records):
+        text = record.read_text()
+        assert f"tier: {tier}\ncommit: {a1}\n" in text and "GATE-OUTPUT-MARK" in text
+        assert len(re.findall(r"\d\d:\d\d:\d\d", text)) >= 2
+        assert re.search(r"exit\D*0", text) and not re.search(r"^(\?\?| M|M |A )", text, re.M)
+    fast, full = rig.walk_gates()
+    assert (fast["tier"], fast["commit"], fast["branch"]) == ("fast", a1, "ticket/feat%2Fcsv/01")
+    assert (full["tier"], full["commit"], full["branch"]) == ("full", a1, "HEAD")  # the commit that lands, detached
+    assert {gate["status"] for gate in (fast, full)} == {""}
+    assert {gate["cwd"] for gate in (fast, full)} == {str(rig.repo.resolve())}
 
 
 def test_gate_environment_names_the_pr_branch_and_a_pycache_prefix_under_agent_implement(tmp_path):
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}).run(plan())
     assert rig.code == 0, rig.output()
-    (gate,) = rig.walk_gates()
-    assert gate["base"] == "feat/csv" and gate["pycache"]
-    assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
+    gates = rig.walk_gates()
+    assert [gate["tier"] for gate in gates] == ["fast", "full"]
+    for gate in gates:
+        assert gate["base"] == "feat/csv" and gate["pycache"]
+        assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
 
 
 def test_red_gate_blocks_the_ticket_after_round_2_names_the_record_and_launches_no_review(blocked):
     assert blocked.code == 1, blocked.output()
     a1 = blocked.sha("01", "implementer")
-    finding = f"Ticket 01: critical finding of kind code from the gate at .agent/implement/01/gate-{a1[:7]}.log:0: "
+    finding = f"Ticket 01: critical finding of kind code from the gate at .agent/implement/01/gate-fast-{a1[:7]}.log:0: "
     assert [l for l in blocked.ledger() if l.startswith(finding)], blocked.ledger()
-    assert re.search(r"exit\D*1", (blocked.repo / f".agent/implement/01/gate-{a1[:7]}.log").read_text())
+    assert re.search(r"exit\D*1", (blocked.repo / f".agent/implement/01/gate-fast-{a1[:7]}.log").read_text())
     last = blocked.calls("01", "fixer")[-1]["sha"]
-    assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-{last[:7]}.log" in l], blocked.ledger()
+    assert [l for l in blocked.ledger() if "01" in l and "BLOCKED" in l and f"gate-fast-{last[:7]}.log" in l], blocked.ledger()
+    assert not [gate for gate in blocked.gates("full") if gate["branch"] == "ticket/feat%2Fcsv/01"]
+    assert not list((blocked.repo / ".agent/implement/01").glob("gate-full-*.log")), "no full gate on a blocked ticket"
     assert [c["role"] for c in blocked.calls("01")] == ["test-writer", "implementer"] + ["fixer"] * 2
     assert blocked.state()["tickets"]["01"]["phase"] == "blocked"
     assert "ticket/feat%2Fcsv/01" in blocked.branches() and "feat: 01 rows" not in blocked.pr_subjects()
@@ -371,8 +381,10 @@ def test_non_fast_forward_merge_is_a_plumbing_merge_commit_gated_once(tmp_path):
     a01, a03 = rig.sha("01", "implementer"), rig.sha("03", "implementer")
     tip = rig.walked()
     assert len(git(rig.repo, "rev-list", "--parents", "-n1", tip).split()) == 3, "tip is a merge commit"
-    commits = [g["commit"] for g in rig.walk_gates()]
-    assert sorted(commits) == sorted([a01, a03, tip]), commits
+    fast = [g["commit"] for g in rig.walk_gates() if g["tier"] == "fast"]
+    full = [g["commit"] for g in rig.walk_gates() if g["tier"] == "full"]
+    # 03 lands first, as a fast-forward; 01 lands as the merge commit. No full gate runs on 01's own tip.
+    assert sorted(fast) == sorted([a01, a03]) and full == [a03, tip], (fast, full)
     waited = rig.calls("01", "implementer")[0]
     assert waited["after_wait"]["branch"] == "ticket/feat%2Fcsv/01" and waited["after_wait"]["head"] == waited["head"]
     assert waited["after_wait"]["status"] == ""
@@ -406,7 +418,7 @@ def test_state_json_is_atomic_and_no_transition_is_lost_with_two_tickets_in_flig
     for nn in ("01", "02", "03"):
         entry = final["tickets"][nn]
         assert entry["phase"] == "merged" and entry["round"] == 0
-        assert std.sha(nn, "implementer") in green(final, nn)
+        assert ("fast", std.sha(nn, "implementer")) in green(final, nn)
         assert entry["test_writer_sha"] == std.sha(nn, "test-writer") and entry["locked"] == [f"tests/test_{nn}.py"]
 
 
@@ -433,7 +445,7 @@ def test_resume_returns_a_ticket_with_an_unverifiable_tip_to_implement_from_the_
     state, fake = rig.state(), "1" * 40
     tw_sha = rig.sha("01", "test-writer")
     assert state["tickets"]["01"]["test_writer_sha"] == tw_sha
-    state["tickets"]["01"].update(phase="review", tip=fake, green_gates=[])
+    state["tickets"]["01"].update(phase="review", tip=fake, green_gates={"fast": [], "full": []})
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     before = rig.ledger()
     rig.gate_conf()
@@ -449,7 +461,7 @@ def test_resume_returns_a_ticket_with_an_unverifiable_tip_to_implement_from_the_
 def test_resume_keeps_a_settled_gate_and_runs_no_gate_again(tmp_path):
     rig = single_blocked(tmp_path)
     a1, state = rig.sha("01", "implementer"), rig.state()
-    state["tickets"]["01"].update(phase="merge", tip=a1, green_gates=[a1])
+    state["tickets"]["01"].update(phase="merge", tip=a1, green_gates={"fast": [a1], "full": [a1]})
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     gates_before = len(rig.gates())
     rig.gate_conf(red=["ticket/feat%2Fcsv/01"])  # any gate run on the ticket would block it; the end of run gates feat/csv
@@ -465,7 +477,9 @@ def test_summary_md_and_stdout_carry_the_measurement_table(std):
     assert rows and all(row in std.out for row in rows), summary
     lines = summary.splitlines()
     line = lambda *words: [l for l in lines if all(w in l.lower() for w in words)]
-    assert [l for l in line("gate") if re.search(rf"\b{len(std.gates())}\b", l)], summary
+    for tier in ("fast", "full"):
+        assert f"| {tier} gates run | {len(std.gates(tier))} |" in lines, summary
+    assert not line("| gates run |"), summary
     for role in ("test-writer", "implementer"):
         assert [l for l in line(role) if "anthropic/claude-opus-5@medium" in l and re.search(r"\b3\b", l)], summary
         assert [l for l in line(role) if re.search(r"\d+(\.\d+)?\s*s\b", l)], summary

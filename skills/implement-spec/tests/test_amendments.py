@@ -41,7 +41,7 @@ def test_with_no_origin_the_branch_is_tidied_gated_and_reviewed_with_no_rebase_a
     assert ref(rig.repo, f"{rows[0]['sha']}~1") == rig.start, "no rebase: the ticket commits sit on the branch's start"
     assert ref(rig.repo, "feat/csv^{tree}") == ref(rig.repo, "refs/implement-spec/feat%2Fcsv/recovery^{tree}")
     records = sorted(p.name for p in (rig.repo / ".agent/implement/final").glob("gate-*.log"))
-    assert records == [f"gate-{tip[:7]}.log"], records
+    assert records == [f"gate-full-{tip[:7]}.log"], records
     (gate,) = [g for g in rig.gates() if g["commit"] == tip]
     (call,) = rig.final_calls("final-reviewer")
     assert call["head"] == tip and gate["t0"] < call["t0"], "the final review reads the gated, tidied tip"

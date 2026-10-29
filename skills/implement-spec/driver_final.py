@@ -209,7 +209,7 @@ def _resolve_rebase_conflict(run: Run, env: dict, base: str, onto: str) -> None:
         raise Blocked(f"the conflict agent: {error}")
     ledger(f"Rebase: the conflict agent resolved the conflict with {base} in {', '.join(files)} at {head('.')[:7]}.")
     with during("the gate after the rebase"):
-        run.gate(FINAL, ".", head("."))
+        run.gate(FINAL, ".", head("."), driver_gate.FULL)
 
 
 def _rebase(run: Run, tip: str, base: str, onto: str) -> None:
@@ -370,7 +370,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
     """One round of the final review on `tip`: the full review, or after it the scoped one."""
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(folder, tip)), "review_diff": str(REVIEW_DIFF),
+              "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)), "review_diff": str(REVIEW_DIFF),
               "ledger": str(OUT / "ledger.md"), "carried": _carried_findings(), "reviewed": str(final["reviewed"]),
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
@@ -460,7 +460,7 @@ def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
         if final["reviewed"] != tip:
             _check_review_is_due(run, final, tip)
             with during("the gate"):
-                run.gate(FINAL, ".", tip)
+                run.gate(FINAL, ".", tip, driver_gate.FULL)
             _review(run, final, tip)
         elif final["open"]:
             if final["round"] >= ROUNDS:
@@ -507,7 +507,7 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
         raise Blocked(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
                       f"{PR_RISK_INSTALL}")
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(OUT / FINAL, tip)), "pr_skill": str(method),
+              "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
               "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
     for round_ in range(2):  # the pr-writer gets one more run with the errors of the block
         with during("the PR body"):
@@ -548,9 +548,9 @@ def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
     """Push the reviewed tip to origin, once and with no force, then open the PR, once. Returns the lines for the
     operator."""
     tip = final["reviewed"]
-    if tip != run.tip() or tip not in final["green_gates"]:
-        raise Blocked(f"the reviewed tip {tip[:7]} is not the tip of {run.pr} with a green gate record: nothing is "
-                      "pushed")
+    if tip != run.tip() or tip not in final["green_gates"][driver_gate.FULL]:
+        raise Blocked(f"the reviewed tip {tip[:7]} is not the tip of {run.pr} with a green full gate record: nothing "
+                      "is pushed")
     if not final["base"]:
         raise Blocked(f"the end of run tidied {run.pr} when the repository had no origin remote, so it is on no base "
                       "branch of origin: nothing is pushed")

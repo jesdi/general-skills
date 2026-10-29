@@ -1,8 +1,11 @@
 """state.json, the resume contract: one lock, every write a read-modify-write, published by rename.
 
-    {"run": {revision, pr_branch, schema, gates, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
+    {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, fixtures, green_gates, slot, note, held, rejected}}}"""
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, fixtures, green_gates, slot, note, held, rejected}}}
+
+green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
+full one."""
 from __future__ import annotations
 
 import fcntl
@@ -16,12 +19,17 @@ from typing import IO
 from driver_names import Names
 from driver_slots import ancestor, git, on_branch, path
 
-SCHEMA = 2  # the version of this contract; 2: the names of driver_names. A run of an older driver has none.
+SCHEMA = 3  # the version of this contract; 2: the names of driver_names, 3: gate tiers. A run of an older driver has none.
 PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge", "merged", "blocked")
 
 
+def tiers() -> dict:
+    """The green gates of a ticket or of the end of run, per tier."""
+    return {"fast": [], "full": []}
+
+
 def _ticket() -> dict:
-    return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": [],
+    return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
             "slot": None, "note": "", "held": {}, "rejected": {},
             "fixtures": []}
 
@@ -29,7 +37,7 @@ def _ticket() -> dict:
 def _final() -> dict:
     """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
     return {"skipped": "", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
-            "reviewed": None, "round": 0, "open": [], "must_fix": [], "batch": None, "green_gates": [], "pushed": None, "body": None,
+            "reviewed": None, "round": 0, "open": [], "must_fix": [], "batch": None, "green_gates": tiers(), "pushed": None, "body": None,
             "pr": None}
 
 
@@ -45,7 +53,7 @@ class State:
         """Create the file for a new run, or add the tickets a resumed run does not know yet."""
         def change(state: dict) -> None:
             state.setdefault("run", {
-                "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "schema": SCHEMA, "gates": 0, "stops": 0, "agents": [],
+                "revision": uuid.uuid4().hex, "pr_branch": pr_branch, "schema": SCHEMA, "gates": {"fast": 0, "full": 0}, "stops": 0, "agents": [],
                 "questions": [], "start": git(".", "rev-parse", f"refs/heads/{pr_branch}").stdout.strip(),
                 "landed": [], "final": _final()})
             for key, value in _final().items():  # a run of an older driver lacks the newer keys

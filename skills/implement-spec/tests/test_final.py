@@ -233,12 +233,12 @@ def test_seven_commits_in_merge_order_are_tidied_into_three_ticket_commits_with_
 def test_one_gate_record_exists_for_the_tidied_tip_and_the_final_reviewer_is_pointed_at_it(story):
     rig, tip = story.rig, story.local.tip
     records = sorted((rig.repo / ".agent/implement/final").glob("gate-*.log"))
-    assert [p.name for p in records] == [f"gate-{tip[:7]}.log"], records
+    assert [p.name for p in records] == [f"gate-full-{tip[:7]}.log"], records
     assert "GATE-OUTPUT-MARK" in records[0].read_text() and tip[:7] in records[0].read_text()
     (gate,) = [g for g in rig.gates() if g["commit"] == tip]
     first = rig.final_calls("final-reviewer")[0]
     assert gate["t0"] < first["t0"], "the gate runs before the final review"
-    assert f"final/gate-{tip[:7]}.log" in first["prompt"]
+    assert f"final/gate-full-{tip[:7]}.log" in first["prompt"]
 
 
 def test_the_final_reviewer_runs_on_the_first_model_entry_pointed_at_review_diff_minors_and_rulings(story):
@@ -355,7 +355,7 @@ def test_final_fix_batch_rejects_an_unaddressed_must_fix(tmp_path):
 
 def test_the_fixer_of_the_final_review_gets_the_gate_command_and_runs_it_before_it_reports(fixed):
     (batch,) = fixed.final_calls("fixer")
-    gate_rule(batch["prompt"], str(fixed.rig / "gate"))
+    gate_rule(batch["prompt"], f"TIER=full {fixed.rig / 'gate'}")
 
 
 def test_a_scoped_review_covers_the_range_after_the_reviewed_tip_and_one_gate_runs_on_the_new_tip(fixed):
@@ -364,7 +364,7 @@ def test_a_scoped_review_covers_the_range_after_the_reviewed_tip_and_one_gate_ru
     assert reviewed[:7] in scoped["prompt"] and tip[:7] in scoped["prompt"]
     assert len([g for g in fixed.gates() if g["commit"] == tip]) == 1
     records = sorted(p.name for p in (fixed.repo / ".agent/implement/final").glob("gate-*.log"))
-    assert records == sorted({f"gate-{reviewed[:7]}.log", f"gate-{tip[:7]}.log"})
+    assert records == sorted({f"gate-full-{reviewed[:7]}.log", f"gate-full-{tip[:7]}.log"})
     assert len(fixed.final_calls("final-reviewer")) == 2 and all(stop_lines(fixed.out))
 
 
@@ -572,7 +572,7 @@ def pushed_run(tmp_path, monkeypatch, steps, risk_in, gh_fails=False):
             shutil.copy(PR_RISK / module, where / "pr-risk" / module)
     env = {**rig.env, "HOME": str(home), "CLAUDE_CONFIG_DIR": str(claude)}
     (rig.rig / "plan.json").write_text(json.dumps(steps))
-    args = ["--tickets", ".agent/tickets", "--gate", str(rig.rig / "gate"), "--spec", "specs/csv/spec.md",
+    args = ["--tickets", ".agent/tickets", "--gate", f"TIER=full {rig.rig / 'gate'}", "--fast-gate", f"TIER=fast {rig.rig / 'gate'}", "--spec", "specs/csv/spec.md",
             "--models", str(rig.models), "--runner", str(rig.rig / "run-agent"), "--push"]
     rig.rerun = lambda: _rerun(rig, ["sh", str(skills / "implement-spec/run.sh"), *args], env)
     rig.rerun()

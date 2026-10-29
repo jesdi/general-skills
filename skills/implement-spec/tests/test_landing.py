@@ -281,7 +281,7 @@ def pair(tmp_path):
 def start(rig, steps, *extra):
     """The driver of `rig` in the background: `Rig.run` returns only when the driver ended."""
     (rig.rig / "plan.json").write_text(json.dumps(steps))
-    args = ["--tickets", ".agent/tickets", "--gate", str(rig.rig / "gate"), "--spec", "specs/csv/spec.md",
+    args = ["--tickets", ".agent/tickets", "--gate", f"TIER=full {rig.rig / 'gate'}", "--fast-gate", f"TIER=fast {rig.rig / 'gate'}", "--spec", "specs/csv/spec.md",
             "--models", str(rig.models), "--runner", str(rig.rig / "run-agent"), "--parallel", "2", *extra]
     return subprocess.Popen(["sh", str(RUN), *args], cwd=rig.repo, env=rig.env, text=True, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, start_new_session=True)
