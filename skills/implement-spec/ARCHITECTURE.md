@@ -140,7 +140,8 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   role (`correctness`, `explorer`) or an unknown one stops the run before the preflight.
 - The full final review is three lens roles, `final-spec`, `final-correctness` and `final-structure`, with no model
   list. `driver_agents.LENSES` is the one table of a lens: the `source` of its findings, the method file it follows,
-  its lines of the one lens prompt `prompts/final-lens.md`, and whether it runs on another provider. The entry, the
+  whether its lines of the one lens prompt `prompts/final-lens.md` inline that file, and whether it runs on another
+  provider. Its lines are `prompts/lens-<source>.md`, with `prompts/lens-copy.md` as `{copy}`. The entry, the
   prompt values (`driver_final._lens_values`), the precondition errors and the source tags read it, and `TIMEOUTS` and
   `READ_ONLY` take its roles. `driver_agents.lens_entry` takes the entries from `final-reviewer`, and
   `correctness_entry` puts a lens on another provider than the first implementer entry;

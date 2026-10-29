@@ -190,7 +190,7 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 | implementer | `prompts/implementer.md` | `green` | With DONE and no commit: no new commit on the branch, no uncommitted change, and a concern that says why the start needs no change. The driver then gates and reviews the start commit. |
 | reviewer | `prompts/reviewer.md` | `findings` (`severity`, `file`, `line`, `title`, `evidence`, `kind`) | None. |
 | fixer | `prompts/fixer.md` | `green`, `ticket` | With DONE and no commit: no new commit on the branch, no uncommitted change, a gate that is green on the start, and a concern that names each finding of the round. |
-| final-spec, final-correctness, final-structure | `prompts/final-lens.md` | `findings` | None. |
+| final-spec, final-correctness, final-structure | `prompts/final-lens.md`, with the lines of `prompts/lens-<source>.md` | `findings` | None. |
 | final-reviewer (the scoped review) | `prompts/final-reviewer.md` | `findings`, `resolved_must_fix` | None. |
 | pr-writer | `prompts/pr-writer.md` | `body` | None. |
 | fixer of the final review | `prompts/final-fixer.md` | `green`; `commits` is a list of (`sha`, `ticket`) | Each new commit on the branch is in `commits`, with a ticket of the run. |

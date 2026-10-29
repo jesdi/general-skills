@@ -1,0 +1,1 @@
+To run a targeted check off this worktree, make a copy with `git worktree add --detach <temp dir> {start_sha}`, run the check there, and remove the copy with `git worktree remove --force <temp dir>` before you report.

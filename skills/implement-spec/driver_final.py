@@ -452,10 +452,14 @@ def _lenses(run: Run, values: dict[str, str], tip: str) -> list[dict]:
 
 
 def _lens_values(lens: driver_agents.Lens, values: dict[str, str]) -> dict[str, str]:
-    """The prompt values of `lens`: those of the review, its name and its lines of the shared lens prompt."""
+    """The prompt values of `lens`: those of the review, its name and its lines of the shared lens prompt. Its method
+    file is read only when its lines inline it."""
     path = _method(lens)
-    lines = lens.review.format(path=path, text=path.read_text(), start_sha=values["start_sha"], range=values["range"])
-    return {**values, "lens": lens.source, "method": lines}
+    # A lens that may run tests runs them on a copy: the other lenses work in the same worktree.
+    slots = {**values, "path": str(path), "copy": driver_agents.render("lens-copy", values),
+             **({"text": path.read_text()} if lens.inline else {})}
+    # The shared prompt puts the lines on their own lines.
+    return {**values, "lens": lens.source, "method": driver_agents.render(f"lens-{lens.source}", slots).rstrip("\n")}
 
 
 def _run_lenses(run: Run, values: dict[str, dict[str, str]],
