@@ -130,13 +130,15 @@ when `prune` exited 1 (the status keeps that failure, so the job still goes red)
    detaches HEAD at the base commit. `nothing to strengthen` ends the loop.
 2. **Strengthen agent.** Dispatch a fresh subagent with `strengthen-input.json`. Brief: per item,
    test-first, write the assertion or test that fails against each named mutant and passes on
-   the real code; touch only `backend/tests/`; make one or more commits per item, each ending
-   with the trailer line `Test-Prune-Item: <item id>`; leave the tree clean.
+   the real code; touch only `backend/tests/`; one item per commit (never two items in one commit;
+   an item may take several), each ending with the trailer line `Test-Prune-Item: <item id>`;
+   leave the tree clean.
 3. `strengthen-verify` rejects commits without a known trailer or outside `backend/tests/`, then
    proves each item on a cold run: every named id survived on the base and is killed on the
    head. Unproven items are reverted and closed: a later commit for a closed item is refused. It
    writes `<state>/strengthen-proof.json`, including the proven head. On failure HEAD stays
-   where the commits are (detached, unattended): fix and rerun. To abandon the loop instead,
+   where the commits are (detached, unattended): fix and rerun. A rejection names the recovery
+   that needs no reset: `git checkout <start>`, then commit each item again. To abandon the loop instead,
    `git checkout <base branch>`; the item commits stay reachable through `git reflog`.
 4. **Strengthen reviewer.** Dispatch a fresh subagent with `strengthen-proof.json` and the diff
    of the proven items (`git log -p <start>..HEAD`). Brief: accept an item only when its test
