@@ -182,21 +182,26 @@ def _files_in_conflict() -> list[str]:
     return git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
 
 
+def _run_rebase_conflict_agent(run: Run, env: dict, values: dict) -> str:
+    """Run the conflict agent on the open rebase and continue the rebase it resolved. Returns "" or why it blocked."""
+    try:
+        run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
+    except Blocked as blocked:
+        return str(blocked)
+    except Halted:
+        git(".", "rebase", "--abort")
+        raise
+    if _rebase_is_open():  # the agent resolved the files and did not go on
+        subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
+    return ""
+
+
 def _resolve_rebase_conflict(run: Run, env: dict, base: str, onto: str) -> None:
     """Run the conflict agent, once, on the rebase that is open in slot 1, then gate the rebased tip. No rebase is
     open afterwards, also when this raises."""
     files = _files_in_conflict()
     values = {**_prompt_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
-    error = ""
-    try:
-        run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
-    except Blocked as blocked:
-        error = str(blocked)
-    except Halted:
-        git(".", "rebase", "--abort")
-        raise
-    if not error and _rebase_is_open():  # the agent resolved the files and did not go on
-        subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
+    error = _run_rebase_conflict_agent(run, env, values)
     if _rebase_is_open():
         again = _files_in_conflict()
         git(".", "rebase", "--abort")
@@ -381,18 +386,28 @@ def _review(run: Run, final: dict, tip: str) -> None:
     with during("the final review"):
         report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
             "final-reviewer", FINAL, ".", values, notes=["final-scoped"] if done else [], fix_round=done))
+    _settle_review(run, done, tip, values["range"], _round_findings(final, found + report["findings"],
+                                                                     _carried_must_fix(final, done, report)))
+
+
+def _carried_must_fix(final: dict, done: int, report: dict) -> list[dict]:
+    """The must-fix findings that stay open after the round: all of them after the full review, else those the
+    scoped review did not resolve."""
     if not done:
-        carried = final["must_fix"]
-    else:
-        resolved = set(report.get("resolved_must_fix", []))
-        carried = [finding for finding in final["must_fix"] if _title(finding) not in resolved]
+        return final["must_fix"]
+    resolved = set(report.get("resolved_must_fix", []))
+    return [finding for finding in final["must_fix"] if _title(finding) not in resolved]
+
+
+def _round_findings(final: dict, found: list[dict], carried: list[dict]) -> list[dict]:
+    """The findings of the round: each one `found`, a must-fix one with its ticket, then each `carried` one that
+    was not found again."""
     must_by_key = {(finding["file"], finding["title"]): finding for finding in final["must_fix"]}
     reported = [{**finding, "must_fix": True, "ticket": must_by_key[key]["ticket"]} if
                 (key := (finding["file"], finding["title"])) in must_by_key else finding
-                for finding in found + report["findings"]]
+                for finding in found]
     identity = {(finding["file"], finding["title"]) for finding in reported}
-    _settle_review(run, done, tip, values["range"], reported + [finding for finding in carried
-                                                                 if (finding["file"], finding["title"]) not in identity])
+    return reported + [finding for finding in carried if (finding["file"], finding["title"]) not in identity]
 
 
 def _fix_commit_message(commit: str, report: dict) -> str:
@@ -492,6 +507,19 @@ def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
         "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed"})
 
 
+def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:
+    """Run the pr-writer, and once more with the errors of its merge-risk block. Returns the body it wrote."""
+    for round_ in range(2):
+        with during("the PR body"):
+            report = run.read_only(FINAL, ".", run.pr, tip,
+                                   lambda: run.agent("pr-writer", FINAL, ".", values, fix_round=round_))
+        if not (errors := _risk_errors(risk, report["body"])):
+            return report["body"]
+        values["risk_errors"] = (f"Your previous body has an invalid merge-risk block. Fix it with the pr-risk "
+                                 f"skill; its errors:\n{errors}\n")
+    raise Blocked(f"the merge-risk block of the PR body is invalid after a second run of the pr-writer: {errors}")
+
+
 def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
     """Write the PR body: what the pr-writer wrote with the method of the pr skill, then the facts of the run. A body
     written for the reviewed tip is kept when its merge-risk block still validates, so a PR that failed to open costs
@@ -509,17 +537,7 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
               "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
-    for round_ in range(2):  # the pr-writer gets one more run with the errors of the block
-        with during("the PR body"):
-            report = run.read_only(FINAL, ".", run.pr, tip,
-                                   lambda: run.agent("pr-writer", FINAL, ".", values, fix_round=round_))
-        if not (errors := _risk_errors(risk, report["body"])):
-            break
-        values["risk_errors"] = (f"Your previous body has an invalid merge-risk block. Fix it with the pr-risk "
-                                 f"skill; its errors:\n{errors}\n")
-    else:
-        raise Blocked(f"the merge-risk block of the PR body is invalid after a second run of the pr-writer: {errors}")
-    body.write_text(f"{report['body'].strip()}\n\n{facts}")
+    body.write_text(f"{_run_pr_writer(run, tip, risk, values).strip()}\n\n{facts}")
     run.state.update(lambda state: state["run"]["final"].update(body=tip))
     return body
 
