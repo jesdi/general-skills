@@ -19,7 +19,7 @@ Before any agent starts, the driver checks these. Each failed check prints one l
 - The `--models` file names only roles of the skill's `models.json`. A `correctness` or `explorer` key is a role that was removed: the error says so, and that the key should be deleted from the file.
 - Each model entry is valid, and the CLI of the first entry of each role is on PATH.
 - The `final-reviewer` list has an entry on another provider than the first `implementer` entry: the correctness lens of the final review runs on it. The error names the list and the implementer entry.
-- The `review-diff` skill is installed next to this one, with its `spec.md` and `correctness.md`, and the `deep-quality-review` skill is next to this one, in `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` or in `~/.agents/skills`: the lenses of the final review follow them. The error names the missing file or skill.
+- The `review-diff` skill is installed next to this one, with its `spec.md` and `correctness.md`, and the `deep-quality-review` skill is next to this one, in `${CLAUDE_CONFIG_DIR:-~/.claude}/skills` or in `~/.agents/skills`: the lenses of the final review follow them. One error per lens names its skill and its missing file.
 - With `--push`, `--unattended` or `--base`, the repository has an `origin` remote.
 - Each model that the run can use answers one short test prompt (the preflight). A model that fails gives one line with its error. `--dry-run` skips the preflight.
 

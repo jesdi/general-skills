@@ -534,9 +534,9 @@ def test_without_the_review_diff_skill_every_repository_stops_before_any_agent(t
     monkeypatch.setattr(driver_final, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")
     rig = Inside(tmp_path, ONE, remote=remote).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
-    assert rig.out == "".join(f"{tmp_path}/review-diff/{name} is missing: the final review runs through it; install "
-                              "the review-diff skill next to implement-spec\n"
-                              for name in ("SKILL.md", "spec.md", "correctness.md"))
+    assert rig.out == "".join(f"the review-diff skill is missing its {name}: the {lens} lens of the final review "
+                              "follows it; install it next to implement-spec with `npx skills add jesdi/general-skills "
+                              "--skill review-diff`\n" for name, lens in (("spec.md", "spec"), ("correctness.md", "correctness")))
 
 
 def test_a_push_without_the_pr_skill_stops_before_any_agent_and_a_local_run_does_not_need_it(tmp_path, monkeypatch):
