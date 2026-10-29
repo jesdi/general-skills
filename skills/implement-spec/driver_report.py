@@ -172,6 +172,12 @@ def _fixture_errors(report: dict) -> list[str]:
             if path not in report.get("locked", [])]
 
 
+def _space_errors(report: dict) -> list[str]:
+    """No locked path holds whitespace: the fast gate gets the locked paths as one space-separated list."""
+    return [f"locked path {path!r} contains whitespace: the fast gate gets the locked paths separated by spaces, so "
+            "rename the file" for path in report.get("locked", []) if re.search(r"\s", path)]
+
+
 def locked_files(listed: list[str]) -> list[str]:
     """The files of a `locked` list: a test node id `<file>::<test>` names its file. In order, each file once."""
     return list(dict.fromkeys(entry.partition("::")[0] for entry in listed))
@@ -190,7 +196,7 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     if "locked" in report:
         report["locked"] = locked_files(report["locked"])
-    return (_commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
+    return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
             + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context)
             + _fixture_errors(report))

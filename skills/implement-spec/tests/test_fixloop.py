@@ -537,6 +537,50 @@ def test_the_restore_before_a_correction_is_committed_so_the_next_fixer_and_its_
     assert "The driver put back these files at their locked versions" in prompt and "tests/test_01.py" in prompt
 
 
+def subject(rig, commit):
+    return subprocess.run(["git", "-C", str(rig.repo), "log", "-1", "--format=%s", commit], capture_output=True,
+                          text=True).stdout.strip()
+
+
+def test_the_fast_gate_gets_the_locked_files_of_its_ticket_and_the_full_gate_none(tmp_path):
+    """Ticket 02 locks two files and merged ticket 01 locks tests/test_01.py: only 02's files reach its fast gate."""
+    writer = tw("02")
+    writer["files"]["tests/test_02b.py"] = "def test_x():\n    assert 2 == 'x'\n"
+    writer["report"]["locked"] += ["tests/test_02b.py"]
+    rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [writer]}), parallel="1")
+    assert rig.code == 0, rig.ledger()
+    candidate = rig.sha("02", "implementer")
+    assert [gate["locked"] for gate in rig.gates("fast") if gate["commit"] == candidate] == [
+        "tests/test_02.py tests/test_02b.py"]
+    assert rig.gates("full") and all(gate["locked"] is None for gate in rig.gates("full"))
+
+
+def test_the_restore_commit_gets_the_fast_gate_with_the_locked_files_and_the_restored_ones(tmp_path):
+    weak = finding("WEAK", kind="test", file="tests/test_02.py")
+    correction = {**tw("02"), "files": {"tests/test_02.py": "def test_x():\n    assert '02' == 'x'  # stronger\n"},
+                  "commit": "test: 02 stronger", "only": ["tests/test_02.py"]}
+    rig = Inside(tmp_path, three()).run(plan(**{
+        "02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
+        "02/reviewer": [review("02", [weak]), review("02")]}))
+    assert rig.code == 0, rig.ledger()
+    (restore,) = [gate for gate in rig.gates("fast") if subject(rig, gate["commit"]) == RESTORE]
+    assert restore["locked"] == "tests/test_02.py tests/test_01.py"
+    assert (rig.folder("02") / f"gate-fast-{restore['commit'][:7]}.log").exists()
+    assert not [gate for gate in rig.gates("full") if gate["commit"] == restore["commit"]]
+
+
+def test_a_locked_path_with_whitespace_is_rejected_once_and_then_blocks(tmp_path):
+    spaced = {**tw("01"), "files": {"tests/test 01.py": "def test_x():\n    assert 1 == 'x'\n"}}
+    spaced["report"] = {**spaced["report"], "files": ["tests/test 01.py"], "locked": ["tests/test 01.py"]}
+    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [spaced, spaced]}))
+    error = ("locked path 'tests/test 01.py' contains whitespace: the fast gate gets the locked paths separated by "
+             "spaces, so rename the file")
+    assert blocked(rig) == f"Ticket 01: BLOCKED at the test-writer: {error}."
+    first, second = rig.calls("01", "test-writer")
+    assert f"The driver rejected the earlier attempt: {error}" in second["prompt"]
+    assert not rig.calls("01", "implementer")
+
+
 ADAPTED_01 = LOCKED_01 + "# adapted to the interface of 02\n"
 ADAPTS = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": ADAPTED_01})
 RESTORE = "implement-spec: restore the locked files before the correction"

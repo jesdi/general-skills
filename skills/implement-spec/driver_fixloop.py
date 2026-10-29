@@ -199,7 +199,7 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     # The gate was green on the tip before the restore, so a red gate here is a restored file that fails with the
     # ticket's code. The driver decides that, not the correction (issue #90).
     with during("the gate of the restore"):
-        record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST) if restored else ""
+        record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST, restored) if restored else ""
     if not record and all(finding["source"] == "driver" for finding in findings):
         job.previous = ""  # no review has seen the restore commit
         ledger(f"Ticket {number}: the code does not need the change to {', '.join(restored)}: the restore closes it, "

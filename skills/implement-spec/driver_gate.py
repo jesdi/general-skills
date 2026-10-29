@@ -6,6 +6,9 @@ clean before the command and after it, with HEAD still on the commit. A command 
 with HEAD unmoved, did not judge the commit: it runs once more, and that run overwrites the record. A signal ended the
 command when its exit is negative, or when it is 128+N for N in SIGHUP, SIGINT, SIGKILL or SIGTERM: a shell that does
 not exec its last command, as dash does not, outlives the killed child and exits with 128+N.
+
+Each gate has `IMPLEMENT_SPEC_BASE` (the PR branch) in its environment; the fast gate also has `IMPLEMENT_SPEC_LOCKED`,
+the space-separated locked file paths it checks. A locked path holds no whitespace: the test-writer report is rejected.
 """
 from __future__ import annotations
 
@@ -67,13 +70,18 @@ def _attempt(command: str, tier: str, slot: str, commit: str, record: Path, env:
     return code, after
 
 
-def run(command: str, tier: str, slot: str, folder: Path, pr_branch: str) -> tuple[bool, Path, list[str]]:
-    """Gate the HEAD of `slot` on `tier`. Returns (green, the record, a ledger sentence per gate that a signal ended)."""
+def run(command: str, tier: str, slot: str, folder: Path, pr_branch: str,
+        locked: list[str]) -> tuple[bool, Path, list[str]]:
+    """Gate the HEAD of `slot` on `tier`, the fast gate on the `locked` files. Returns (green, the record, a ledger
+    sentence per gate that a signal ended)."""
     commit = head(slot)
     folder.mkdir(parents=True, exist_ok=True)
     record = record_path(folder, tier, commit)
     # The cache of compiled Python stays out of the slot, so the gate leaves the tree clean.
     env = dict(os.environ, IMPLEMENT_SPEC_BASE=pr_branch, PYTHONPYCACHEPREFIX=str(folder.parent.resolve() / "pycache"))
+    env.pop("IMPLEMENT_SPEC_LOCKED", None)  # the full gate gets no list, not even one from the driver's environment
+    if tier == FAST:
+        env["IMPLEMENT_SPEC_LOCKED"] = " ".join(locked)
     code, after = _attempt(command, tier, slot, commit, record, env)
     killed = []
     # A process outside the gate can kill it, as a `pkill -f` of another slot does: that run judged nothing.

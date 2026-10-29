@@ -108,7 +108,7 @@ unbranched = branch == "HEAD" and not git("for-each-ref", "--points-at", "HEAD",
 code = 1 if (conf.get("all") or branch in conf.get("red", []) or subject in conf.get("subjects", [])
              or (conf.get("unbranched") and unbranched)) else 0
 rec = dict(t0=time.time(), tier=os.environ.get("TIER"), cwd=os.path.realpath(os.getcwd()), commit=git("rev-parse", "HEAD"), branch=branch,
-           status=git("status", "--short"), base=os.environ.get("IMPLEMENT_SPEC_BASE"),
+           status=git("status", "--short"), base=os.environ.get("IMPLEMENT_SPEC_BASE"), locked=os.environ.get("IMPLEMENT_SPEC_LOCKED"),
            pycache=os.environ.get("PYTHONPYCACHEPREFIX"), exit=code)
 print("GATE-OUTPUT-MARK", rec["commit"])
 (rig / "gates" / f"{{time.time_ns()}}-{{os.getpid()}}.json").write_text(json.dumps(rec))
