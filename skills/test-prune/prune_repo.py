@@ -119,6 +119,11 @@ class Repo:
                 fields.pop(0)
         return paths
 
+    def changes(self) -> list[str]:
+        """Every staged, unstaged or untracked path, from `git status --porcelain -z --no-renames`."""
+        out = self.git("status", "--porcelain", "-z", "--no-renames", "--untracked-files=all")
+        return [entry[3:] for entry in out.split("\0") if entry]
+
     def require_clean(self) -> None:
         dirty = self.dirty()
         if dirty:

@@ -47,9 +47,9 @@ def strengthen_start(ctx) -> int:
     ctx.state.save("strengthen.json", {"start": start, "verified": False, "items": work,
                                        "status": {i["id"]: "open" for i in work}, "closed": {}})
     path = ctx.state.save("strengthen-input.json", {"start": start, "items": work})
-    ctx.state.emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one item per "
-         f"commit (never two items in one commit; an item may take several), each touching only backend/tests/ "
-         f"and ending with the trailer `{TRAILER}: <item id>`.")
+    ctx.state.emit(f"{len(work)} strengthen items → {path}\nWrite each item's tests test-first on top of {start[:12]}, touching "
+         f"only backend/tests/, and commit each item with `prune.py strengthen-commit --item <item id>` (one item "
+         f"per call; an item may take several). Never run `git commit` yourself.")
     return 0
 
 
@@ -81,14 +81,18 @@ def reopened(history: list, closed: dict) -> list:
 def _recovery(start: str) -> str:
     """How to redo rejected commits with checkout, edits and commits alone (no reset)."""
     return (f"Redo them one item per commit: `git checkout {start}`, then write each item's tests again and "
-            f"commit them, every commit touching only backend/tests/ and ending with `{TRAILER}: <item id>`.")
+            f"commit each item with `prune.py strengthen-commit --item <item id>`.")
+
+
+def _require_descends(repo, start: str) -> None:
+    if repo.run_git("merge-base", "--is-ancestor", start, "HEAD").returncode:
+        raise BadInput(f"HEAD does not descend from the strengthen start {start}")
 
 
 def _commits(repo, st: dict) -> list:
     """[(sha, item id)] since start; every commit must name a known, open item and touch only backend/tests/."""
     start = st["start"]
-    if repo.run_git("merge-base", "--is-ancestor", start, "HEAD").returncode:
-        raise BadInput(f"HEAD does not descend from the strengthen start {start}")
+    _require_descends(repo, start)
     errors = ["merge commits since the strengthen start"] if repo.git(
         "rev-list", "--min-parents=2", f"{start}..HEAD").strip() else []
     history = _history(repo, start)
@@ -99,6 +103,26 @@ def _commits(repo, st: dict) -> list:
     if errors:
         raise BadInput("strengthen commits rejected:\n" + "\n".join(errors) + "\n" + _recovery(start))
     return [(sha, items[0]) for sha, items, _ in history]
+
+
+def strengthen_commit(ctx) -> int:
+    """Commit the working tree's changes under backend/tests/ as one commit for one open item; the
+    trailer is written here, so a commit can never name two items."""
+    repo, st, item_id = ctx.repo, ctx.state.load("strengthen.json"), ctx.args.item
+    status = st["status"].get(item_id)
+    if status not in ("open", "proven"):
+        raise BadInput(f"{item_id} is not an open strengthen item (status: {status or 'unknown'})")
+    _require_descends(repo, st["start"])
+    changed = repo.changes()
+    outside = [p for p in changed if not p.startswith("backend/tests/")]
+    if outside:
+        raise BadInput("changes outside backend/tests/, discard them first:\n" + "\n".join(outside))
+    if not changed:
+        raise BadInput(f"nothing to commit for {item_id}: write its tests under backend/tests/ first")
+    repo.git("add", "-A", "--", "backend/tests/")
+    repo.git("commit", "-q", "-m", f"test: strengthen {item_id}", "-m", f"{TRAILER}: {item_id}")
+    ctx.state.emit(repo.head())
+    return 0
 
 
 def _revert(repo, item_id: str, commits: list, why: str) -> None:
