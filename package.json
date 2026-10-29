@@ -20,6 +20,7 @@
     "crap-gate": "sh skills/crap-gate/run.sh",
     "check": "sh scripts/check.sh",
     "check:fast": "sh scripts/check-fast.sh",
+    "sync-launchers": "tsx scripts/sync-launchers.ts",
     "generate-manifest": "tsx scripts/generate-manifest.ts"
   },
   "devDependencies": {
