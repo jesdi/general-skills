@@ -10,7 +10,7 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
     for agent in run["agents"]:
         seconds[agent["role"]] += agent["seconds"]
     rounds = ", ".join(f"{number}: {entry['round']}" for number, entry in tickets.items())
-    return [("gates run", run["gates"]),
+    return [("fast gates run", run["gates"]["fast"]), ("full gates run", run["gates"]["full"]),
             *((f"agents, {role} on {entry}", number) for (role, entry), number in agents.items()),
             *((f"wall time, {role}", f"{total:.1f} s") for role, total in seconds.items()),
             ("fix rounds per ticket", rounds),

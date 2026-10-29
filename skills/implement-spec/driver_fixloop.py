@@ -41,7 +41,7 @@ class Job:
         """The values of a prompt; `review` is the round whose findings the agent reads."""
         entry = self.run.state.read()["tickets"][self.ticket.number]
         findings = os.path.relpath(OUT / self.ticket.number / f"findings-{review}.json", self.slot)
-        gate = os.path.relpath(driver_gate.record_path(OUT / self.ticket.number, self.tip), self.slot)
+        gate = os.path.relpath(driver_gate.record_path(OUT / self.ticket.number, driver_gate.FAST, self.tip), self.slot)
         return {**self.values, "start_sha": self.tip, "from_sha": self.previous, "round": str(self.round),
                 "locked": " ".join(entry["locked"]), "locked_tests": " ".join(tested(entry)), "test_writer_sha": str(entry["test_writer_sha"] or ""),
                 "findings": findings, "gate_record": gate,
@@ -199,7 +199,7 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     # The gate was green on the tip before the restore, so a red gate here is a restored file that fails with the
     # ticket's code. The driver decides that, not the correction (issue #90).
     with during("the gate of the restore"):
-        record = run.red_gate(number, job.slot, job.tip) if restored else ""
+        record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST) if restored else ""
     if not record and all(finding["source"] == "driver" for finding in findings):
         job.previous = ""  # no review has seen the restore commit
         ledger(f"Ticket {number}: the code does not need the change to {', '.join(restored)}: the restore closes it, "
@@ -339,20 +339,20 @@ def _act_on(job: Job, found: list[dict]) -> bool:
 
 
 def _gate(job: Job) -> list[dict]:
-    """Gate the tip. A red gate before round 2 is a finding for the next round;
+    """Fast-gate the candidate tip. A red gate before round 2 is a finding for the next round;
     a red gate after round 2 or on a test-writer correction blocks. Returns the findings: the red gate,
     or none."""
     run, number = job.run, job.ticket.number
     job.red = False
     with during("the gate"):
         if job.round == ROUNDS or job.corrected:
-            run.gate(number, job.slot, job.tip)
+            run.gate(number, job.slot, job.tip, driver_gate.FAST)
             return []
-        record = run.red_gate(number, job.slot, job.tip)
+        record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST)
     if not record:
         return []
     job.red, path = True, os.path.relpath(record, job.slot)
-    found = [{"severity": "critical", "file": path, "line": 0, "title": f"the gate is red on {job.tip[:7]}",
+    found = [{"severity": "critical", "file": path, "line": 0, "title": f"the fast gate is red on {job.tip[:7]}",
               "evidence": f"the output of the gate in {path}", "kind": "code", "source": "gate"}]
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
     return _log_findings(job, found)

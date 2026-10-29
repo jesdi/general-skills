@@ -3,7 +3,7 @@
 
 Every run of a newer driver holds `lock` (driver._hold), so a newer and an older driver never run in one repository
 at the same time. The driver calls `resume` once, after the locks and before any check reads a ref: a run with no
-`schema` in state.json gets the new names of its refs.
+`schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier.
 ponytail: delete this module, tests/test_legacy.py and its one line in driver._hold and in driver._start_errors
 once no older driver is left.
 """
@@ -80,13 +80,25 @@ def lock(common_dir: Path) -> tuple[IO | None, str]:
                   "Wait until it ends, then run the driver again.")
 
 
+def _tiered(state: dict) -> None:
+    """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier."""
+    run = state["run"]
+    for record in [run.get("final", {}), *state["tickets"].values()]:
+        if isinstance(record.get("green_gates"), list):
+            record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
+    if isinstance(run.get("gates"), int):
+        run["gates"] = {"fast": 0, "full": run["gates"]}
+    run["schema"] = driver_state.SCHEMA
+
+
 def resume(state: driver_state.State) -> list[str]:
     """Give each ref of a run that an older driver started its new name, then mark the run: the errors, or []."""
-    if not state.path.exists() or state.read()["run"].get("schema", 1) >= driver_state.SCHEMA:
+    if not state.path.exists() or (schema := state.read()["run"].get("schema", 1)) >= driver_state.SCHEMA:
         return []
-    run, names = state.read()["run"], Names(state.read()["run"]["pr_branch"])
-    moves = [_branch(entry, number, names, run["start"]) for number, entry in state.read()["tickets"].items()]
-    if errors := [error for error in [*moves, _recovery(run, names)] if error]:
-        return errors
-    state.update(lambda changed: changed["run"].update(schema=driver_state.SCHEMA))
+    if schema < 2:  # the names of driver_names
+        run, names = state.read()["run"], Names(state.read()["run"]["pr_branch"])
+        moves = [_branch(entry, number, names, run["start"]) for number, entry in state.read()["tickets"].items()]
+        if errors := [error for error in [*moves, _recovery(run, names)] if error]:
+            return errors
+    state.update(_tiered)
     return []

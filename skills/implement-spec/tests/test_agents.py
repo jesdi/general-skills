@@ -120,7 +120,7 @@ class World:
 
     def run(self, plan=None, *extra, runner=True):
         (self.runner.parent / "plan.json").write_text(json.dumps(plan or {}))
-        args = ["--tickets", ".agent/tickets", "--gate", "true", "--spec", "specs/csv/spec.md",
+        args = ["--tickets", ".agent/tickets", "--gate", "true", "--fast-gate", "true", "--spec", "specs/csv/spec.md",
                 "--models", str(self.models), *(["--runner", str(self.runner)] if runner else []), *extra]
         return drive(self.env, self.repo, *args)
 
@@ -248,7 +248,7 @@ def test_claude_entry_launches_claude_p_and_bare_means_anthropic(env, entry):
 @pytest.mark.parametrize("entry", ["mystery/model@medium", "anthropic/claude-opus-5@turbo", "openai/gpt-sol@turbo"])
 def test_unknown_provider_or_effort_exits_3_naming_role_and_entry_before_any_agent(env, entry):
     w = World(env, reviewer=[entry])
-    proc = drive(w.env, w.repo, "--tickets", ".agent/tickets", "--gate", "true", "--models", str(w.models), "--dry-run")
+    proc = drive(w.env, w.repo, "--tickets", ".agent/tickets", "--gate", "true", "--fast-gate", "true", "--models", str(w.models), "--dry-run")
     assert proc.returncode == 3, proc.stdout + proc.stderr
     assert any("reviewer" in l and entry in l for l in proc.stdout.splitlines()), proc.stdout
     proc = w.run({"test-writer": [tw()]})

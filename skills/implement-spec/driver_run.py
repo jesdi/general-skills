@@ -159,31 +159,32 @@ class Run:
             raise Blocked(error or left)
         return result
 
-    def gate(self, number: str, slot: str, commit: str) -> None:
-        """Gate `commit` in the slot, unless a green record names it already."""
-        if record := self.red_gate(number, slot, commit):
-            raise Blocked(f"the gate is red on {commit[:7]}, record {record}")
+    def gate(self, number: str, slot: str, commit: str, tier: str) -> None:
+        """Gate `commit` in the slot on `tier`, unless a green record of that tier names it already."""
+        if record := self.red_gate(number, slot, commit, tier):
+            raise Blocked(f"the {tier} gate is red on {commit[:7]}, record {record}")
 
-    def red_gate(self, number: str, slot: str, commit: str) -> str:
+    def red_gate(self, number: str, slot: str, commit: str, tier: str) -> str:
         """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green."""
-        if commit in _gate_record(self.state.read(), number)["green_gates"]:
+        if commit in _gate_record(self.state.read(), number)["green_gates"][tier]:
             return ""
         at = driver_slots.head(slot)
         if at != commit:
-            raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the gate did not run")
-        green, record, killed = driver_gate.run(self.args.gate, slot, OUT / number, self.pr)
+            raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the {tier} gate did not run")
+        command = self.args.fast_gate if tier == driver_gate.FAST else self.args.gate
+        green, record, killed = driver_gate.run(command, tier, slot, OUT / number, self.pr)
         for sentence in killed:
             ledger(f"{_owner(number)}: {sentence}.")
 
         def count(state: dict) -> None:
-            state["run"]["gates"] += 1
+            state["run"]["gates"][tier] += 1
             if green:
-                _gate_record(state, number)["green_gates"].append(commit)
+                _gate_record(state, number)["green_gates"][tier].append(commit)
 
         self.state.update(count)
         if not green:
             return str(record)
-        ledger(f"{_owner(number)}: the gate is green on {commit[:7]}, record {record}.")
+        ledger(f"{_owner(number)}: the {tier} gate is green on {commit[:7]}, record {record}.")
         return ""
 
     def restore_locked_files(self, number: str, slot: str) -> list[str]:

@@ -14,16 +14,16 @@ def test_updates_from_many_threads_are_all_kept_and_no_scratch_file_stays(tmp_pa
 
     def work(number):
         for step in range(40):
-            state.update(lambda s: s["run"].update(gates=s["run"]["gates"] + 1))
-            state.update(lambda s: s["tickets"][number]["green_gates"].append(step))
+            state.update(lambda s: s["run"]["gates"].update(full=s["run"]["gates"]["full"] + 1))
+            state.update(lambda s: s["tickets"][number]["green_gates"]["fast"].append(step))
             state.ticket(number, round=step)
 
     threads = [threading.Thread(target=work, args=(number,)) for number in numbers]
     [thread.start() for thread in threads]
     [thread.join() for thread in threads]
     final = json.loads(state.path.read_text())
-    assert final["run"]["gates"] == 320
-    assert all(final["tickets"][n]["green_gates"] == list(range(40)) and final["tickets"][n]["round"] == 39 for n in numbers)
+    assert final["run"]["gates"] == {"fast": 0, "full": 320}
+    assert all(final["tickets"][n]["green_gates"]["fast"] == list(range(40)) and final["tickets"][n]["round"] == 39 for n in numbers)
     assert [p.name for p in state.path.parent.iterdir()] == ["state.json"]
 
 
@@ -36,7 +36,7 @@ def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
     assert (again["run"]["revision"], again["run"]["pr_branch"]) == (revision, "feat/x")
     assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["fixtures"] == []
     assert again["tickets"]["02"] == {
-        "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": [], "slot": None,
+        "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": {"fast": [], "full": []}, "slot": None,
         "note": "", "held": {}, "rejected": {}, "fixtures": []}
 
 

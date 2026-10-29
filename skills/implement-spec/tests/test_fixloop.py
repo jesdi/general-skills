@@ -30,9 +30,10 @@ class Inside(test_review.Review):
 
     def run(self, steps, *extra, parallel="2", watch=False):
         (self.rig / "plan.json").write_text(json.dumps(steps))
-        args = ["--tickets", ".agent/tickets", "--gate", self.command.format(gate=self.rig / "gate"), "--spec",
-                "specs/csv/spec.md", "--models", str(self.models), "--runner", str(self.rig / "run-agent"), "--parallel",
-                parallel, *extra]
+        command = self.command.format(gate=self.rig / "gate")
+        args = ["--tickets", ".agent/tickets", "--gate", f"export TIER=full; {command}", "--fast-gate",
+                f"export TIER=fast; {command}", "--spec", "specs/csv/spec.md", "--models", str(self.models), "--runner",
+                str(self.rig / "run-agent"), "--parallel", parallel, *extra]
         here = os.getcwd()
         os.chdir(self.repo)
         try:
@@ -236,7 +237,7 @@ def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_start
     assert rig.calls("01", "fixer")[0]["head"] == rig.calls("01", "test-writer")[1]["sha"]  # on the corrected tip
     # No review saw the correction yet, so the review after the round is a full one.
     assert "re-review" not in rig.prompt("reviewer-1")
-    assert [gate["commit"] for gate in rig.walk_gates()] == [rig.sha("01", "implementer"), rig.sha("01", "fixer")]
+    assert [gate["commit"] for gate in rig.gates("fast")] == [rig.sha("01", "implementer"), rig.sha("01", "fixer")]
 
 
 def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_fix_round(tmp_path):
@@ -560,7 +561,7 @@ def test_a_restored_locked_file_of_a_merged_ticket_that_fails_with_the_new_code_
     assert not rig.calls("02", "fixer")
     (restore,) = [gate["commit"] for gate in rig.gates() if gate["exit"]]
     first, second = rig.calls("02", "test-writer")[1:]
-    assert f".agent/implement/02/gate-{restore[:7]}.log" in first["prompt"] and first["head"] == restore
+    assert f".agent/implement/02/gate-fast-{restore[:7]}.log" in first["prompt"] and first["head"] == restore
     assert "the gate is red on the restore commit" in second["prompt"]  # the rejection of the first attempt
     assert on_pr(rig, "tests/test_01.py") == ADAPTED_01 and "tests/test_01.py" in rig.state()["tickets"]["02"]["locked"]
 
@@ -649,7 +650,7 @@ def test_a_restore_that_turns_the_merge_gate_red_is_taken_back_and_asks_again_wi
     two = {name: text for name, text in three().items() if not name.startswith("03")}  # 02 lands as a fast-forward
     rig, steps = changed_at_cap(tmp_path, "red", files=two, gate={"subjects": [LANDING_RESTORE]})
     rig.run(steps, "--answer", f"{MERGED_LOCKED}-1=restore", parallel="1")
-    assert rig.code == 2 and rig.led("Ticket 02: BLOCKED at the merge: the gate is red on"), rig.ledger()
+    assert rig.code == 2 and rig.led("Ticket 02: BLOCKED at the merge: the full gate is red on"), rig.ledger()
     assert asked(rig) == {f"{MERGED_LOCKED}-2": ["adopt", "redesign"]}
     question = [q for q in rig.state()["run"]["questions"] if q["answer"] is None][0]
     assert question["recommended"] == "adopt" and question["evidence"][0].endswith(".log")
@@ -685,7 +686,7 @@ def test_a_fixer_with_nothing_to_change_is_accepted_and_the_same_tip_is_reviewed
     assert len(rig.calls("01", "fixer")) == 1 and rig.led("fixer ran on", "report accepted")
     assert rig.state()["tickets"]["01"]["round"] == 1 and rig.state()["tickets"]["01"]["phase"] == "merged"
     tip = rig.sha("01", "implementer")
-    assert [gate["commit"] for gate in rig.gates()].count(tip) == 1
+    assert [gate["commit"] for gate in rig.gates("fast")].count(tip) == 1
     again = rig.prompt("reviewer-1")
     assert f"The fix is {tip}..{tip}" in again and "The fixer of round 1 changed nothing" in again
     assert ".agent/implement/01/fixer-1.json" in again and "no concern names" not in rig.prompt("fixer-1")
@@ -701,11 +702,11 @@ def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_e
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer", "fixer", "fixer",
                                                          "reviewer"]
     first, second = (call["sha"] for call in rig.calls("01", "fixer"))
-    record = f".agent/implement/01/gate-{first[:7]}.log"
+    record = f".agent/implement/01/gate-fast-{first[:7]}.log"
     (gate,) = json.loads((rig.folder() / "findings-1.json").read_text())
     assert (gate["source"], gate["severity"], gate["kind"]) == ("gate", "critical", "code")
-    assert gate["title"] == f"the gate is red on {first[:7]}" and record in gate["evidence"]
-    assert rig.led(f"Ticket 01: critical finding of kind code from the gate at {record}:0: the gate is red on {first[:7]}.")
+    assert gate["title"] == f"the fast gate is red on {first[:7]}" and record in gate["evidence"]
+    assert rig.led(f"Ticket 01: critical finding of kind code from the gate at {record}:0: the fast gate is red on {first[:7]}.")
     assert "findings-1.json" in rig.prompt("fixer-2") and rig.state()["tickets"]["01"]["round"] == 2
     # No review saw the red tip: the re-review covers both fixes, and the proof that round 1 made due stays due.
     again = rig.prompt("reviewer-2")
@@ -719,10 +720,10 @@ def test_a_red_gate_on_the_implementer_commit_starts_fix_round_1_with_the_record
     assert rig.code == 0, rig.ledger()
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
     tip = rig.sha("01", "implementer")
-    record = f".agent/implement/01/gate-{tip[:7]}.log"
+    record = f".agent/implement/01/gate-fast-{tip[:7]}.log"
     (gate,) = json.loads((rig.folder() / "findings-0.json").read_text())
     assert (gate["source"], gate["severity"], gate["kind"]) == ("gate", "critical", "code")
-    assert gate["title"] == f"the gate is red on {tip[:7]}" and record in gate["evidence"]
+    assert gate["title"] == f"the fast gate is red on {tip[:7]}" and record in gate["evidence"]
     assert "findings-0.json" in rig.prompt("fixer-1") and rig.state()["tickets"]["01"]["phase"] == "merged"
     assert "The fix is" not in rig.prompt("reviewer-1")  # no review saw the implementer commit: a full review
     assert [gate["commit"] for gate in rig.gates()].count(tip) == 1 and not rig.led("killed by signal")
@@ -765,10 +766,10 @@ def test_a_gate_killed_by_a_signal_runs_once_more_and_its_green_second_run_count
     assert rig.code == 0, rig.ledger()
     tip = rig.sha("01", "implementer")
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer"]
-    assert rig.led("killed by signal") == [f"Ticket 01: the gate of {tip[:7]} was killed by signal 15 and runs again."]
-    assert rig.led(f"Ticket 01: the gate is green on {tip[:7]}") and not rig.led("finding of kind")
+    assert rig.led("killed by signal") == [f"Ticket 01: the fast gate of {tip[:7]} was killed by signal 15 and runs again."]
+    assert rig.led(f"Ticket 01: the fast gate is green on {tip[:7]}") and not rig.led("finding of kind")
     assert json.loads((rig.folder() / "findings-0.json").read_text()) == []  # the review's, with no gate finding
-    record = (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+    record = (rig.folder() / f"gate-fast-{tip[:7]}.log").read_text()
     assert record.count("exit: ") == 1 and "\nexit: 0\nafter: clean\n" in record  # the second run overwrote it
 
 
@@ -781,8 +782,8 @@ def test_a_gate_killed_by_a_signal_twice_is_red(tmp_path, command, code):
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
     assert len(rig.led("killed by signal")) == 1 and tip not in [gate["commit"] for gate in rig.gates()]
     (gate,) = json.loads((rig.folder() / "findings-0.json").read_text())
-    assert gate["title"] == f"the gate is red on {tip[:7]}"
-    assert f"\nexit: {code}\nafter: clean\n" in (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+    assert gate["title"] == f"the fast gate is red on {tip[:7]}"
+    assert f"\nexit: {code}\nafter: clean\n" in (rig.folder() / f"gate-fast-{tip[:7]}.log").read_text()
 
 
 @pytest.mark.parametrize("exit", [1, 142])  # 142 is 128+SIGALRM: a signal, but not one that kills a gate from outside
@@ -793,7 +794,7 @@ def test_a_gate_that_exits_with_any_other_code_is_red_without_running_again(tmp_
     tip = rig.sha("01", "implementer")
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "fixer", "reviewer"]
     assert not rig.led("killed by signal") and tip not in [gate["commit"] for gate in rig.gates()]
-    record = (rig.folder() / f"gate-{tip[:7]}.log").read_text()
+    record = (rig.folder() / f"gate-fast-{tip[:7]}.log").read_text()
     assert record.count("exit: ") == 1 and f"\nexit: {exit}\nafter: clean\n" in record
 
 
@@ -801,7 +802,7 @@ def test_a_red_gate_on_the_fixer_commit_of_round_2_blocks_the_ticket(tmp_path):
     rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 2"]})
     rig.run(plan(**{"01/reviewer": [review("01", [STUCK])] * 2, "01/fixer": [fix("01", n) for n in (1, 2)]}))
     last = rig.calls("01", "fixer")[-1]["sha"]
-    assert f"BLOCKED at the gate: the gate is red on {last[:7]}" in blocked(rig)
+    assert f"BLOCKED at the gate: the fast gate is red on {last[:7]}" in blocked(rig)
     assert len(rig.calls("01", "reviewer")) == 2 and not (rig.folder() / "findings-2.json").exists()
 
 
@@ -959,7 +960,7 @@ def test_a_reviewer_that_writes_the_shared_git_config_gets_it_restored_and_runs_
     assert line.endswith("the driver restored the shared git config and runs the review again.")
     tip, prompt = rig.sha("01", "implementer"), rig.prompt("reviewer-0")
     assert len(rig.calls("01", "reviewer")) == 2 and rig.tip() == tip
-    assert f".agent/implement/01/gate-{tip[:7]}.log" in prompt and "never write with `git config`" in prompt
+    assert f".agent/implement/01/gate-fast-{tip[:7]}.log" in prompt and "never write with `git config`" in prompt
 
 
 def test_a_branch_entry_that_another_worktree_writes_during_the_review_is_no_rule_break_and_stays(tmp_path):

@@ -136,7 +136,7 @@ def test_an_installed_skill_without_review_diff_fails_clearly_before_any_agent(t
     copy = tmp_path / "installed/skills/implement-spec"
     shutil.copytree(SKILL, copy, ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "test_*"))
     (rig.rig / "plan.json").write_text(json.dumps(plan()))
-    args = ["--tickets", ".agent/tickets", "--gate", str(rig.rig / "gate"), "--spec", "specs/csv/spec.md",
+    args = ["--tickets", ".agent/tickets", "--gate", f"TIER=full {rig.rig / 'gate'}", "--fast-gate", f"TIER=fast {rig.rig / 'gate'}", "--spec", "specs/csv/spec.md",
             "--models", str(rig.models), "--runner", str(rig.rig / "run-agent")]
     proc = subprocess.run(["sh", str(copy / "run.sh"), *args], cwd=rig.repo, env=rig.env, text=True,
                           capture_output=True, timeout=120)
@@ -272,9 +272,9 @@ def test_round_2_starts_a_fresh_implementer_on_the_next_model(escalated):
 
 def test_each_round_ends_with_one_gate_record_and_a_re_review_scoped_to_the_fix(escalated):
     tips = [escalated.sha("01", "implementer")] + [c["sha"] for c in escalated.calls("01", "fixer")]
-    commits = [g["commit"] for g in escalated.gates()]
+    commits = [g["commit"] for g in escalated.gates("fast")]
     assert len(tips) == 3 and all(commits.count(t) == 1 for t in tips), commits
-    assert all((escalated.folder() / f"gate-{t[:7]}.log").exists() for t in tips)
+    assert all((escalated.folder() / f"gate-fast-{t[:7]}.log").exists() for t in tips)
     reviews = escalated.calls("01", "reviewer")
     assert len(reviews) == 3
     for k in (1, 2):
@@ -289,7 +289,7 @@ def gate_rule(prompt, gate):
 
 
 def test_the_implementer_and_each_fixer_get_the_gate_command_and_run_it_before_they_report(escalated):
-    gate = str(escalated.rig / "gate")
+    gate = f"TIER=full {escalated.rig / 'gate'}"
     agents = escalated.calls("01", "implementer") + escalated.calls("01", "fixer")
     assert len(agents) == 3, "the implementer and the fixers of rounds 1 and 2 (the next model)"
     for call in agents:
