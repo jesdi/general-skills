@@ -2,6 +2,8 @@
 import json
 import re
 
+import pytest
+
 from prune_harness import PRUNE_BRANCH, REFERENCE, STRENGTHEN_BRANCH, R, arg, cand, case
 
 COMPUTE = "rebalancer.compute_trades"
@@ -214,3 +216,123 @@ def test_every_post_batch_mutation_run_starts_from_an_empty_mutants_directory(ta
     assert all(r["mutants"] in ("absent", "empty") for r in runs), runs
     assert all(r["KEEP_CACHE"] is None for r in runs), runs
     assert culprit in target.ids_at(target.remote_sha(PRUNE_BRANCH))
+
+
+# --- strengthen-commit: prune.py makes each item's commit, one item per call -------------------
+
+TESTS_FILE = "backend/tests/test_rebalancer.py"
+
+
+def write_test(target, source, file=TESTS_FILE):
+    path = target.root / file
+    path.write_text(path.read_text() + "\n\n" + source.strip("\n") + "\n")
+
+
+def two_items(target, drift_ids=("x_apply_drift__mutmut_2",)):
+    target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
+                   groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(list(drift_ids))})
+    target.ok("strengthen-start")
+
+
+def refused(target, item, needle):
+    head = target.git("rev-parse", "HEAD").strip()
+    proc = target.run("strengthen-commit", "--item", item)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert needle in proc.stderr, proc.stderr
+    assert target.git("rev-parse", "HEAD").strip() == head
+    assert target.read_state("status.json")["commands"][-1] == {
+        "command": "strengthen-commit", "exit": 2, "reason": proc.stderr.strip().splitlines()[0]}
+
+
+def test_strengthen_commit_makes_one_commit_per_item_that_strengthen_verify_accepts(target):
+    two_items(target)
+    shas = []
+    for item, source in [(COMPUTE, COMPUTE_TEST), (DRIFT, DRIFT_TEST)]:
+        write_test(target, source)
+        proc = target.ok("strengthen-commit", "--item", item)
+        sha = target.git("rev-parse", "HEAD").strip()
+        assert proc.stdout.strip() == sha
+        assert target.git("log", "-1", "--format=%s", sha).strip() == f"test: strengthen {item}"
+        trailers = target.git("log", "-1", "--format=%(trailers:key=Test-Prune-Item,valueonly)", sha).split()
+        assert trailers == [item]
+        assert target.git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split() == [TESTS_FILE]
+        shas.append(sha)
+    assert target.git("rev-list", "--reverse", f"{target.base}..HEAD").split() == shas
+    assert target.git("status", "--porcelain").strip() == ""
+
+    target.ok("strengthen-verify")
+
+    assert target.read_state("strengthen.json")["status"] == {
+        COMPUTE: "proven", DRIFT: "proven"}
+    write_test(target, COMPUTE_TEST.replace("_rounding", "_rounding_again"))
+    target.ok("strengthen-commit", "--item", COMPUTE)  # a proven item is still open for more commits
+
+
+def test_strengthen_commit_commits_a_new_test_file_under_backend_tests(target):
+    two_items(target)
+    (target.root / "backend/tests/test_new.py").write_text(DRIFT_TEST)
+
+    target.ok("strengthen-commit", "--item", DRIFT)
+
+    assert target.git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split() == [
+        "backend/tests/test_new.py"]
+
+
+def test_strengthen_commit_refuses_an_unknown_item(target):
+    two_items(target)
+    write_test(target, COMPUTE_TEST)
+    refused(target, "rebalancer.no_such_group", "rebalancer.no_such_group")
+
+
+def test_strengthen_commit_refuses_an_item_strengthen_verify_closed(target):
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    write_test(target, DRIFT_TEST)
+    target.ok("strengthen-commit", "--item", DRIFT)
+    target.ok("strengthen-verify")  # DRIFT_TEST leaves _4 alive: the item is reverted and closed
+    assert target.read_state("strengthen.json")["status"][DRIFT] == "reverted"
+    write_test(target, DRIFT_TEST.replace("_new", "_again"))
+    refused(target, DRIFT, "reverted")
+
+
+def test_strengthen_commit_refuses_before_strengthen_start(target):
+    target.prepare([cand(case(1))], accept=[COMPUTE], groups={COMPUTE: strengthen_group(IDS_7_9)})
+    write_test(target, COMPUTE_TEST)
+    refused(target, COMPUTE, "strengthen.json")
+
+
+@pytest.mark.parametrize("outside", ["backend/services/rebalancer.py", "backend/notes.txt", "README-x.md"])
+def test_strengthen_commit_refuses_any_change_outside_backend_tests(target, outside):
+    two_items(target)
+    write_test(target, COMPUTE_TEST)
+    path = target.root / outside
+    path.write_text((path.read_text() if path.exists() else "") + "\n# edited\n")
+    refused(target, COMPUTE, outside)
+
+
+def test_strengthen_commit_refuses_a_staged_change_outside_backend_tests(target):
+    two_items(target)
+    write_test(target, COMPUTE_TEST)
+    path = target.root / "backend/services/rebalancer.py"
+    path.write_text(path.read_text() + "\n# edited\n")
+    target.git("add", "backend/services/rebalancer.py")
+    target.git("restore", "--worktree", "--source=HEAD", "backend/services/rebalancer.py")
+    refused(target, COMPUTE, "backend/services/rebalancer.py")
+
+
+def test_strengthen_commit_refuses_a_file_moved_into_backend_tests_from_outside(target):
+    two_items(target)
+    target.git("mv", "backend/services/rebalancer.py", "backend/tests/moved.py")
+    refused(target, COMPUTE, "\nbackend/services/rebalancer.py")
+
+
+def test_strengthen_commit_refuses_when_nothing_changed(target):
+    two_items(target)
+    refused(target, COMPUTE, "nothing to commit")
+
+
+def test_strengthen_commit_refuses_a_head_off_the_strengthen_start(target):
+    two_items(target)
+    target.git("checkout", "-q", "--orphan", "elsewhere")
+    target.git("commit", "-q", "-m", "unrelated root")
+    write_test(target, COMPUTE_TEST)
+    refused(target, COMPUTE, "does not descend")

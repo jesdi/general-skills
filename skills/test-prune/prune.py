@@ -2,8 +2,8 @@
 """test-prune: drive the fixer/reviewer prune loop and the strengthen loop over a target repo.
 
 collect → (fixer) → review-input → (reviewer) → batch → apply (interactive) | prune (unattended);
-strengthen-start → (strengthen agent) → strengthen-verify → (reviewer) → strengthen-finish.
-The script owns every git, make and file operation; the agents only write JSON or test commits.
+strengthen-start → (strengthen agent, strengthen-commit per item) → strengthen-verify → (reviewer) → strengthen-finish.
+The script owns every git, make and file operation; the agents only write JSON or test files.
 """
 from __future__ import annotations
 
@@ -17,12 +17,12 @@ from pathlib import Path
 from prune_repo import BadInput, Fail, Repo, State, read_agent_json
 from prune_review import batch, collect, review_input
 from prune_runs import apply, prune
-from prune_strengthen import strengthen_finish, strengthen_start, strengthen_verify
+from prune_strengthen import strengthen_commit, strengthen_finish, strengthen_start, strengthen_verify
 
 COMMANDS = {
     "collect": collect, "review-input": review_input, "batch": batch, "apply": apply, "prune": prune,
     "strengthen-start": strengthen_start, "strengthen-verify": strengthen_verify,
-    "strengthen-finish": strengthen_finish,
+    "strengthen-commit": strengthen_commit, "strengthen-finish": strengthen_finish,
 }
 
 
@@ -54,6 +54,7 @@ def build_parser():
     sub.add_parser("apply", parents=[common])
     sub.add_parser("prune", parents=[common])
     sub.add_parser("strengthen-start", parents=[common])
+    sub.add_parser("strengthen-commit", parents=[common]).add_argument("--item", required=True)
     sub.add_parser("strengthen-verify", parents=[common])
     sub.add_parser("strengthen-finish", parents=[common]).add_argument("--reviews", required=True)
     return parser
