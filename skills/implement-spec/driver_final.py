@@ -40,16 +40,17 @@ from driver_tickets import Ticket
 
 KIND = "final-finding"
 ROUNDS = 2  # the full review and the scoped one after the fix batch
-# The final review runs through the review-diff skill, which is installed next to this one.
+# The final review runs through the review-diff skill, which must sit next to this one: `_installed` looks nowhere else.
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
 SEVERITIES = ("critical", "important", "minor")
 
 
 def _installed(name: str) -> Path | None:
     """The SKILL.md of a skill: next to this skill, else in the skill folder of the Claude home or of the shared
-    home of Codex and OpenCode."""
+    home of Codex and OpenCode. review-diff is only next to this skill."""
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    homes = (driver_agents.SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
+    homes = (REVIEW_DIFF.parent.parent,) if name == REVIEW_DIFF.parent.name else (
+        driver_agents.SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
     return next((home / name / "SKILL.md" for home in homes if (home / name / "SKILL.md").is_file()), None)
 
 
@@ -59,10 +60,10 @@ def pr_skill() -> Path | None:
 
 
 def _method(lens: driver_agents.Lens) -> Path | None:
-    """The file `lens` follows: in review-diff next to this skill, else in its skill where that is installed. None
-    when its skill is not installed."""
-    skill = REVIEW_DIFF if lens.skill == REVIEW_DIFF.parent.name else _installed(lens.skill)
-    return skill and skill.parent / lens.method
+    """The file `lens` follows, in its skill where that is installed. None when the skill or the file is missing."""
+    skill = _installed(lens.skill)
+    method = skill and skill.parent / lens.method
+    return method if method and method.is_file() else None
 
 
 def pr_risk_skill() -> Path | None:
@@ -87,14 +88,10 @@ def _has_origin() -> bool:
 
 
 def _method_errors() -> list[str]:
-    """One error per missing method of the final review: the files of review-diff and the skill of each other lens."""
-    lenses = driver_agents.LENSES.values()
-    beside = [_method(lens) for lens in lenses if lens.skill == REVIEW_DIFF.parent.name]
-    errors = [f"{path} is missing: the final review runs through it; install the review-diff skill next to "
-              "implement-spec" for path in (REVIEW_DIFF, *beside) if not path.exists()]
-    return errors + [f"the {lens.skill} skill is missing: the {lens.source} lens of the final review follows it; "
-                     f"install it with `npx skills add jesdi/general-skills --skill {lens.skill}`"
-                     for lens in lenses if not _method(lens)]
+    """One error per lens of the final review whose method is missing."""
+    return [f"the {lens.skill} skill is missing its {lens.method}: the {lens.source} lens of the final review follows "
+            f"it; install it next to implement-spec with `npx skills add jesdi/general-skills --skill {lens.skill}`"
+            for lens in driver_agents.LENSES.values() if not _method(lens)]
 
 
 def precondition_errors(push: bool, base: str | None) -> list[str]:
