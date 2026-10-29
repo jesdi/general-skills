@@ -22,6 +22,7 @@ def test_the_scoped_review_is_one_agent_on_the_other_provider_over_the_fix_batch
     assert rig.led("End of run: final-reviewer ran on", ASTRA) and f"Range: {final_['tidied']}..{batch}\n" in scoped["prompt"]
     assert scoped["head"] == batch and final_["reviewed"] == batch and final_["round"] == 2
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1] and len(rig.final_calls("fixer")) == 1
+    assert [(f["title"], f["source"]) for f in findings_file(rig, 1)] == [("Q-ONE", "final-reviewer")]
 
 
 def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_blocks_the_run(tmp_path):
