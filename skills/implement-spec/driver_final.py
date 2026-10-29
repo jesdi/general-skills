@@ -438,14 +438,11 @@ def _lenses(run: Run, values: dict[str, str], tip: str) -> list[dict]:
     a lens changed the slot: then all three run again. The accepted reports are kept only once the slot is as the
     review found it."""
     values = {role: _lens_values(lens, values) for role, lens in driver_agents.LENSES.items()}
-    attempts = []
-
-    def review() -> tuple[dict[str, dict], list[str]]:
-        kept = {} if attempts else run.state.read()["run"]["final"]["lenses"]
-        attempts.append(tip)
-        return _run_lenses(run, values, {role: one["report"] for role, one in kept.items() if one["tip"] == tip})
-
-    reports, errors = run.read_only(FINAL, ".", run.pr, tip, review)
+    lenses = run.state.read()["run"]["final"]["lenses"]
+    kept = {role: one["report"] for role, one in lenses.items() if one["tip"] == tip}
+    # The first run keeps the reports; the second, after a lens changed the slot, keeps none.
+    passes = iter((kept, {}))
+    reports, errors = run.read_only(FINAL, ".", run.pr, tip, lambda: _run_lenses(run, values, next(passes)))
     run.state.update(lambda state: state["run"]["final"]["lenses"].update(
         {role: {"tip": tip, "report": report} for role, report in reports.items()}))
     if errors:

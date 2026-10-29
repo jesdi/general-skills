@@ -191,3 +191,13 @@ def test_a_lens_that_changes_the_slot_on_both_attempts_leaves_no_kept_lens_repor
     rig.run(plan(**{"final/final-spec": [final(files={"left.txt": "x"}), final(files={"more.txt": "x"}, commit="by it")]}))
     assert rig.code == 1 and rig.final()["reviewed"] is None, rig.out
     assert [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 2] and rig.final()["lenses"] == {}
+
+
+def test_a_lens_that_changes_the_slot_makes_the_kept_lenses_run_again_too(tmp_path):
+    rig = rig_of(tmp_path)
+    steps = plan(**{"final/final-structure": [stopped(), final(files={"left.txt": "x"})]})
+    rig.run(steps)
+    assert rig.code == 1 and set(rig.final()["lenses"]) == {"final-spec", "final-correctness"}, rig.out
+    rig.run(steps)
+    # The structure lens alone first, then all three after it changed the slot.
+    assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 3], rig.out
