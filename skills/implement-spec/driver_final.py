@@ -401,7 +401,7 @@ def _log_open_after_batch(to_fix: list[dict]) -> None:
 
 def _review(run: Run, final: dict, tip: str) -> None:
     """One round of the final review on `tip`: the full review by the three lenses, or after it the scoped one, on
-    the entry of the correctness lens: another provider than the implementer's, and so than the fixer's when it shares
+    the other-provider entry: another provider than the implementer's, and so than the fixer's when it shares
     the implementer's."""
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
@@ -424,7 +424,7 @@ def _scoped(run: Run, values: dict[str, str], tip: str, done: int) -> tuple[list
     """The scoped review after the fix batch, one `final-reviewer`. Returns (its findings, each with the source
     `final-reviewer`; the titles of the must-fix findings it resolved)."""
     report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-        "final-reviewer", FINAL, ".", values, entry=driver_agents.correctness_entry(run.models), fix_round=done))
+        "final-reviewer", FINAL, ".", values, entry=driver_agents.other_provider_entry(run.models), fix_round=done))
     return ([{**finding, "source": "final-reviewer"} for finding in report["findings"]],
             set(report.get("resolved_must_fix", [])))
 

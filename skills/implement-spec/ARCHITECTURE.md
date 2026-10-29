@@ -144,7 +144,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   provider. Its lines are `prompts/lens-<source>.md`, with `prompts/lens-copy.md` as `{copy}`. The entry, the
   prompt values (`driver_final._lens_values`), the precondition errors and the source tags read it, and `TIMEOUTS` and
   `READ_ONLY` take its roles. `driver_agents.lens_entry` takes the entries from `final-reviewer`, and
-  `correctness_entry` puts a lens on another provider than the first implementer entry;
+  `other_provider_entry` puts a lens on another provider than the first implementer entry;
   `load_models` refuses a list with none. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
   twice stops the round only after every lens has ended; an accepted lens report is kept in `run.final.lenses` with
@@ -153,7 +153,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   findings of the scoped review get the source `final-reviewer`; a findings file of an older driver, with no
   `source`, is read only by the scoped review agent. The lens reports go to
   `run.final.lenses` only once `Run.read_only` returns, so a report of a slot that a lens changed is never kept.
-- The scoped review after the fix batch is one `final-reviewer` agent on `correctness_entry`, never the three
+- The scoped review after the fix batch is one `final-reviewer` agent on `other_provider_entry`, never the three
   lenses again; it is the last round (`driver_final.ROUNDS`).
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks after round 2. A red gate on a test-writer correction blocks.

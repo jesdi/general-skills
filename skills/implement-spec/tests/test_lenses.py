@@ -81,8 +81,8 @@ def test_a_final_reviewer_list_with_no_entry_on_another_provider_exits_3_before_
     rig = rig_of(tmp_path, models={"implementer": [SONNET], "final-reviewer": [OPUS]}).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == (f"final-reviewer: no entry of its list ({OPUS}) is on another provider than the implementer's "
-                       f"first entry {SONNET}; the correctness lens of the final review never runs on the "
-                       "implementer's provider\n")
+                       f"first entry {SONNET}; its other-provider entry serves the correctness lens of the final "
+                       "review and the scoped review, which never run on the implementer's provider\n")
 
 
 def test_without_the_deep_quality_review_skill_the_run_exits_3_before_any_agent(tmp_path, monkeypatch):
