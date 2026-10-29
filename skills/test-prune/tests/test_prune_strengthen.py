@@ -120,6 +120,28 @@ def test_a_co_author_paragraph_after_the_item_trailer_does_not_hide_it(target):
     assert all(i in strengthen_pr(target) for i in IDS_7_9)
 
 
+def test_a_commit_naming_two_items_is_rejected_with_a_recovery_the_agent_can_run(target):
+    # The unattended agent may not reset: the recovery must need only checkout, edits and commits.
+    target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
+                   groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(["x_apply_drift__mutmut_2"])})
+    target.ok("strengthen-start")
+    start = target.read_state("strengthen.json")["start"]
+    path = target.root / "backend/tests/test_rebalancer.py"
+    path.write_text(path.read_text() + COMPUTE_TEST + DRIFT_TEST)
+    target.git("commit", "-qam", f"test: both\n\nTest-Prune-Item: {COMPUTE}\nTest-Prune-Item: {DRIFT}")
+
+    verify = target.run("strengthen-verify")
+
+    assert verify.returncode == 2
+    out = verify.stdout + verify.stderr
+    assert "one item per commit" in out
+    assert f"git checkout {start}" in out
+    target.git("checkout", "-q", start)
+    target.commit_test(COMPUTE, COMPUTE_TEST)
+    target.commit_test(DRIFT, DRIFT_TEST)
+    target.ok("strengthen-verify")
+
+
 def test_strengthen_item_whose_ids_are_not_all_killed_is_reverted_and_left_out_of_the_pr(target):
     drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
     target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],

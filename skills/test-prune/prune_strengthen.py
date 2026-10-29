@@ -47,8 +47,9 @@ def strengthen_start(ctx) -> int:
     ctx.state.save("strengthen.json", {"start": start, "verified": False, "items": work,
                                        "status": {i["id"]: "open" for i in work}, "closed": {}})
     path = ctx.state.save("strengthen-input.json", {"start": start, "items": work})
-    ctx.state.emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one or more "
-         f"commits per item, each touching only backend/tests/ and ending with the trailer `{TRAILER}: <item id>`.")
+    ctx.state.emit(f"{len(work)} strengthen items → {path}\nCommit each item test-first on top of {start[:12]}: one item per "
+         f"commit (never two items in one commit; an item may take several), each touching only backend/tests/ "
+         f"and ending with the trailer `{TRAILER}: <item id>`.")
     return 0
 
 
@@ -77,6 +78,12 @@ def reopened(history: list, closed: dict) -> list:
             if len(items) == 1 and items[0] in closed and i > position.get(closed[items[0]], -1)]
 
 
+def _recovery(start: str) -> str:
+    """How to redo rejected commits with checkout, edits and commits alone (no reset)."""
+    return (f"Redo them one item per commit: `git checkout {start}`, then write each item's tests again and "
+            f"commit them, every commit touching only backend/tests/ and ending with `{TRAILER}: <item id>`.")
+
+
 def _commits(repo, st: dict) -> list:
     """[(sha, item id)] since start; every commit must name a known, open item and touch only backend/tests/."""
     start = st["start"]
@@ -90,7 +97,7 @@ def _commits(repo, st: dict) -> list:
         errors += commit_problems(sha, items, paths, known)
     errors += reopened(history, st["closed"])
     if errors:
-        raise BadInput("strengthen commits rejected:\n" + "\n".join(errors))
+        raise BadInput("strengthen commits rejected:\n" + "\n".join(errors) + "\n" + _recovery(start))
     return [(sha, items[0]) for sha, items, _ in history]
 
 
