@@ -164,15 +164,18 @@ class Run:
         if record := self.red_gate(number, slot, commit, tier):
             raise Blocked(f"the {tier} gate is red on {commit[:7]}, record {record}")
 
-    def red_gate(self, number: str, slot: str, commit: str, tier: str) -> str:
-        """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green."""
-        if commit in _gate_record(self.state.read(), number)["green_gates"][tier]:
+    def red_gate(self, number: str, slot: str, commit: str, tier: str, restored: list[str] | tuple = ()) -> str:
+        """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green. The fast gate
+        checks the ticket's locked files and the `restored` ones, as the state holds them now."""
+        state = self.state.read()
+        if commit in _gate_record(state, number)["green_gates"][tier]:
             return ""
         at = driver_slots.head(slot)
         if at != commit:
             raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the {tier} gate did not run")
         command = self.args.fast_gate if tier == driver_gate.FAST else self.args.gate
-        green, record, killed = driver_gate.run(command, tier, slot, OUT / number, self.pr)
+        locked = list(dict.fromkeys([*state["tickets"][number]["locked"], *restored])) if tier == driver_gate.FAST else []
+        green, record, killed = driver_gate.run(command, tier, slot, OUT / number, self.pr, locked)
         for sentence in killed:
             ledger(f"{_owner(number)}: {sentence}.")
 
