@@ -1,25 +1,25 @@
-# Final reviewer
+# Final reviewer: the scoped review
 
 Spec: {spec}
 Tickets: {tickets}
 PR branch: {pr_branch}, at commit {start_sha}
 Range: {range}
 Gate record of the driver for {start_sha}: {gate}
-Review method: {review_diff}
+Findings of the full review: {findings}
 Ledger of the run, one sentence per event: {ledger}
-Deferred observations and minor findings from ticket reviews, each with its evidence file:
-{carried}
 Must-fix findings carried from tickets that merged at the cap:
 {must_fix_list}
 Rulings of the operator:
 {rulings}
 
-Review the range with the method of the review-diff skill in the file above, with the spec as its spec path. The gate of that method is done: the driver ran the full gate on {start_sha}, and its record is the gate evidence of your review. Do not run a gate yourself.
-Decide for each carried observation whether it is still true at {start_sha}; report each one that is, with the severity it has now. Every must-fix finding stays open until the fix batch addresses it and the scoped review verifies it. A ruling does not settle a must-fix finding. In the scoped review, list each item you verified closed in `resolved_must_fix` exactly as shown in the must-fix list, including its file and line; report each unresolved one in `findings`.
+This is the scoped review after the fix batch: the range holds only the `fix(NN)` commits, and the commits up to {reviewed} have their review. Check that each critical or important finding in {findings} is fixed, and that the fix commits break nothing else.
+The gate is done: the driver ran the full gate on {start_sha}, and its record is the gate evidence of your review. Do not run a gate yourself.
+Verify each must-fix finding: list each one you verified closed in `resolved_must_fix` exactly as the must-fix list shows it, including its file and line, and report each unresolved one in `findings`. A ruling does not settle a must-fix finding.
+Report each critical or important finding that is not fixed, and each defect a fix commit makes, in `findings`.
 Give each finding a severity (critical, important or minor), the file and line, a title, the evidence, and a kind: `code`, `test`, or `fixture`.
 Do not commit. Leave the branch and the tree as you found them.
 
-Write one JSON report at {report} that matches this schema:
+Write one JSON report at {report}. When your sandbox is read-only, give the JSON as your whole final message and the driver saves it there. The report matches this schema:
 
 ```json
 {

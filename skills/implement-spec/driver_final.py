@@ -403,10 +403,12 @@ def _log_open_after_batch(to_fix: list[dict]) -> None:
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
-    """One round of the final review on `tip`: the full review by the three lenses, or after it the scoped one."""
+    """One round of the final review on `tip`: the full review by the three lenses, or after it the scoped one, on
+    the entry of the correctness lens: another provider than the implementer's, and so than the fixer's when it shares
+    the implementer's."""
     done, folder = final["round"], OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)), "review_diff": str(REVIEW_DIFF),
+              "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)),
               "ledger": str(OUT / "ledger.md"), "carried": _carried_findings(), "reviewed": str(final["reviewed"]),
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
@@ -417,7 +419,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
     with during("the final review"):
         if done:
             report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-                "final-reviewer", FINAL, ".", values, notes=["final-scoped"], fix_round=done))
+                "final-reviewer", FINAL, ".", values, entry=driver_agents.correctness_entry(run.models), fix_round=done))
         else:
             report = _lenses(run, values, tip)
     _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(found + report["findings"]),
@@ -427,53 +429,51 @@ def _review(run: Run, final: dict, tip: str) -> None:
 def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
     """The full review: the three lenses at the same time in slot 1, inside one read-only check. Returns their
     findings, each with the source of its lens. A lens with an accepted report for `tip` does not run again, unless
-    a lens changed the slot: then all three run again."""
+    a lens changed the slot: then all three run again. The accepted reports are kept only once the slot is as the
+    review found it."""
     values = {**values, "spec_method": str(REVIEW_DIFF.parent / "spec.md"), "structure_method": str(structure_skill()),
               # Inlined: this lens reads from git, and a project-local review-diff sits in an ignored folder (#120).
               "checks": (REVIEW_DIFF.parent / "correctness.md").read_text()}
     attempts = []
 
-    def review() -> dict[str, dict]:
+    def review() -> tuple[dict[str, dict], list[str]]:
         kept = {} if attempts else run.state.read()["run"]["final"]["lenses"]
         attempts.append(tip)
-        return _run_lenses(run, values, tip, {role: one["report"] for role, one in kept.items() if one["tip"] == tip})
+        return _run_lenses(run, values, {role: one["report"] for role, one in kept.items() if one["tip"] == tip})
 
-    reports = run.read_only(FINAL, ".", run.pr, tip, review)
+    reports, errors = run.read_only(FINAL, ".", run.pr, tip, review)
+    run.state.update(lambda state: state["run"]["final"]["lenses"].update(
+        {role: {"tip": tip, "report": report} for role, report in reports.items()}))
+    if errors:
+        raise Blocked("; ".join(errors))
     return {"findings": [{**finding, "source": source} for role, source in SOURCES.items()
                          for finding in reports[role]["findings"]]}
 
 
-def _run_lenses(run: Run, values: dict[str, str], tip: str, kept: dict[str, dict]) -> dict[str, dict]:
-    """Run each lens with no report in `kept` at the same time, and return the report of each lens. A lens that
-    stops or whose report is rejected twice stops the round, once every lens has ended."""
+def _run_lenses(run: Run, values: dict[str, str], kept: dict[str, dict]) -> tuple[dict[str, dict], list[str]]:
+    """Run each lens with no report in `kept` at the same time. Returns (the report of each lens that has one, why
+    each lens that stopped or whose report was rejected twice stops the round)."""
     due = [role for role in driver_agents.LENSES if role not in kept]
-    running, errors, halted = list(due), {}, []
+    running, reports, errors, halted = list(due), dict(kept), {}, []
 
-    def call(role: str) -> dict:
+    def call(role: str) -> None:
         try:
-            report = run.agent(role, FINAL, ".", values, entry=driver_agents.lens_entry(run.models, role),
-                               alone=lambda: len(running) == 1)
+            reports[role] = run.agent(role, FINAL, ".", values, entry=driver_agents.lens_entry(run.models, role),
+                                      alone=lambda: len(running) == 1)
         except Stopped as stopped:
             errors[role] = str(stopped)
-            return {}
         except Blocked as blocked:  # the driver rejected its report two times
             errors[role] = f"the {role}: {blocked}"
-            return {}
         except Halted as failed:
             halted.append(failed)
-            return {}
         finally:
             running.remove(role)
-        run.state.update(lambda state: state["run"]["final"]["lenses"].update({role: {"tip": tip, "report": report}}))
-        return report
 
     with ThreadPoolExecutor(len(due) or 1) as pool:
-        reports = dict(zip(due, pool.map(call, due)))
+        list(pool.map(call, due))
     if halted:
         raise halted[0]
-    if errors:
-        raise Blocked("; ".join(errors[role] for role in driver_agents.LENSES if role in errors))
-    return {**kept, **reports}
+    return reports, [errors[role] for role in driver_agents.LENSES if role in errors]
 
 
 def _merged(found: list[dict]) -> list[dict]:
