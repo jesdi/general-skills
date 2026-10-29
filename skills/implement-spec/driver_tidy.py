@@ -5,9 +5,6 @@ Nothing here checks out a tree or moves a ref: a new commit takes the tree of an
 """
 from __future__ import annotations
 
-import os
-import subprocess
-
 import driver_merge
 from driver_slots import git
 from driver_tickets import Ticket
@@ -31,11 +28,8 @@ def same_tree(one: str, other: str) -> bool:
 def _commit(source: str, parent: str, words: str) -> str:
     """A commit on `parent` with the tree and the author of `source` and the message `words`; "" when git fails."""
     name, email, date = git(".", "log", "-1", "--format=%an%n%ae%n%aI", source).stdout.splitlines() or [""] * 3
-    env = {**os.environ, **driver_merge.identity(source), "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
-           "GIT_AUTHOR_DATE": date}
-    made = subprocess.run(["git", "commit-tree", f"{source}^{{tree}}", "-p", parent, "-m", words.strip() + "\n"],
-                          capture_output=True, text=True, env=env)
-    return made.stdout.strip()
+    env = {**driver_merge.identity(source), "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_AUTHOR_DATE": date}
+    return driver_merge.commit_tree([f"{source}^{{tree}}", "-p", parent, "-m", words.strip() + "\n"], env).stdout.strip()
 
 
 def rewrite(parent: str, steps: list[tuple[str, str]]) -> list[str]:

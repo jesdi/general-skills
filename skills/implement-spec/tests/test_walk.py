@@ -159,7 +159,9 @@ def make_env(tmp):
     for cli in ("claude", "codex"):
         (bin_dir / cli).write_text("#!/bin/sh\nexit 1\n")
         (bin_dir / cli).chmod(0o755)
-    return dict(os.environ, PATH=str(bin_dir))
+    # The driver's own commits are signed when commit.gpgsign is on: a test opts in, the operator's config does not.
+    return dict(os.environ, PATH=str(bin_dir), GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="commit.gpgsign",
+                GIT_CONFIG_VALUE_0="false")
 
 
 class Rig:

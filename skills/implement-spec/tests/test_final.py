@@ -23,10 +23,13 @@ Interface choices (ticket 06):
   commit of the rebase that touches the same file conflicts again.
 """
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -499,6 +502,30 @@ def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
     assert rig.code == 1, rig.output()
     assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
+
+
+def test_with_commit_gpgsign_on_every_pushed_commit_is_signed_with_the_configured_key(tmp_path):
+    gpg = shutil.which("gpg")
+    if not gpg:
+        pytest.skip("no gpg")
+    home = Path(tempfile.mkdtemp(prefix="gpg", dir="/tmp"))  # the agent socket path must stay short
+    try:
+        rig = Final(tmp_path, THREE)
+        rig.env["GNUPGHOME"] = str(home)
+        subprocess.run([gpg, "--batch", "--passphrase", "", "--quick-gen-key", "t <t@example.com>", "ed25519",
+                        "sign", "never"], env=rig.env, check=True, capture_output=True)
+        rig.env.update(GIT_CONFIG_COUNT="3", GIT_CONFIG_VALUE_0="true", GIT_CONFIG_KEY_1="gpg.program",
+                       GIT_CONFIG_VALUE_1=gpg, GIT_CONFIG_KEY_2="user.signingkey", GIT_CONFIG_VALUE_2="t@example.com")
+        rig.run(plan(), *UNATTENDED)
+        assert rig.code == 0, rig.output()
+        pushed = git(rig.repo, "rev-list", f"{rig.start}..{ref(rig.origin, 'refs/heads/feat/csv')}").split()
+        assert len(pushed) == 3
+        for commit in pushed:
+            verified = subprocess.run(["git", "verify-commit", commit], cwd=rig.repo, env=rig.env, capture_output=True)
+            assert verified.returncode == 0, (commit, verified.stderr)
+    finally:
+        subprocess.run([str(Path(gpg).with_name("gpgconf")), "--kill", "gpg-agent"], env={**os.environ, "GNUPGHOME": str(home)})
+        shutil.rmtree(home, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- the merge-risk block of the PR body (ticket 15)

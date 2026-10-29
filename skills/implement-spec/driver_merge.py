@@ -19,6 +19,25 @@ def identity(tip: str, slot: str = ".") -> dict[str, str]:
     return {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
 
 
+def signs() -> bool:
+    """commit.gpgsign is on: every commit the driver makes must be signed."""
+    return git(".", "config", "--type=bool", "commit.gpgsign").stdout.strip() == "true"
+
+
+def commit_tree(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
+    """`git commit-tree` with `env` on top of os.environ, signed when commit.gpgsign is on: commit-tree ignores it."""
+    sign = ["-S"] if signs() else []
+    return subprocess.run(["git", "commit-tree", *sign, *args], capture_output=True, text=True, env={**os.environ, **env})
+
+
+def unsigned(tip: str) -> list[str]:
+    """The commits of `tip` that origin does not have and that have no good signature, when commit.gpgsign is on."""
+    if not signs():
+        return []
+    rows = git(".", "log", "--format=%h %G?", tip, "--not", "--remotes=origin").stdout.splitlines()
+    return [row.split()[0] for row in rows if not row.endswith(" G")]
+
+
 def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
     """(the commit the PR branch gets, "") or ("", the error): `pr_tip` when the ticket is merged already, `tip`
     for a fast-forward, else a new merge commit."""
@@ -30,8 +49,7 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
     if tree.returncode:
         files = ", ".join(tree.stdout.splitlines()[1:]) or tree.stderr.strip()
         return "", f"the merge into the PR branch conflicts in {files}"
-    made = subprocess.run(["git", "commit-tree", tree.stdout.strip(), "-p", pr_tip, "-p", tip, "-m", message],
-                          capture_output=True, text=True, env={**os.environ, **identity(tip)})
+    made = commit_tree([tree.stdout.strip(), "-p", pr_tip, "-p", tip, "-m", message], identity(tip))
     return (made.stdout.strip(), "") if made.returncode == 0 else ("", f"git commit-tree failed: {made.stderr.strip()}")
 
 

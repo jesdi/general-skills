@@ -537,6 +537,13 @@ def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
     return url
 
 
+def _require_signed(run: Run, tip: str) -> None:
+    """Block the push when commit.gpgsign is on and a commit that origin lacks has no good signature."""
+    if bad := driver_merge.unsigned(tip):
+        raise Blocked(f"commit.gpgsign is on but {len(bad)} commit{'s' if len(bad) > 1 else ''} of {run.pr} "
+                      f"{'have' if len(bad) > 1 else 'has'} no good signature ({', '.join(bad)}): nothing is pushed")
+
+
 def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
     """Push the reviewed tip to origin, once and with no force, then open the PR, once. Returns the lines for the
     operator."""
@@ -550,6 +557,7 @@ def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
     if not shutil.which("gh"):
         raise Blocked("gh is not on PATH: nothing is pushed")
     if final["pushed"] != tip:
+        _require_signed(run, tip)
         # The commit, not the branch name: what leaves the machine is the tip the review covered.
         sent = git(".", "push", "-q", "origin", f"{tip}:refs/heads/{run.pr}")
         if sent.returncode:

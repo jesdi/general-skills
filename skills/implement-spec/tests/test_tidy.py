@@ -52,9 +52,11 @@ class Inside(test_final.Final):
 
 @pytest.fixture(autouse=True)
 def tools(monkeypatch, tmp_path):
-    """The fake `gh` of the rig is on PATH, and no git call of an agent opens an editor."""
+    """The fake `gh` of the rig is on PATH, no git call of an agent opens an editor, and the driver signs no commit."""
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("GIT_EDITOR", "true")
+    for name, value in (("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "commit.gpgsign"), ("GIT_CONFIG_VALUE_0", "false")):
+        monkeypatch.setenv(name, value)
 
 
 def stray(rig, text="by hand"):
