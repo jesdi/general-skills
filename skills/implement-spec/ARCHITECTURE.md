@@ -145,7 +145,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
   twice stops the round only after every lens has ended; an accepted lens report is kept in `run.final.lenses` with
   its tip and reused for that tip only. `driver_final._merged` makes the (file, line, title) of a finding unique,
-  keeping the more severe one, then the earlier lens; must-fix matching keeps its own (file, title) key. A final
+  keeping the more severe one, then the earlier lens, with the driver last; must-fix matching keeps its own (file, title) key. A final
   finding of an older driver has no `source` and reads as `final-reviewer`. The lens reports go to
   `run.final.lenses` only once `Run.read_only` returns, so a report of a slot that a lens changed is never kept.
 - The scoped review after the fix batch is one `final-reviewer` agent on `correctness_entry`, never the three

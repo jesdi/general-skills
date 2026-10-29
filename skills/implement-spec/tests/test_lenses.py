@@ -119,8 +119,12 @@ def test_the_lens_findings_merge_into_one_file_and_the_critical_and_important_on
 def test_a_tie_keeps_the_earlier_lens_and_the_driver_findings_merge_too():
     one = finding("same", file="a.py", line=1)
     merged = driver_final._merged([{**one, "source": "spec"}, {**one, "source": "structure"},
-                                   {**one, "line": 2, "source": "structure"}])
+                                   {**one, "line": 2, "source": "structure"}], [])
     assert [(f["line"], f["source"]) for f in merged] == [(1, "spec"), (2, "structure")]
+    # The driver comes last: a lens finding wins a tie with a locked-file finding.
+    locked = {**finding("locked test changed", "critical", file="t.py", line=1), "source": "driver"}
+    lens = {**locked, "source": "correctness"}
+    assert [f["source"] for f in driver_final._merged([lens], [locked])] == ["correctness"]
 
 
 def test_a_must_fix_finding_reaches_every_lens_and_the_fix_batch(tmp_path):
