@@ -370,9 +370,11 @@ WORK = """nn=$(basename "$(dirname "$report")"); fields='"green": ["1 passed"]'
 echo "$role $nn" >> "${FILE:-work-$nn.txt}"; git add -A; git commit -q -m "$role $nn"
 echo "$nn $PWD" >> "$0.calls"
 """
-# Ticket 01 waits until ticket 02 has its branch, so both start from the same PR tip.
-TOGETHER = """[ "$nn" != 01 ] || until git rev-parse -q --verify refs/heads/ticket/feat%2Fx/02 > /dev/null; do sleep 0.02; done\n"""
+# The implementer of ticket 01 waits until ticket 02 has its branch, so both start from the same PR tip.
+TOGETHER = """[ "$nn" != 01 ] || [ $role != implementer ] || until git rev-parse -q --verify refs/heads/ticket/feat%2Fx/02 > /dev/null; do sleep 0.02; done\n"""
 REFACTOR = {"seam": "none — refactor"}
+# A fixer's report names its ticket: with WORK, each fix round is one commit.
+FIXES = """[ $role != fixer ] || fields="$fields, \\"ticket\\": \\"$nn\\""\n"""
 # A fixer that cannot make the red gate green: the ticket blocks at fix round 1.
 GIVE_UP = """[ $role != fixer ] || { printf '{"status": "BLOCKED", "commits": [], "files": [], "concerns": ["the gate stays red"], "green": [], "ticket": "01"}' > "$report"; exit 0; }\n"""
 GAVE_UP = "Ticket 01: BLOCKED at fix round 1: the fixer reported BLOCKED: the gate stays red."
@@ -489,14 +491,16 @@ def test_a_red_gate_is_a_finding_and_the_ticket_it_blocks_never_starts(repo, tmp
     assert walk(tmp_path, capsys, "exit 9\n")[0] == 2  # a BLOCKED ticket stays BLOCKED on a rerun
 
 
-def test_a_red_merge_gate_blocks_the_ticket_and_the_pr_branch_does_not_move(repo, tmp_path, capsys):
+def test_a_merge_gate_red_after_round_2_blocks_the_ticket_and_the_pr_branch_does_not_move(repo, tmp_path, capsys):
     two(repo)
-    gate = '[ -z "$(git rev-parse -q --verify HEAD^2)" ]'  # red on the merge commit
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    gate = '[ -z "$(git rev-parse -q --verify HEAD^2)" ]'  # red on each merge commit
+    code, ledger, out = walk(tmp_path, capsys, WORK + FIXES + TOGETHER + REPORT, gate=gate)
     assert code == 1, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
     assert "BLOCKED at the merge: the full gate is red on " in line
     assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 2  # no merge commit landed
+    # Red full gates at landing start rounds 1 and 2; the third blocks, with no third round.
+    assert [line.split()[-2] for line in ledger if "at the landing, so feat/x does not move" in line] == ["1", "2"]
     assert len(branches()) == 2 and out_of("git", "status", "--porcelain") == ""
 
 
@@ -864,9 +868,10 @@ def test_a_red_merge_gate_does_not_start_the_landing_again_when_the_pr_branch_mo
     two(repo)
     mark = tmp_path.parent / f"{tmp_path.name}-red"
     gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {MOVE}; exit 1; }}'
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
-    assert code == 1 and "BLOCKED at the merge: the full gate is red on " in merge_blocked(ledger), out
-    assert "| fast gates run | 2 |" in out and "| full gates run | 2 |" in out
+    code, ledger, out = walk(tmp_path, capsys, WORK + FIXES + TOGETHER + REPORT, gate=gate)
+    assert code == 0 and not [line for line in ledger if "BLOCKED" in line], out
+    # The red gate starts fix round 1, not a second landing; the fix lands at the next landing.
+    assert len([line for line in ledger if "at the landing, so feat/x does not move and fix round 1 starts" in line]) == 1
 
 
 def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(repo, tmp_path, capsys):

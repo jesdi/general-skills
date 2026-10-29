@@ -1,0 +1,1 @@
+{landing_sha} is not on {branch}: it is the merge commit of {branch} with {pr_branch} that the driver made to land the ticket. To reproduce the failure, merge {pr_branch} on {branch} with `git merge --no-commit --no-ff {pr_branch}`, run the failing tests of the record, then `git merge --abort` and make your fix on {branch}.

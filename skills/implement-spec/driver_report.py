@@ -4,7 +4,8 @@ context: repo (slot path), branch, start (HEAD when the role started), log, full
   correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
   restore_red (the gate is red on the commit of that restore), findings (the titles a correction gets),
   owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip),
-  fix (the titles of the findings a fixer gets), red (the gate is red on `start`)."""
+  fix (the titles of the findings a fixer gets), red (the red gate a fix must make green, as
+  `the <tier> gate is red on <sha7>`)."""
 from __future__ import annotations
 
 import json
@@ -111,7 +112,7 @@ def _moved_errors(context: dict) -> list[str]:
     if _git(repo, "status", "--porcelain", "--untracked-files=no"):
         errors.append("no commit, and the tree has uncommitted changes: commit the fix and list the commit")
     if context.get("red"):
-        errors.append(f"no commit, and the fast gate is red on {context['start'][:7]}: a fix of a red gate is a commit")
+        errors.append(f"no commit, and {context['red']}: a fix of a red gate is a commit")
     return errors
 
 
