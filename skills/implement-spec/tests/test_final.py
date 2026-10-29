@@ -35,7 +35,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_cli import SKILL, git, ticket
-from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, review
+from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
 from test_stops import UNATTENDED, decisions, stage
 from test_walk import fix, impl, plan, tw
 
@@ -353,9 +353,16 @@ def test_final_fix_batch_rejects_an_unaddressed_must_fix(tmp_path):
     assert any("addressed_must_fix: missing MERGED-QUOTING-REGRESSION (demo/export.py:99)" in line for line in rig.ledger())
 
 
-def test_the_fixer_of_the_final_review_gets_the_gate_command_and_runs_it_before_it_reports(fixed):
+def test_the_fixer_of_the_final_review_gets_the_fast_gate_with_every_merged_locked_file(fixed):
     (batch,) = fixed.final_calls("fixer")
-    gate_rule(batch["prompt"], f"TIER=full {fixed.rig / 'gate'}")
+    gate_rule(batch["prompt"], f"TIER=fast {fixed.rig / 'gate'}", "tests/test_01.py tests/test_02.py tests/test_03.py")
+    no_full_gate(fixed)
+
+
+def test_the_final_reviewer_reads_the_full_record_of_the_reviewed_tip_and_runs_no_gate(fixed):
+    for call in fixed.final_calls("final-reviewer"):
+        assert f"final/gate-full-{call['head'][:7]}.log" in call["prompt"]
+        assert "Do not run a gate yourself." in call["prompt"] and "run the gate yourself" not in call["prompt"]
 
 
 def test_a_scoped_review_covers_the_range_after_the_reviewed_tip_and_one_gate_runs_on_the_new_tip(fixed):

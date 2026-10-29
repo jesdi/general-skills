@@ -555,6 +555,27 @@ def test_the_fast_gate_gets_the_locked_files_of_its_ticket_and_the_full_gate_non
     assert rig.gates("full") and all(gate["locked"] is None for gate in rig.gates("full"))
 
 
+def test_the_fixer_is_told_the_fast_gate_with_the_locked_files_of_its_ticket(tmp_path):
+    writer = tw("02")
+    writer["files"]["tests/test_02b.py"] = "def test_x():\n    assert 2 == 'x'\n"
+    writer["report"]["locked"] += ["tests/test_02b.py"]
+    proof = dict(test="tests/test_02b.py::test_x", file="demo/export.py", line=1,
+                 red="FAILED tests/test_02b.py::test_x - AssertionError at demo/export.py:1")
+
+    def proved(step):  # the full review proves each locked test file
+        step["report"]["mutations"].append(proof)
+        step["stdout"] += proof["red"] + "\n"
+        return step
+
+    rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [writer], "02/fixer": [fix("02", 1)],
+                                                "02/reviewer": [proved(review("02", [STUCK])), review("02")]}))
+    assert rig.code == 0, rig.ledger()
+    (fixer,) = rig.calls("02", "fixer")
+    test_review.gate_rule(fixer["prompt"], f"export TIER=fast; {rig.rig / 'gate'}",
+                           "tests/test_02.py tests/test_02b.py")
+    test_review.no_full_gate(rig)
+
+
 def test_the_restore_commit_gets_the_fast_gate_with_the_locked_files_and_the_restored_ones(tmp_path):
     weak = finding("WEAK", kind="test", file="tests/test_02.py")
     correction = {**tw("02"), "files": {"tests/test_02.py": "def test_x():\n    assert '02' == 'x'  # stronger\n"},

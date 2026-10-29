@@ -109,7 +109,7 @@ def finish_interrupted_move(state: State, pr: str) -> None:
 def _prompt_values(run: Run) -> dict[str, str]:
     """The pointers every prompt of the end of run gets. Its agents work in slot 1, the PR worktree."""
     return {"spec": run.args.spec, "tickets": run.args.tickets, "pr_branch": run.pr, "branch": run.pr,
-            "gate": run.args.gate}
+            "gate": run.args.fast_gate}
 
 
 def _title(finding: dict) -> str:
