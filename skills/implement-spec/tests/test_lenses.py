@@ -180,3 +180,10 @@ def test_a_kept_lens_report_is_not_reused_for_another_tip(tmp_path):
     rig.run(plan())
     assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 2], rig.out
     assert rig.final()["reviewed"] == tip
+
+
+def test_a_lens_that_changes_the_slot_on_both_attempts_leaves_no_kept_lens_report(tmp_path):
+    rig = rig_of(tmp_path)
+    rig.run(plan(**{"final/final-spec": [final(files={"left.txt": "x"}), final(files={"more.txt": "x"}, commit="by it")]}))
+    assert rig.code == 1 and rig.final()["reviewed"] is None, rig.out
+    assert [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 2] and rig.final()["lenses"] == {}
