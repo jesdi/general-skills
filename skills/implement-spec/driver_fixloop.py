@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import driver_decisions
 import driver_gate
@@ -30,8 +30,6 @@ class Job:
     round: int  # fix rounds started
     tip: str
     previous: str = ""  # the tip before the last fix; "" makes the next review a full one
-    proofs: set[tuple[str, int]] = field(default_factory=set)  # mutation proofs so far, at `tip`
-    again: set[tuple[str, int]] = field(default_factory=set)  # each proof at `tip` that a fix made due again
     corrected: bool = False  # the last step was a test-writer correction
     red: bool = False  # the gate of `tip` is red, so no review saw it
 
@@ -41,14 +39,8 @@ class Job:
         findings = os.path.relpath(OUT / self.ticket.number / f"findings-{review}.json", self.slot)
         gate = os.path.relpath(driver_gate.record_path(OUT / self.ticket.number, driver_gate.FAST, self.tip), self.slot)
         return {**self.values, "start_sha": self.tip, "from_sha": self.previous, "round": str(self.round),
-                "locked": " ".join(entry["locked"]), "locked_tests": " ".join(tested(entry)), "test_writer_sha": str(entry["test_writer_sha"] or ""),
-                "findings": findings, "gate_record": gate,
-                "proofs": " ".join(f"{file}:{line}" for file, line in sorted(self.again))}
-
-
-def tested(entry: dict) -> list[str]:
-    """The locked files of the ticket record that hold tests: each one needs a mutation proof in a full review."""
-    return [path for path in entry["locked"] if path not in entry["fixtures"]]
+                "locked": " ".join(entry["locked"]), "test_writer_sha": str(entry["test_writer_sha"] or ""),
+                "findings": findings, "gate_record": gate}
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
@@ -64,7 +56,7 @@ def _log_findings(number: str, findings: list[dict]) -> list[dict]:
     return findings
 
 
-def _run_reviewer(job: Job, locked: list[str]) -> dict:
+def _run_reviewer(job: Job) -> dict:
     """Run the reviewer in the slot. Returns its report. A reviewer that stops (BLOCKED, NEEDS_CONTEXT) asks a
     `review-stopped` question, unless an `accept` ruling on an earlier stop lets the review go on with its report. A
     report that the driver rejects two times asks a `review-rejected` question; after `retry`, the first prompt says
@@ -76,14 +68,12 @@ def _run_reviewer(job: Job, locked: list[str]) -> dict:
     # Why the driver rejected the reviewer before the ruling; a record of a removed role is no longer read.
     before = state["tickets"][number]["rejected"].get("reviewer", "")
     evidence = str(OUT / number / f"reviewer-{job.round}.json")
-    # A full review (no fix range) must give a mutation proof for each locked test file, not for a locked fixture
-    # (#118); the prompt names them.
-    notes = ["rereview"] if job.previous else ["full-review"]
+    notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
     notes += ["rejected"] * bool(before)
     try:
         return job.run.agent("reviewer", number, job.slot, {**values, "rejection": before}, fix_round=job.round,
-                             notes=notes, check={} if job.previous else {"full": True, "locked": locked})
+                             notes=notes)
     except Stopped as stopped:
         if _stop_accepted(state, number):
             ledger(f"Ticket {number}: {stopped}; by the ruling (accept), the review goes on with its report.")
@@ -128,12 +118,11 @@ def _partition_findings(role: str, report: dict, prior: dict, scoped: bool) -> t
 
 
 def _reviewer_results(job: Job, report: dict) -> tuple[list[dict], list[dict]]:
-    """Collect ticket findings, deferred observations, and mutation proofs from the reviewer's report."""
+    """Collect ticket findings and deferred observations from the reviewer's report."""
     active, deferred = _partition_findings("reviewer", report, _prior_open(job), bool(job.previous))
     found = active + [{**finding, "source": "reviewer", "basis": finding.get("basis", "regression")}
                       for finding in report.get("regressions", [])]
     observations = deferred + [{**finding, "source": "reviewer"} for finding in report.get("observations", [])]
-    job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
     return found, observations
 
 
@@ -152,7 +141,7 @@ def _review(job: Job) -> list[dict]:
     state = run.state.ticket(number, phase="review")
     merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
     found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
-    report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job, tested(state)))
+    report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job))
     if state["rejected"]:
         run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
     reviewed, observations = _reviewer_results(job, report)
@@ -194,8 +183,7 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
             raise
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"],
-                                                                   report.get("fixtures", []), job.tip))
+    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
     return _uncorrected(job, findings, report.get("not_addressed", []))
 
 
@@ -246,20 +234,11 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
                   check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
     before, job.tip = job.tip, driver_slots.head(job.slot)
     run.state.ticket(number, tip=job.tip, landing=None)
-    _follow_fix(job, before)
-
-
-def _follow_fix(job: Job, before: str) -> None:
-    """Carry the proofs and the range of the next review over the fix from `before` to the new tip."""
-    followed = driver_review.follow(job.slot, before, job.tip, job.proofs)
-    due = {proof for proof, changed in followed.items() if changed}
-    if job.red:
-        # No review saw `before`: the next review covers the fix before it too, and its due proofs stay due.
-        due |= set(driver_review.follow(job.slot, before, job.tip, job.again))
-    else:
-        # No review has seen a test-writer correction, so the review after a fix on a corrected tip is a full one.
+    # No review saw a red `before`, so the next review covers the fix before it too. No review has seen a test-writer
+    # correction either, so the review after a fix on a corrected tip is a full one.
+    if not job.red:
         job.previous = "" if job.corrected else before
-    job.corrected, job.proofs, job.again = False, set(followed), due
+    job.corrected = False
 
 
 def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:

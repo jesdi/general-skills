@@ -130,9 +130,9 @@ REPORT = """printf '{"status": "%s", "commits": ["%s"], "files": [], "concerns":
 COMMIT = "echo $role >> work.txt; git add -A; git commit -q -m $role\n"
 WRITER = """fields='"locked": ["work.txt"], "red": [{"test": "t", "line": "FAILED t"}]'; echo FAILED t\n"""
 IMPLEMENTER = """fields='"green": ["1 passed"]'; echo '{"total_cost_usd": 0.25}'\n"""
-# The reviewer of a plain run: it finds nothing and proves the locked file of WRITER.
-CLEAN = """case $role in reviewer|final-reviewer) echo FAILED t
-    printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": [], "mutations": [{"test": "work.txt::t", "file": "work.txt", "line": 1, "red": "FAILED t"}]}' > "$report"; exit 0;; esac
+# The reviewer of a plain run: it finds nothing.
+CLEAN = """case $role in reviewer|final-reviewer)
+    printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": []}' > "$report"; exit 0;; esac
 """
 ONCE = '[ -e "$0.again" ] || { touch "$0.again"; %s; }\n'  # the first attempt only
 
@@ -211,8 +211,7 @@ def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path
     assert ledger[2].startswith("Ticket 01: BLOCKED at the reviewer: report .agent/implement/01/reviewer-0.json is not")
 
 
-@pytest.mark.parametrize("extra", ['"locked": 5', '"locked": ["work.txt", "never-committed.txt"]', '"red": 5',
-                                   '"mutations": "x"'])
+@pytest.mark.parametrize("extra", ['"locked": 5', '"locked": ["work.txt", "never-committed.txt"]', '"red": 5'])
 def test_a_field_of_another_role_is_ignored(repo, tmp_path, capsys, extra):
     repo()
     code, ledger = agents(tmp_path, capsys, f"{COMMIT}fields='\"green\": [], {extra}'\n{REPORT}")

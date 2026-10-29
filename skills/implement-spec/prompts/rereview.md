@@ -1,3 +1,2 @@
 
 This is the re-review after fix round {round}. The fix is {from_sha}..{start_sha}: check only whether your own critical or important findings in {findings} are closed. Repeat an open finding in `findings`. Put a new regression introduced by this fix in `regressions`, with evidence tying it to the fix. Set its `basis` to `criterion` when a ticket criterion fails or `regression` when merged-ticket behavior fails. Put every other newly noticed issue in `observations`.
-Repeat the mutation proof for these production lines only, numbered as they are at {start_sha} (an empty list means that no proof is due): {proofs}

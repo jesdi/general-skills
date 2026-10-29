@@ -1,7 +1,7 @@
 """Report validation acceptance tests, through driver_report.validate only.
 
 context is a dict: repo (slot path), branch, start (HEAD sha when the role started),
-log (the agent's log file), full (a full review of the reviewer).
+log (the agent's log file).
 """
 import json
 import subprocess
@@ -13,7 +13,6 @@ from driver_report import validate
 
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 RED = "FAILED tests/test_export.py::test_rows - AttributeError"
-MUTATION = "FAILED tests/test_export.py::test_rows after breaking demo/export.py:2"
 
 
 def git(root, *args):
@@ -40,7 +39,7 @@ def world(tmp_path):
     git(root, "checkout", "-q", "-b", "ticket/01", "main")
     tests = commit(root, "tests/test_export.py", "def test_rows():\n    assert False\n")
     impl = commit(root, "demo/export.py", "def export_csv():\n    return 'rows'\n")
-    (tmp_path / "agent.log").write_text(f"collected 1 item\n{RED}\n{MUTATION}\n")
+    (tmp_path / "agent.log").write_text(f"collected 1 item\n{RED}\n")
     shas = dict(base=base, stray=stray, tests=tests, impl=impl)
 
     def check(role, report, **context):
@@ -70,8 +69,7 @@ def finding(**changes):
 
 
 def reviewer(**changes):
-    return common(**{"findings": [finding()], "mutations": [
-        {"test": "tests/test_export.py::test_rows", "file": "demo/export.py", "line": 2, "red": MUTATION}], **changes})
+    return common(**{"findings": [finding()], **changes})
 
 
 def test_valid_reports_pass_and_unknown_status_is_named(world):
@@ -184,14 +182,6 @@ def test_a_locked_path_that_the_commits_delete_is_a_violation(world):
         "locked path tests/test_export.py is not a file at the tip of ticket/01: list in `locked` only files you keep"]
 
 
-def test_a_full_review_needs_no_proof_for_a_locked_file_that_is_not_at_the_tip(world):
-    shas, check, _ = world
-    locked = ["tests/test_export.py", "tests/test_gone.py"]
-    assert check("reviewer", reviewer(), start=shas["impl"], full=True, locked=locked) == []
-    assert check("reviewer", reviewer(mutations=[]), start=shas["impl"], full=True, locked=locked) == [
-        "mutations: no mutation proof for the locked test file tests/test_export.py"]
-
-
 def test_red_line_absent_from_the_log_is_a_violation(world):
     shas, check, _ = world
     assert check("test-writer", writer(shas), start=shas["base"]) == []
@@ -200,17 +190,12 @@ def test_red_line_absent_from_the_log_is_a_violation(world):
         "red line not found in log: t: FAILED tests/test_export.py::test_rows - KeyError"]
 
 
-def test_reviewer_fields_and_mutation_proofs(world):
+def test_reviewer_fields(world):
     shas, check, _ = world
-    assert check("reviewer", reviewer(), start=shas["impl"], full=True) == []
+    assert check("reviewer", reviewer(), start=shas["impl"]) == []
     assert any("severity" in e for e in check("reviewer", reviewer(findings=[finding(severity="huge")]),
                                               start=shas["impl"]))
     assert any("kind" in e for e in check("reviewer", reviewer(findings=[finding(kind="style")]), start=shas["impl"]))
-    no_proof = reviewer()
-    del no_proof["mutations"]
-    assert any("mutations" in e for e in check("reviewer", no_proof, start=shas["impl"], full=True))
-    fake = reviewer(mutations=[{"test": "t", "file": "demo/export.py", "line": 2, "red": "never ran"}])
-    assert any("not found in log" in e for e in check("reviewer", fake, start=shas["impl"], full=True))
 
 
 @pytest.mark.parametrize("role", READ_ONLY)

@@ -2,7 +2,7 @@
 
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, fixtures, green_gates, slot, note, held, rejected,
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held, rejected,
                      landing}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
@@ -32,8 +32,7 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "held": {}, "rejected": {},
-            "fixtures": [], "landing": None}
+            "slot": None, "note": "", "held": {}, "rejected": {}, "landing": None}
 
 
 def _final() -> dict:

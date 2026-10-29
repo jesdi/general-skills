@@ -30,14 +30,19 @@ def test_updates_from_many_threads_are_all_kept_and_no_scratch_file_stays(tmp_pa
 def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
     state = driver_state.State(tmp_path / "state.json")
     revision = state.start("feat/x", ["01"])["run"]["revision"]
-    state.update(lambda record: record["tickets"]["01"].pop("fixtures"))  # a run of an older driver
+
+    def older(record):  # a run of an older driver: no `landing` key, and a `fixtures` key that no reader reads
+        record["tickets"]["01"].pop("landing")
+        record["tickets"]["01"]["fixtures"] = ["gh"]
+
+    state.update(older)
     state.ticket("01", phase="merged")
     again = state.start("other", ["01", "02"])
     assert (again["run"]["revision"], again["run"]["pr_branch"]) == (revision, "feat/x")
-    assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["fixtures"] == []
+    assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["landing"] is None
     assert again["tickets"]["02"] == {
         "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": {"fast": [], "full": []}, "slot": None,
-        "note": "", "held": {}, "rejected": {}, "fixtures": [], "landing": None}
+        "note": "", "held": {}, "rejected": {}, "landing": None}
 
 
 def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_path):

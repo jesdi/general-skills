@@ -244,7 +244,7 @@ def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_start
 
 
 def test_a_test_finding_on_a_locked_file_gets_the_test_writer_correction_not_a_fix_round(tmp_path):
-    # A failed mutation proof: the fixer may not edit the locked file, so a fix round could never close it.
+    # A weak locked test: the fixer may not edit the locked file, so a fix round could never close it.
     vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
     correction = {**tw("01"), "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
     rig = Inside(tmp_path).run(plan(**{"01/test-writer": [tw("01"), correction],
@@ -452,19 +452,12 @@ def appending(tmp_path, **changes):
     return step
 
 
-def proves(nn, path, name="test_x"):
-    """A clean review of `nn` with one more mutation proof, for the locked test file `path`."""
-    step, red = review(nn), f"FAILED {path}::{name} - AssertionError"
-    step["report"]["mutations"] += [dict(test=f"{path}::{name}", file="demo/export.py", line=1, red=red)]
-    return {**step, "stdout": step["stdout"] + red + "\n"}
-
-
 def test_an_overrule_correction_starts_from_the_locked_file_of_the_merged_ticket(tmp_path):
     """Review round 1, I1 (probe b7b): the implementer of 02 weakened the test of 01, the correction listed the file."""
     contra = {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["locked test contradicts spec: tests/test_02.py::test_x"], "green": []}
     correction = appending(tmp_path, files={"tests/test_02.py": "def test_x():\n    assert '02' == '02'\n"})
     steps = plan(**{"02/implementer": [{**CHEAT, "report": contra}, impl("02", text="def fn_02():\n    return 'two'\n")],
-                    "02/test-writer": [tw("02"), correction], "02/reviewer": [proves("02", "tests/test_01.py")]})
+                    "02/test-writer": [tw("02"), correction], "02/reviewer": [review("02")]})
     rig = Inside(tmp_path, three()).run(steps)
     assert rig.code == 2, rig.ledger()
     rig.run(steps, "--answer", "02-locked-test-1=overrule-test")
@@ -477,7 +470,7 @@ def test_a_fixture_correction_starts_from_the_locked_file_of_the_merged_ticket(t
     stale = finding("STALE", kind="fixture", file="tests/test_02.py")
     correction = appending(tmp_path, files={"tests/test_02.py": "def test_x():\n    assert '02' == 'x'  # corrected\n"})
     rig = Inside(tmp_path, three()).run(plan(**{"02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
-                                                "02/reviewer": [review("02", [stale]), proves("02", "tests/test_01.py")]}))
+                                                "02/reviewer": [review("02", [stale]), review("02")]}))
     assert on_pr(rig, "tests/test_01.py") == CORRECTED_01, rig.ledger()
     assert rig.led("Ticket 02:", "restored") == [RESTORED_01] and rig.code == 0
 
@@ -491,7 +484,7 @@ def test_a_finding_in_the_locked_file_of_a_merged_ticket_goes_to_the_correction_
     correction["report"]["locked"] = ["tests/test_01.py"]
     rig = Inside(tmp_path, three()).run(plan(**{
         "02/implementer": [CHEAT], "02/test-writer": [tw("02"), correction],
-        "02/reviewer": [review("02"), review("02", [missing]), proves("02", "tests/test_01.py")]}))
+        "02/reviewer": [review("02"), review("02", [missing]), review("02")]}))
     assert rig.code == 0, rig.ledger()
     assert rig.led("Ticket 02:", "the restore closes it") and not rig.calls("02", "fixer")
     assert rig.led("Ticket 02: code correction in tests/test_01.py, outside the fix rounds: MISSING")
@@ -562,16 +555,8 @@ def test_the_fixer_is_told_the_fast_gate_with_the_locked_files_of_its_ticket(tmp
     writer = tw("02")
     writer["files"]["tests/test_02b.py"] = "def test_x():\n    assert 2 == 'x'\n"
     writer["report"]["locked"] += ["tests/test_02b.py"]
-    proof = dict(test="tests/test_02b.py::test_x", file="demo/export.py", line=1,
-                 red="FAILED tests/test_02b.py::test_x - AssertionError at demo/export.py:1")
-
-    def proved(step):  # the full review proves each locked test file
-        step["report"]["mutations"].append(proof)
-        step["stdout"] += proof["red"] + "\n"
-        return step
-
     rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [writer], "02/fixer": [fix("02", 1)],
-                                                "02/reviewer": [proved(review("02", [STUCK])), review("02")]}))
+                                                "02/reviewer": [review("02", [STUCK]), review("02")]}))
     assert rig.code == 0, rig.ledger()
     (fixer,) = rig.calls("02", "fixer")
     test_review.gate_rule(fixer["prompt"], f"export TIER=fast; {rig.rig / 'gate'}",
@@ -642,8 +627,7 @@ def accented(tmp_path, name, **steps):
     writer = tw("01")
     writer["files"][ACCENT] = "def test_y():\n    assert 1 == 'y'\n"
     writer["report"]["locked"] += [ACCENT]
-    proofs = [proves("01", ACCENT, "test_y")] * 2
-    return Inside(under(tmp_path, name), three()).run(plan(**{"01/test-writer": [writer], "01/reviewer": proofs, **steps}))
+    return Inside(under(tmp_path, name), three()).run(plan(**{"01/test-writer": [writer], **steps}))
 
 
 def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_for_its_ticket_and_a_later_one(tmp_path):
@@ -764,7 +748,7 @@ def test_a_fixer_with_nothing_to_change_is_accepted_and_the_same_tip_is_reviewed
 def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_evidence(tmp_path):
     """Issue 64: the gate of a fix round is red. That is a finding for the next round, not a BLOCKED ticket."""
     rig = Inside(tmp_path, gate={"subjects": ["fix: 01 round 1"]})
-    rig.run(plan(**{"01/reviewer": [review("01", [STUCK], lines=(2,)), review("01", lines=(2,))],
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK]), review("01")],
                     "01/fixer": [fix("01", 1), fix("01", 2, files={"demo/other.py": "x = 1\n"})]}))
     assert rig.code == 0, rig.ledger()
     assert [call["role"] for call in rig.calls("01")] == ["test-writer", "implementer", "reviewer", "fixer", "fixer",
@@ -776,9 +760,8 @@ def test_a_red_gate_on_a_fixer_commit_starts_the_next_round_with_the_record_as_e
     assert gate["title"] == f"the fast gate is red on {first[:7]}" and record in gate["evidence"]
     assert rig.led(f"Ticket 01: critical finding of kind code from the gate at {record}:0: the fast gate is red on {first[:7]}.")
     assert "findings-1.json" in rig.prompt("fixer-2") and rig.state()["tickets"]["01"]["round"] == 2
-    # No review saw the red tip: the re-review covers both fixes, and the proof that round 1 made due stays due.
-    again = rig.prompt("reviewer-2")
-    assert f"The fix is {rig.sha('01', 'implementer')}..{second}" in again and "demo/export.py:2" in again
+    # No review saw the red tip: the re-review covers both fixes.
+    assert f"The fix is {rig.sha('01', 'implementer')}..{second}" in rig.prompt("reviewer-2")
 
 
 def test_a_red_gate_on_the_implementer_commit_starts_fix_round_1_with_the_record_as_evidence(tmp_path):
@@ -981,77 +964,68 @@ def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path):
 
 # ---------------------------------------------------------------- the reviewers' reports and the slot
 
-def test_a_first_review_proves_each_locked_file_and_a_second_bad_report_blocks(tmp_path):
-    rig = Inside(tmp_path).run(plan(**{"01/reviewer": [review("01", lines=())] * 2}))
-    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
-    assert rig.led("BLOCKED at the review: the reviewer: mutations: no mutation proof for the locked test file "
-                   "tests/test_01.py.")
-    assert [q["id"] for q in rig.state()["run"]["questions"]] == ["01-review-rejected-1"]
-    assert "feat: 01 rows" not in rig.pr_subjects()
+MANUAL = "scripts/test_e2e_manual.py"
 
 
-def test_a_full_review_after_a_correction_names_each_locked_file_that_needs_a_proof(tmp_path):
-    """Issue #92: the full review after a correction in a later round must prove each locked file, not only round 1."""
-    two = ("tests/test_01.py", "tests/test_01b.py")
-    first = {**tw("01"), "files": {path: "def test_x():\n    assert 0\n" for path in two}}
-    first["report"] = {**first["report"], "files": list(two), "locked": list(two)}
-    proofs = [dict(test=f"{path}::test_x", file="demo/export.py", line=1, red=f"FAILED {path}::test_x") for path in two]
-    both = lambda found=(): {"stdout": "".join(p["red"] + "\n" for p in proofs),
-                             "report": {**review("01", found)["report"], "mutations": proofs}}
-    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
-    correction = {**first, "files": {"tests/test_01.py": "# stronger\n"}, "commit": "test: 01 stronger test"}
-    correction["report"] = {**first["report"], "files": ["tests/test_01.py"], "locked": ["tests/test_01.py"]}
-    regression = review("01", lines=())
-    regression["report"]["regressions"] = [vacuous]
-    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first, correction], "01/fixer": [fix("01", 1)],
-                                       "01/reviewer": [both([STUCK]), regression, both()]}))
+def manual(tmp_path, *writers, reviewer=None):
+    """Ticket 14, whose only locked file is a manual end-to-end script that the gate does not run."""
+    rig = Inside(tmp_path, {"14-manual-e2e.md": ticket("14", "Manual e2e")})
+    return rig.run(plan(**{"14/test-writer": list(writers), "14/implementer": [impl("14")],
+                           "14/reviewer": [reviewer or review("14")]}))
+
+
+def writes_manual(red=f"FAILED {MANUAL}::test_x - AttributeError", **report):
+    step = tw("14")
+    step["files"] = {MANUAL: "def test_x():\n    assert 14 == 'x'\n"}
+    step["stdout"] = f"FAILED {MANUAL}::test_x - AttributeError\n"
+    step["report"] = {**step["report"], "files": [MANUAL], "locked": [MANUAL],
+                      "red": [{"test": f"{MANUAL}::test_x", "line": red}], **report}
+    return step
+
+
+def test_a_full_review_with_no_mutation_proof_is_accepted_and_the_ticket_lands(tmp_path):
+    rig = manual(tmp_path, writes_manual())
+    assert rig.code == 0 and rig.state()["tickets"]["14"]["phase"] == "merged", rig.ledger()
+    assert len(rig.calls("14", "reviewer")) == 1 and rig.led("Ticket 14", "reviewer", "report accepted")
+    assert not rig.led("no mutation proof") and "feat: 14 rows" in rig.pr_subjects()
+
+
+def test_a_leftover_mutations_field_whose_red_line_is_not_in_the_log_is_ignored(tmp_path):
+    leftover = review("14")
+    leftover["report"]["mutations"] = [{"test": "tests/test_csv.py::test_quote", "file": "csv.py", "line": 12,
+                                        "red": "AssertionError"}]
+    rig = manual(tmp_path, writes_manual(), reviewer=leftover)
+    assert rig.code == 0 and len(rig.calls("14", "reviewer")) == 1, rig.ledger()
+    assert not rig.led("red line not found")
+
+
+def test_a_fixtures_field_is_ignored_and_a_red_line_not_in_the_log_is_still_rejected(tmp_path):
+    rig = manual(tmp_path, writes_manual(red="FAILED never printed", fixtures=["gh"]), writes_manual(fixtures=["gh"]))
     assert rig.code == 0, rig.ledger()
-    order = [call["role"] for call in rig.calls("01")]
-    assert order == ["test-writer", "implementer", "reviewer", "fixer", "reviewer", "test-writer", "reviewer"]
-    due = "give one mutation proof or more for each of these locked test files: tests/test_01.py tests/test_01b.py\n"
-    initial, again, full = (call["prompt"] for call in rig.calls("01", "reviewer"))
-    assert due in initial and due in full, full
-    assert "In round 1" not in full and due not in again
+    first, second = rig.calls("14", "test-writer")
+    assert f"red line not found in log: {MANUAL}::test_x: FAILED never printed" in second["prompt"]
+    assert "red line not found" not in first["prompt"] and len(rig.calls("14", "test-writer")) == 2
+    assert "fixtures" not in rig.state()["tickets"]["14"]
 
 
-def test_a_full_review_needs_no_proof_for_a_locked_fixture_that_holds_no_test(tmp_path):
-    """Issue #118: a fake `gh` the test-writer locks holds no test, so no `<locked file>::<test name>` can name it."""
-    first = {**tw("01"), "files": {"tests/test_01.py": "def test_x():\n    assert 0\n", "tests/fakes/gh": "exit 0\n"}}
-    first["report"] = {**first["report"], "files": ["tests/test_01.py", "tests/fakes/gh"],
-                       "locked": ["tests/test_01.py", "tests/fakes/gh"], "fixtures": ["tests/fakes/gh"]}
-    rig = Inside(tmp_path).run(plan(**{"01/test-writer": [first], "01/reviewer": [review("01")]}))
-    assert rig.code == 0 and len(rig.calls("01", "reviewer")) == 1, rig.ledger()
-    assert rig.state()["tickets"]["01"]["fixtures"] == ["tests/fakes/gh"]
-    assert "for each of these locked test files: tests/test_01.py\n" in rig.calls("01", "reviewer")[0]["prompt"]
+def test_no_prompt_of_a_ticket_review_asks_for_a_mutation_proof(tmp_path):
+    rig = Inside(tmp_path, three())
+    rig.run(plan(**{"01/reviewer": [review("01", [STUCK]), review("01")], "01/fixer": [fix("01", 1)]}))
+    assert rig.code == 0 and len(rig.calls("01", "reviewer")) == 2, rig.ledger()
+    prompts = [call["prompt"] for nn in ("01", "02") for call in rig.calls(nn, "reviewer")]
+    assert len(prompts) == 3 and not [prompt for prompt in prompts if "mutation" in prompt.lower()]
+    again = rig.prompt("reviewer-1")
+    assert "This is the re-review after fix round 1" in again and "proof" not in again
+    assert not [line for line in again.splitlines() if "demo/export.py:" in line]
 
 
-def test_a_fixture_must_be_a_locked_file_and_a_correction_that_relists_it_decides_again(tmp_path):
-    report = dict(status="NEEDS_CONTEXT", commits=[], files=[], concerns=[], locked=["a"], red=[], fixtures=["gh"])
-    path = tmp_path / "test-writer-0.json"
-    path.write_text(json.dumps(report))
-    context = {"repo": ".", "branch": "HEAD", "start": "HEAD", "log": str(path)}
-    assert "fixtures: gh is not in `locked`" in driver_report.validate("test-writer", str(path), context)
-    entry = {"test_writer_sha": None, "locked": ["tests/a.py", "gh", "fake"], "held": {}, "fixtures": ["gh", "fake"]}
-    assert driver_review.written(".", entry, ["gh"], [], "tip")["fixtures"] == ["fake"]
-
-
-def test_the_locked_file_rule_is_for_the_first_review_only(tmp_path):
-    report = dict(status="DONE", commits=[], files=[], concerns=[], findings=[], mutations=[])
-    path = tmp_path / "reviewer-0.json"
-    path.write_text(json.dumps(report))
-    repo = tmp_path / "repo"
-    (repo / "tests").mkdir(parents=True)
-    for name in ("a", "b"):
-        (repo / f"tests/{name}.py").write_text("def test_x():\n    pass\n")
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
-    subprocess.run([*GIT, "-C", str(repo), "commit", "-q", "-m", "tests"], check=True)
-    context = {"repo": str(repo), "branch": "main", "start": "HEAD", "log": str(path),
-               "locked": ["tests/a.py", "tests/b.py"]}
-    assert driver_report.validate("reviewer", str(path), context) == []
-    assert driver_report.validate("reviewer", str(path), {**context, "full": True}) == [
-        "mutations: no mutation proof for the locked test file tests/a.py",
-        "mutations: no mutation proof for the locked test file tests/b.py"]
+def test_the_test_writer_rewrites_a_test_that_is_green_before_any_implementation(tmp_path):
+    rig = Inside(tmp_path, ONE).run(plan())
+    assert rig.code == 0, rig.ledger()
+    writer, reviewer = rig.prompt("test-writer-0"), rig.prompt("reviewer-0")
+    assert "A test that is green before any implementation is not a proof. Rewrite it until it fails.\n" in writer
+    assert "mutation" not in writer.lower() and "mutation" not in reviewer.lower()
+    assert "Run again" not in reviewer
 
 
 def test_a_timed_out_read_only_role_is_restored_only_when_no_other_agent_is_in_the_slot(tmp_path):
@@ -1234,32 +1208,6 @@ def test_a_reviewer_that_times_out_starts_again_from_the_clean_tip(tmp_path):
     assert "in the tree" not in second["prompt"] and second["prompt"].rstrip().endswith("one ref store.")
 
 
-# ---------------------------------------------------------------- mutation proofs
-
-def test_a_re_review_names_only_the_proofs_the_fix_made_due(tmp_path):
-    first = test_review.edit(test_review.LONG, l12="v12 = 'a'", l30="v30 = 'a'")
-    rig = test_review.scoped(tmp_path, (12, 30), [first, test_review.edit(first, l30="v30 = 'b'")], (30,))
-    assert rig.code == 0, rig.ledger()
-    assert "no proof is due): demo/export.py:12 demo/export.py:30\n" in rig.prompt("reviewer-1")
-    assert "no proof is due): demo/export.py:30\n" in rig.prompt("reviewer-2")
-    old, new = rig.sha("01", "implementer"), rig.calls("01", "fixer")[0]["sha"]
-    assert f"The fix is {old}..{new}: check only whether your own critical or important findings" in rig.prompt("reviewer-1")
-
-
-def test_a_proof_follows_its_line_through_inserts_and_deletes(tmp_path):
-    lines = test_review.LONG.splitlines(keepends=True)
-    moved = "".join(lines[:19] + ["i1 = 1\n", "i2 = 2\n"] + lines[19:29] + ["v30 = 'changed'\n"] + lines[30:])
-    rig = test_review.scoped(tmp_path, (12, 30, 35), [moved], (32,))
-    assert rig.code == 0, rig.ledger()
-    assert "no proof is due): demo/export.py:32\n" in rig.prompt("reviewer-1")
-    # (first old line, old count, first new line, new count): lines 3-4 deleted, 10-11 replaced by one line.
-    hunks = [(3, 2, 2, 0), (10, 2, 8, 1), (20, 0, 18, 3)]
-    assert [driver_review._follow(line, hunks) for line in (2, 3, 4, 5, 10, 11, 12, 20, 21)] == [
-        (2, False), (2, True), (2, True), (3, False), (8, True), (8, True), (9, False), (17, False), (21, False)]
-    repo, old, new = str(rig.repo), rig.sha("01", "implementer"), rig.calls("01", "fixer")[0]["sha"]
-    assert driver_review.follow(repo, old, new, {("demo/export.py", 30), ("demo/export.py", 35), ("gone.py", 4)}) == {
-        ("demo/export.py", 32): True, ("demo/export.py", 37): False, ("gone.py", 4): False}
-
 
 # ---------------------------------------------------------------- conflict agent
 
@@ -1333,10 +1281,7 @@ def test_no_template_names_the_ledger_and_the_method_of_step_6_is_in_the_reviewe
     for path in driver_report.PROMPTS.glob("*.md"):
         assert ("ledger" in path.read_text().lower()) == (path.name == "final-reviewer.md"), path.name
     reviewer = (driver_report.PROMPTS / "reviewer.md").read_text()
-    for sentence in ("Test each suspicion that the ticket names in its Suspicions line.",
-                     "a later round repeats it only when that line changed.",
-                     "Run again each mutation that the test-writer report names in `concerns`."):
-        assert sentence in reviewer, sentence
+    assert "Test each suspicion that the ticket names in its Suspicions line." in reviewer
 
 
 STOPPED = "02-review-stopped-1"
@@ -1409,12 +1354,6 @@ def test_a_resumed_review_whose_older_records_name_the_correctness_pass_runs_the
     assert rig.code == 2 and [q["id"] for q in rig.state()["run"]["questions"]] == [STOPPED, "02-review-stopped-2"]
     second = rig.calls("02", "reviewer")[1]["prompt"]
     assert "no mutation proof" not in second and "correctness" not in second
-
-
-def test_the_reviewer_schema_asks_for_one_proof_for_each_locked_test_file_in_the_first_review():
-    """Issue 66: a first review with no proof for a locked test file costs a rerun."""
-    description = driver_report.schema("reviewer")["properties"]["mutations"]["description"]
-    assert "each locked test file" in description and "`<locked file>::<test name>`" in description
 
 
 def test_git_identity_is_not_needed_to_open_the_merge_for_the_conflict_agent(tmp_path):
