@@ -1,5 +1,6 @@
 """Launcher acceptance tests, through `sh run.sh` with a temporary cache seeded from a provisioned one."""
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,9 +12,17 @@ import pytest
 SKILL = Path(__file__).resolve().parents[1]
 RUN = SKILL / "run.sh"
 ROOT = SKILL.parents[1]
-VENV = "3.13.7-jsonschema-4.26.0"
-PINS = ("jsonschema-4.26.0", "attrs-26.1.0", "referencing-0.37.0", "rpds_py-2026.9.1",
-        "jsonschema_specifications-2025.9.1")
+
+
+def setting(path, name):
+    """A `name=value` line of a shell file: the wrapper and the launcher define the pins and the Python."""
+    return re.search(rf'^{name}="?([^"\n]*)"?$', path.read_text(), re.M).group(1)
+
+
+REQUIREMENTS = setting(RUN, "pins").split()
+VENV = f'{setting(SKILL / "launcher.sh", "python_version")}-{setting(RUN, "venv_key")}'
+# The dist-info names that pip writes for the pins: jsonschema-specifications==2025.9.1 → jsonschema_specifications-2025.9.1.
+PINS = {req.replace("-", "_").replace("==", "-") for req in REQUIREMENTS}
 
 
 @pytest.fixture
@@ -74,10 +83,10 @@ def test_online_run_builds_pinned_venv_and_runs_driver(tmp_path, seed):
     assert "usage: implement-spec" in proc.stdout
     assert [p.name for p in (cache / "venv").iterdir()] == [VENV]
     requested = spy.read_text().split()
-    for pin in ("jsonschema==4.26.0", "attrs==26.1.0", "referencing==0.37.0", "rpds-py==2026.9.1",
-                "jsonschema-specifications==2025.9.1"):
+    for pin in REQUIREMENTS:
         assert pin in requested, f"{pin} is not requested explicitly: {requested}"
-    assert set(PINS) <= installed(cache / "venv" / VENV)
+    # Equal, not a subset: a dependency that run.sh does not pin still gets installed, and fails here.
+    assert installed(cache / "venv" / VENV) == PINS
 
 
 def test_offline_cache_without_venv_exits_3_naming_jsonschema(tmp_path, seed):
@@ -108,7 +117,7 @@ def test_concurrent_first_runs_share_one_complete_venv_and_leave_no_partial(tmp_
         assert code == 0, err
         assert "usage: implement-spec" in out
     assert [p.name for p in (cache / "venv").iterdir()] == [VENV]
-    assert set(PINS) <= installed(cache / "venv" / VENV)
+    assert installed(cache / "venv" / VENV) == PINS
     assert (cache / "venv" / VENV / "bin/python").exists()
     assert not (published / "venv").exists(), "a losing run's environment was moved inside the published venv"
 
