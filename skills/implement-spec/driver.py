@@ -104,6 +104,32 @@ def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
 
 
+def _first_notes(number: str, slot_number: int, entry: dict, run: Run, roles: list[str]) -> list[str]:
+    """The one more template of the first role: the ruling that sent the ticket back, or that its work was
+    interrupted."""
+    if entry["note"]:
+        return [entry["note"]]
+    if run.kept.get(number) == slot_number:
+        ledger(f"Ticket {number}: resumed in slot {slot_number} with the work the interrupted {roles[0]} left.")
+        return ["interrupted"]
+    return []
+
+
+def _role_check(role: str, number: str, slot: str, entry: dict, run: Run, values: dict,
+                notes: list[str]) -> tuple[dict, list[str]]:
+    """(the check of the report of `role`, its notes). A test-writer on a ticket that has locked tests is the
+    correction after a ruling: it gets the overruled concerns, and the locked files it changed are put back first."""
+    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
+    if not check["correction"]:
+        return check, notes
+    check["findings"] = _overruled(number, run)
+    values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
+    if restored := run.restore_locked_files(number, slot):
+        values.update(start_sha=driver_slots.head(slot), restored=" ".join(restored))
+        notes, check["restored"] = [*notes, "restored"], restored
+    return check, notes
+
+
 def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
     """Run the test-writer and the implementer, as far as the phase of the ticket still needs them."""
     number, slot = ticket.number, driver_slots.path(slot_number)
@@ -111,27 +137,13 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
     roles = _roles_left(ticket, entry["phase"], run.args.only)
     with during("the start"):
         start = _check_out_ticket(ticket, slot_number, entry, run)
-    # The first role gets one more template: the ruling that sent the ticket back, or that its work was interrupted.
-    if entry["note"]:
-        notes = [entry["note"]]
-    elif run.kept.get(number) == slot_number:
-        notes = ["interrupted"]
-        ledger(f"Ticket {number}: resumed in slot {slot_number} with the work the interrupted {roles[0]} left.")
-    else:
-        notes = []
+    notes = _first_notes(number, slot_number, entry, run, roles)
     values = {**_prompt_values(ticket, slot, run), "locked": " ".join(entry["locked"])}
     for role in roles:
         run.state.ticket(number, phase=DURING.get(role, "review"))
         values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, driver_gate.FAST, start),
                                                                  slot))
-        # A test-writer on a ticket that has locked tests is the correction after a ruling.
-        check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
-        if check["correction"]:
-            check["findings"] = _overruled(number, run)
-            values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
-        if check["correction"] and (restored := run.restore_locked_files(number, slot)):
-            values.update(start_sha=driver_slots.head(slot), restored=" ".join(restored))
-            notes, check["restored"] = [*notes, "restored"], restored
+        check, notes = _role_check(role, number, slot, entry, run, values, notes)
         with during(f"the {role}"):
             try:
                 report = run.agent(role, number, slot, values, notes=notes, check=check)
@@ -658,8 +670,7 @@ def _worktree_errors(slot_1_is_kept: bool) -> list[str]:
     return errors
 
 
-def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[str]], dict[str, int]] | None:
-    """(the tickets, the models, the kept slots) of a valid call, or None with each error printed."""
+def _argument_errors(args: argparse.Namespace) -> list[str]:
     errors = [] if args.gate else ["--gate is required: the command the driver runs as the full gate"]
     if not args.fast_gate:
         errors.append("--fast-gate is required: the command the driver and the agents run as the fast gate")
@@ -667,6 +678,12 @@ def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[s
         errors.append("--spec is required: the spec file the prompts point at")
     if args.parallel < 1:
         errors.append("--parallel must be 1 or more")
+    return errors
+
+
+def _validated(args: argparse.Namespace) -> tuple[list[Ticket], dict[str, list[str]], dict[str, int]] | None:
+    """(the tickets, the models, the kept slots) of a valid call, or None with each error printed."""
+    errors = _argument_errors(args)
     kept = driver_state.kept(driver_state.State(STATE).read()) if STATE.exists() else {}
     errors += _worktree_errors(1 in kept.values())
     models, model_errors = driver_agents.load_models(args.models)

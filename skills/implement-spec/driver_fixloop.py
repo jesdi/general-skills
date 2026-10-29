@@ -244,6 +244,12 @@ def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> l
     return list(code.values())
 
 
+def _red(job: Job, landing: str) -> str:
+    """The red gate that the fixer has to make green, or ""."""
+    return (f"the fast gate is red on {job.tip[:7]}" if job.red else
+            f"the full gate is red on {landing[:7]}" if landing else "")
+
+
 def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
     """Run the next fix round: a fixer on the implementer's list, for `findings`. A fixer that makes no commit gives
     a reason per finding, and the review of the same tip checks them (issue #123). `landing` is the commit whose full
@@ -259,13 +265,16 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
         record = driver_gate.record_path(OUT / number, driver_gate.FULL, landing)
         values.update(landing_sha=landing[:7], landing_record=os.path.relpath(record, job.slot))
         notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
-    red = (f"the fast gate is red on {job.tip[:7]}" if job.red else
-           f"the full gate is red on {landing[:7]}" if landing else "")
     with during(f"fix round {job.round}"):
         run.agent("fixer", number, job.slot, values, entry=on, fix_round=job.round, notes=notes,
-                  check={"fix": [finding["title"] for finding in findings], "red": red})
+                  check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
     before, job.tip = job.tip, driver_slots.head(job.slot)
     run.state.ticket(number, tip=job.tip, landing=None)
+    _follow_fix(job, before)
+
+
+def _follow_fix(job: Job, before: str) -> None:
+    """Carry the proofs and the range of the next review over the fix from `before` to the new tip."""
     followed = driver_review.follow(job.slot, before, job.tip, job.proofs)
     due = {proof for proof, changed in followed.items() if changed}
     if job.red:
