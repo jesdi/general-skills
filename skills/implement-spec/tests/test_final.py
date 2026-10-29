@@ -8,8 +8,8 @@ PATH. No test reaches a real remote or a real `gh`.
 Interface choices (ticket 06):
 - end-of-run starts only when every ticket is merged and every slot is idle. A repository with no `origin` skips only
   the rebase and the push (ticket 08): test_amendments.py holds those tests.
-- its agents report into `.agent/implement/final/`, so the fake runner keys them `final/final-reviewer`,
-  `final/fixer` and `final/conflict`; gate records there are `gate-<first 7 hex>.log`.
+- its agents report into `.agent/implement/final/`, so the fake runner keys them `final/final-spec` (and the other
+  lenses), `final/final-reviewer`, `final/fixer` and `final/conflict`; gate records there are `gate-<first 7 hex>.log`.
 - recovery point: before the rebase the driver sets `refs/implement-spec/feat%2Fcsv/recovery` to the PR tip and writes the ledger
   sentence "Recovery point: ... <sha>". An ended run leaves the ref in place.
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
@@ -35,7 +35,7 @@ from types import SimpleNamespace
 import pytest
 
 from test_cli import SKILL, git, ticket
-from test_review import FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
+from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
 from test_stops import UNATTENDED, decisions, stage
 from test_walk import fix, impl, plan, tw
 
@@ -70,7 +70,7 @@ if "commit" in step:''', 1).replace(
     'for cmd in step.get("git_end", []):\n    git(*cmd)\n    sha = git("rev-parse", "HEAD")\nif step.get("report") is not None:', 1,
 ).replace('json.dumps(step["report"]).replace("$SHA", sha)', 'render(step["report"])', 1)
 assert "render(step" in RUNNER and RUNNER.count("git_end") == 1 and RUNNER.count("wait_pr_has") == 2
-assert '"final-reviewer")' in RUNNER and RUNNER.count("final-reviewer") == 1
+assert '"final-structure")' in RUNNER and RUNNER.count("final-reviewer") == 1
 
 GH = f"""#!{sys.executable}
 import json, os, sys
@@ -94,7 +94,7 @@ THREE = {
     "03-cli-flag.md": ticket("03", "CLI flag", seam="`demo export` CLI", touches="`demo/cli.py: main`"),
 }
 FILES = {nn: f"{nn}-{TITLES[nn].lower().replace(' ', '-')}.md" for nn in TITLES}
-FINAL_MODELS = {"final-reviewer": [FABLE, OPUS]}
+FINAL_MODELS = {"final-reviewer": [FABLE, OPUS, ASTRA]}
 
 
 def ref(root, name):
@@ -215,7 +215,7 @@ def test_end_of_run_work_does_not_start_while_02_is_in_review(story):
     assert story.local.code == 0, rig.output()
     (held,) = [c["held"] for c in rig.calls("02", "reviewer")]
     assert held["before"] == held["after"] and not held["recovery"], "nothing rewrote the branch while 02 ran"
-    finals = rig.final_calls("final-reviewer")
+    finals = rig.final_calls("final-spec")
     assert finals and finals[0]["t0"] >= rig.calls("02", "reviewer")[0]["t1"], "no final review before 02 left review"
 
 
@@ -236,15 +236,15 @@ def test_one_gate_record_exists_for_the_tidied_tip_and_the_final_reviewer_is_poi
     assert [p.name for p in records] == [f"gate-full-{tip[:7]}.log"], records
     assert "GATE-OUTPUT-MARK" in records[0].read_text() and tip[:7] in records[0].read_text()
     (gate,) = [g for g in rig.gates() if g["commit"] == tip]
-    first = rig.final_calls("final-reviewer")[0]
+    first = rig.final_calls("final-spec")[0]
     assert gate["t0"] < first["t0"], "the gate runs before the final review"
     assert f"final/gate-full-{tip[:7]}.log" in first["prompt"]
 
 
-def test_the_final_reviewer_runs_on_the_first_model_entry_pointed_at_review_diff_minors_and_rulings(story):
+def test_the_spec_lens_runs_on_the_first_model_entry_pointed_at_review_diff_minors_and_rulings(story):
     rig = story.rig
-    assert rig.led("final-reviewer", FABLE) and not rig.led("final-reviewer", OPUS)
-    prompt = rig.final_calls("final-reviewer")[0]["prompt"]
+    assert rig.led("final-spec", FABLE) and not rig.led("final-spec", OPUS)
+    prompt = rig.final_calls("final-spec")[0]["prompt"]
     assert "review-diff" in prompt and "M-MINOR" in prompt and "locked test overruled" in prompt
     assert '"severity"' in prompt and '"findings"' in prompt, "the reviewer schema"
 
@@ -285,7 +285,7 @@ def test_the_push_rerun_pushes_once_opens_the_pr_with_map_and_rulings_and_runs_o
 @pytest.fixture(scope="module")
 def fixed(tmp_path_factory):
     rig = Final(tmp_path_factory.mktemp("fixed"), THREE, FINAL_MODELS)
-    rig.run(plan(**{"final/final-reviewer": [final(finding("Q-ONE"), finding("Q-TWO")), final()],
+    rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"), finding("Q-TWO"))], "final/final-reviewer": [final()],
                     "final/fixer": [fixer(fn("02"), "quote embedded commas", "escape quotes")]}))
     return rig
 
@@ -294,7 +294,7 @@ def test_two_findings_make_one_fixer_batch_of_fix_commits_on_top_of_the_unchange
     assert fixed.code == 0, fixed.output()
     (batch,) = fixed.final_calls("fixer")
     assert "Q-ONE" in batch["prompt"] and "Q-TWO" in batch["prompt"]
-    reviewed = fixed.final_calls("final-reviewer")[0]["head"]
+    reviewed = fixed.final_calls("final-spec")[0]["head"]
     assert [r["subject"] for r in fixed.commits(reviewed)] == ["fix(02): quote embedded commas", "fix(02): escape quotes"]
     assert len(fixed.commits(fixed.start, reviewed)) == 3
     assert ref(fixed.repo, "feat/csv~2") == reviewed
@@ -308,7 +308,7 @@ def test_green_ticket_carries_cap_finding_into_required_final_fix(tmp_path):
     batch = fixer(fn("02"), "restore quoting", ticket_of="02")
     batch["report"]["addressed_must_fix"] = ["MERGED-QUOTING-REGRESSION (demo/export.py:99)"]
     steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
-                    "final/final-reviewer": [final(), scoped], "final/fixer": [batch]})
+                    "final/final-reviewer": [scoped], "final/fixer": [batch]})
 
     rig.run(steps)
 
@@ -325,7 +325,7 @@ def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
     batch = fixer(fn("02"), "attempt quoting fix", ticket_of="02")
     batch["report"]["addressed_must_fix"] = ["MERGED-QUOTING-REGRESSION (demo/export.py:99)"]
     steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
-                    "final/final-reviewer": [final(), final(finding("MERGED-QUOTING-REGRESSION"))],
+                    "final/final-reviewer": [final(finding("MERGED-QUOTING-REGRESSION"))],
                     "final/fixer": [batch]})
 
     rig.run(steps)
@@ -343,7 +343,6 @@ def test_final_fix_batch_rejects_an_unaddressed_must_fix(tmp_path):
     rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
     recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
     steps = plan(**{"02/reviewer": [recurring] * 3, "02/fixer": [fix("02", 1), fix("02", 2)],
-                    "final/final-reviewer": [final()],
                     "final/fixer": [fixer(fn("02"), "attempt quoting fix", ticket_of="02")]})
 
     rig.run(steps)
@@ -359,20 +358,20 @@ def test_the_fixer_of_the_final_review_gets_the_fast_gate_with_every_merged_lock
     no_full_gate(fixed)
 
 
-def test_the_final_reviewer_reads_the_full_record_of_the_reviewed_tip_and_runs_no_gate(fixed):
-    for call in fixed.final_calls("final-reviewer"):
+def test_the_final_review_reads_the_full_record_of_the_reviewed_tip_and_runs_no_gate(fixed):
+    for call in fixed.final_calls("final-spec") + fixed.final_calls("final-reviewer"):
         assert f"final/gate-full-{call['head'][:7]}.log" in call["prompt"]
         assert "Do not run a gate yourself." in call["prompt"] and "run the gate yourself" not in call["prompt"]
 
 
 def test_a_scoped_review_covers_the_range_after_the_reviewed_tip_and_one_gate_runs_on_the_new_tip(fixed):
-    reviewed, tip = fixed.final_calls("final-reviewer")[0]["head"], fixed.branch()
-    first, scoped = fixed.final_calls("final-reviewer")
+    reviewed, tip = fixed.final_calls("final-spec")[0]["head"], fixed.branch()
+    (scoped,) = fixed.final_calls("final-reviewer")
     assert reviewed[:7] in scoped["prompt"] and tip[:7] in scoped["prompt"]
     assert len([g for g in fixed.gates() if g["commit"] == tip]) == 1
     records = sorted(p.name for p in (fixed.repo / ".agent/implement/final").glob("gate-*.log"))
     assert records == sorted({f"gate-full-{reviewed[:7]}.log", f"gate-full-{tip[:7]}.log"})
-    assert len(fixed.final_calls("final-reviewer")) == 2 and all(stop_lines(fixed.out))
+    assert all(stop_lines(fixed.out))
 
 
 # ---------------------------------------------------------------- schema violations
@@ -385,20 +384,20 @@ def violation(tmp_path_factory):
     attempt = fixer(fn("01"), "tidy the header", ticket_of="01")
     del attempt["report"]["commits"][0]["ticket"]
     retry = {"report": dict(attempt["report"], commits=[{"sha": "$HEAD", "ticket": "01"}])}
-    rig.run(plan(**{"final/final-reviewer": [final(bad), final(finding("HEADER")), final()],
+    rig.run(plan(**{"final/final-spec": [final(bad), final(finding("HEADER"))], "final/final-reviewer": [final()],
                     "final/fixer": [attempt, retry]}))
     return rig
 
 
 def test_a_final_review_report_follows_the_reviewer_schema_or_is_rerun_once(violation):
     assert violation.code == 0, violation.output()
-    calls = violation.final_calls("final-reviewer")
-    assert len(calls) == 3 and "HEADER" in violation.final_calls("fixer")[0]["prompt"]
+    calls = violation.final_calls("final-spec")
+    assert len(calls) == 2 and "HEADER" in violation.final_calls("fixer")[0]["prompt"]
 
 
 def test_a_fixer_commit_without_its_ticket_is_a_schema_violation(violation):
     assert len(violation.final_calls("fixer")) == 2
-    reviewed = violation.final_calls("final-reviewer")[0]["head"]
+    reviewed = violation.final_calls("final-spec")[0]["head"]
     assert [r["subject"] for r in violation.commits(reviewed)] == ["fix(01): tidy the header"]
 
 
@@ -407,7 +406,8 @@ def test_a_fixer_commit_without_its_ticket_is_a_schema_violation(violation):
 @pytest.fixture(scope="module")
 def third(tmp_path_factory):
     rig = Final(tmp_path_factory.mktemp("third"), ONE)
-    steps = plan(**{"final/final-reviewer": [final(finding("STILL-OPEN")), final(finding("STILL-OPEN"))],
+    steps = plan(**{"final/final-spec": [final(finding("STILL-OPEN"))],
+                    "final/final-reviewer": [final(finding("STILL-OPEN"))],
                     "final/fixer": [fixer(fn("01"), "first try", ticket_of="01")]})
     rig.run(steps)
     parked = rig.snap()
@@ -422,8 +422,8 @@ def test_findings_open_after_the_second_round_become_fix_or_accept_questions_and
     (q,) = third.questions
     assert q["id"] == "final-finding-1" and {o["id"] for o in q["options"]} == {"fix", "accept"}
     assert "STILL-OPEN" in q["title"] + q["why"] and "final-finding-1" in third.parked.out
-    assert len(rig.final_calls("final-reviewer")) == 2 and len(rig.final_calls("fixer")) == 1
-    assert third.parked.pushes == 0
+    assert len(rig.final_calls("final-spec")) == len(rig.final_calls("final-reviewer")) == 1
+    assert len(rig.final_calls("fixer")) == 1 and third.parked.pushes == 0
 
 
 def test_accepting_the_finding_ends_the_run_with_a_ruling_and_starts_no_more_agents(third):
@@ -475,7 +475,7 @@ def conflicted_twice(tmp_path_factory):
 def test_a_second_conflict_ends_the_run_with_exit_1_and_the_branch_unrewritten_at_its_recovery_point(conflicted_twice):
     rig = conflicted_twice
     assert rig.code == 1, rig.output()
-    assert len(rig.final_calls("conflict")) == 1 and not rig.final_calls("final-reviewer")
+    assert len(rig.final_calls("conflict")) == 1 and not rig.final_calls("final-spec")
     recovery = rig.recovery()
     assert recovery and rig.branch() == recovery and len(rig.commits(rig.start, recovery)) == 6
     assert rig.led("ecovery", recovery[:7])
@@ -565,7 +565,8 @@ def pushed_run(tmp_path, monkeypatch, steps, risk_in, gh_fails=False):
         (tmp_path / "bin/gh").write_text("#!/bin/sh\necho gh down >&2\nexit 1\n")
     skills = tmp_path / "installed/skills"
     shutil.copytree(SKILL, skills / "implement-spec", ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", "test_*"))
-    shutil.copytree(SKILL.parent / "review-diff", skills / "review-diff", ignore=shutil.ignore_patterns("__pycache__"))
+    for name in ("review-diff", "deep-quality-review"):
+        shutil.copytree(SKILL.parent / name, skills / name, ignore=shutil.ignore_patterns("__pycache__"))
     home = tmp_path / "home"
     claude = tmp_path / "claude-home"
     claude.mkdir(), home.mkdir()

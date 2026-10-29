@@ -103,7 +103,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 ### Work is never dropped
 
 - A role that commits keeps its tree after a timeout or an interrupt; its rerun continues from it.
-- A read-only role (reviewer, final-reviewer, pr-writer) has no work to keep. When it changes its slot or
+- A read-only role (reviewer, final-reviewer, the final lenses, pr-writer) has no work to keep. When it changes its slot or
   the shared git config, the driver restores them and runs the review one more time (`Run.read_only`). The config is
   the keys of that file before the role (`driver_review.shared_config`): every worktree reads that one file, so a key a
   role writes there, such as a `core.worktree` on a temp directory, breaks git in all of them. Other sessions write
@@ -138,6 +138,15 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   (`driver._risk`), so a risk that the diff does not handle is an unmet criterion under the usual round and cap rules.
 - A `--models` file may name only the roles of the skill's `models.json` (`driver_agents.load_models`): a removed
   role (`correctness`, `explorer`) or an unknown one stops the run before the preflight.
+- The full final review is three lens roles, `final-spec`, `final-correctness` and `final-structure`
+  (`driver_agents.LENSES`), with no model list: `driver_agents.lens_entry` takes their entries from `final-reviewer`,
+  and `correctness_entry` puts the correctness lens on another provider than the first implementer entry;
+  `load_models` refuses a list with none. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
+  `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
+  twice stops the round only after every lens has ended; an accepted lens report is kept in `run.final.lenses` with
+  its tip and reused for that tip only. `driver_final._merged` makes the (file, line, title) of a finding unique,
+  keeping the more severe one, then the earlier lens; must-fix matching keeps its own (file, title) key. A final
+  finding of an older driver has no `source` and reads as `final-reviewer`.
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks after round 2. A red gate on a test-writer correction blocks.
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver

@@ -131,7 +131,7 @@ COMMIT = "echo $role >> work.txt; git add -A; git commit -q -m $role\n"
 WRITER = """fields='"locked": ["work.txt"], "red": [{"test": "t", "line": "FAILED t"}]'; echo FAILED t\n"""
 IMPLEMENTER = """fields='"green": ["1 passed"]'; echo '{"total_cost_usd": 0.25}'\n"""
 # The reviewer of a plain run: it finds nothing.
-CLEAN = """case $role in reviewer|final-reviewer)
+CLEAN = """case $role in reviewer|final-reviewer|final-spec|final-correctness|final-structure)
     printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": []}' > "$report"; exit 0;; esac
 """
 ONCE = '[ -e "$0.again" ] || { touch "$0.again"; %s; }\n'  # the first attempt only
