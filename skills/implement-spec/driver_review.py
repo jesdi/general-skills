@@ -11,30 +11,10 @@ import re
 import subprocess
 from pathlib import Path
 
-import driver_agents
 from driver_slots import git, head, names, on_branch
-from driver_tickets import Ticket
 
-# The checks of the correctness pass: this file of the review-diff skill, which is installed next to this one.
-CORRECTNESS = driver_agents.SKILL.parent / "review-diff" / "correctness.md"
 OPEN = ("critical", "important")  # the severities that start a fix round
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.M)
-
-
-def precondition_errors(tickets: list[Ticket]) -> list[str]:
-    """[] or the error that stops the run before any agent: a ticket with a Risk line needs CORRECTNESS."""
-    risky = [ticket.number for ticket in tickets if ticket.risk]
-    if CORRECTNESS.exists() or not risky:
-        return []
-    return [f"{CORRECTNESS} is missing: ticket {', '.join(risky)} has a Risk line and its correctness prompt carries "
-            "that file; install the review-diff skill next to implement-spec"]
-
-
-def checks() -> str:
-    """CORRECTNESS, inlined into the correctness prompt: the pass reads files only from git at the tip and from
-    `.agent/`, and a project-local install of review-diff sits in an ignored directory (issue #120). "" when it is
-    missing: only a ticket with a Risk line renders it, and `precondition_errors` checks the file for those."""
-    return CORRECTNESS.read_text() if CORRECTNESS.exists() else ""
 
 
 def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:

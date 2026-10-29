@@ -77,29 +77,28 @@ KINDS = {
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     "review-stopped": Kind(
         True,
-        "Ticket {ticket}: an agent of the review stopped: {subject}",
-        "The reviewer or the correctness pass of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, so the review "
-        "did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "Ticket {ticket}: the reviewer stopped: {subject}",
+        "The reviewer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, so the review did not end. Ticket "
+        "{ticket} is BLOCKED and each ticket that it blocks waits.",
         "retry",
         {"retry": Option(
-            "The review runs again, with each of its agents.",
+            "The reviewer runs again.",
             "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
          "accept": Option(
-            "The review runs again, and from now on a BLOCKED or NEEDS_CONTEXT report of this agent does not stop "
-            "the ticket: the review goes on with its findings and those of the other reports.",
+            "The reviewer runs again, and from now on a BLOCKED or NEEDS_CONTEXT report of the reviewer does not "
+            "stop the ticket: the review goes on with its findings.",
             "Ruling: {ticket} review goes on past this stop (accept): {subject}.", {"phase": "review"}),
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     "review-rejected": Kind(
         True,
-        "Ticket {ticket}: the driver rejected an agent of the review two times: {subject}",
-        "The driver rejected the report of the reviewer or the correctness pass of ticket {ticket}, and the report of "
-        "its rerun too, so the review did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "Ticket {ticket}: the driver rejected the reviewer two times: {subject}",
+        "The driver rejected the report of the reviewer of ticket {ticket}, and the report of its rerun too, so "
+        "the review did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
         "retry",
         {"retry": Option(
-            "The review runs again, with each of its agents. The first prompt of the rejected agent says why the "
-            "driver rejected its report.",
+            "The reviewer runs again, and its first prompt says why the driver rejected its report.",
             "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",

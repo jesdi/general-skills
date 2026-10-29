@@ -103,7 +103,7 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 ### Work is never dropped
 
 - A role that commits keeps its tree after a timeout or an interrupt; its rerun continues from it.
-- A read-only role (reviewer, correctness, final-reviewer, pr-writer) has no work to keep. When it changes its slot or
+- A read-only role (reviewer, final-reviewer, pr-writer) has no work to keep. When it changes its slot or
   the shared git config, the driver restores them and runs the review one more time (`Run.read_only`). The config is
   the keys of that file before the role (`driver_review.shared_config`): every worktree reads that one file, so a key a
   role writes there, such as a `core.worktree` on a temp directory, breaks git in all of them. Other sessions write
@@ -133,8 +133,11 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   an agent is reaped, the run stops. No group gets a signal after its leader is reaped.
 - A role gets one rerun. The rerun prompt is the first prompt, the rejection, then the same ending again.
   A timeout doubles the time of the rerun.
-- Fix rounds stop at 2, and round 2 goes to the next implementer entry. The correctness pass never runs on the
-  provider of the implementer.
+- Fix rounds stop at 2, and round 2 goes to the next implementer entry.
+- A ticket review runs one agent, the reviewer. Its prompt carries the ticket's Risk line as one more criterion
+  (`driver._risk`), so a risk that the diff does not handle is an unmet criterion under the usual round and cap rules.
+- A `--models` file may name only the roles of the skill's `models.json` (`driver_agents.load_models`): a removed
+  role (`correctness`, `explorer`) or an unknown one stops the run before the preflight.
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks after round 2. A red gate on a test-writer correction blocks.
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
@@ -149,20 +152,19 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
   `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the
   extra corrections (`AGAIN`), and an `accept` stop closes the ticket's locked-test findings in `_act_on`.
-- A reviewer or a correctness pass that reports BLOCKED or NEEDS_CONTEXT raises `driver_run.Stopped`, which
-  carries the report. `driver_fixloop._run_reviewers` turns it into a `review-stopped` question, or, after an
-  `accept` ruling on that role (`driver_decisions.accepted`), uses the report as it is.
-- A reviewer or a correctness pass whose report the driver rejects two times asks a `review-rejected` question.
-  The stop records each rejection in the ticket's `rejected` (role -> why); after `retry`, the role's first prompt
-  carries it (`prompts/rejected.md`), and the next review that ends clears it.
+- A reviewer that reports BLOCKED or NEEDS_CONTEXT raises `driver_run.Stopped`, which carries the report.
+  `driver_fixloop._run_reviewer` turns it into a `review-stopped` question, or, after an `accept` ruling on the
+  reviewer (`driver_decisions.accepted`), uses the report as it is.
+- A reviewer whose report the driver rejects two times asks a `review-rejected` question. The stop records the
+  rejection in the ticket's `rejected` (role -> why); after `retry`, the reviewer's first prompt carries it
+  (`prompts/rejected.md`), and the next review that ends clears it. A record or a ruling of a removed role, from an
+  older driver, is never read.
 - An implementer or a fixer that reports BLOCKED or NEEDS_CONTEXT asks a question in `Run._ask_stop`: `locked-test`
   for a contradicted locked test, else `implementer-stopped` or `fixer-stopped`. The stop of a fixer sets the round
   back by one, so its `retry` (gate and review the tip, then a fixer) runs the same round again.
 - An implementer or a fixer with nothing to change reports DONE with no commit (`driver_report._unchanged_errors`):
   the branch did not move, the tree is clean, and a concern says why. The driver gates and reviews that tip as it
   would a new one.
-- The correctness prompt carries the checks of `review-diff` (`driver_review.checks`): the pass reads files only
-  from git at the tip and from `.agent/`, and a project-local install sits in an ignored directory.
 
 ### Questions
 

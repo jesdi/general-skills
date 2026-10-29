@@ -19,11 +19,11 @@ from pathlib import Path
 
 SKILL = Path(__file__).resolve().parent
 # Minutes per role.
-TIMEOUTS = {"explorer": 30, "test-writer": 30, "implementer": 90, "reviewer": 45, "correctness": 30, "fixer": 60,
-            "final-reviewer": 60, "conflict": 30, "pr-writer": 20}
+TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "final-reviewer": 60, "conflict": 30,
+            "pr-writer": 20}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
-READ_ONLY = ("reviewer", "correctness", "final-reviewer", "pr-writer")
+READ_ONLY = ("reviewer", "final-reviewer", "pr-writer")
 PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
 # The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
 PREFLIGHT_MINUTES = 5
@@ -51,37 +51,43 @@ def _entry_error(role: str, entry: str, first: bool) -> str | None:
     return None
 
 
-def correctness_entry(models: dict[str, list[str]]) -> str:
-    """The first correctness entry on another provider than the implementer's first entry; "" when there is none."""
-    own = split(models["implementer"][0])[0]
-    return next((entry for entry in models["correctness"] if split(entry)[0] != own), "")
+# Roles of older drivers: a --models file that still names one is told to delete the key.
+REMOVED = ("correctness", "explorer")
+
+
+def _role_errors(given: dict, known: dict) -> list[str]:
+    """One error per role of the --models file that the skill's models.json does not define."""
+    return [f"{role}: the role was removed; delete its key from the --models file" if role in REMOVED else
+            f"{role}: unknown role (known: {', '.join(known)})" for role in given if role not in known]
 
 
 def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
-    """The skill's default lists with the roles of `path` on top, and every entry error."""
-    models = json.loads((SKILL / "models.json").read_text())
+    """The skill's default lists with the roles of `path` on top, and every role and entry error."""
+    defaults = json.loads((SKILL / "models.json").read_text())
     try:
-        models = {**models, **(json.loads(Path(path).read_text()) if path else {})}  # a list is a TypeError
-        # The entry of each role whose CLI must be on PATH; entries[0]: an empty list is an error.
-        first = {**{role: entries[0] for role, entries in models.items()}, "correctness": correctness_entry(models)}
-        found = [_entry_error(role, entry, entry == first[role]) for role, entries in models.items() for entry in entries]
-        if len(models["implementer"]) < 2:
-            found.append("implementer: a second implementer model entry is required for fix round 2")
-        if not first["correctness"]:
-            found.append(f"correctness: no entry of its list ({', '.join(models['correctness'])}) is on another "
-                         f"provider than the implementer's first entry {models['implementer'][0]}; the correctness "
-                         "pass never runs on the implementer's provider")
+        given = json.loads(Path(path).read_text()) if path else {}
+        models = {**defaults, **given}  # a list is a TypeError
+        if unknown := _role_errors(given, defaults):
+            return {}, unknown
+        return models, _entry_errors(models)
     except (OSError, ValueError, AttributeError, LookupError, TypeError) as exc:
         return {}, [f"--models {path}: {exc!r}"]
-    return models, [error for error in found if error]
+
+
+def _entry_errors(models: dict[str, list[str]]) -> list[str]:
+    """Every entry error of the merged lists."""
+    # The entry of each role whose CLI must be on PATH; entries[0]: an empty list is an error.
+    first = {role: entries[0] for role, entries in models.items()}
+    found = [_entry_error(role, entry, entry == first[role]) for role, entries in models.items() for entry in entries]
+    if len(models["implementer"]) < 2:
+        found.append("implementer: a second implementer model entry is required for fix round 2")
+    return [error for error in found if error]
 
 
 def used_entries(models: dict[str, list[str]]) -> list[str]:
-    """Each entry the driver can start an agent on: the first of each role but the explorer, the correctness entry
-    and the second implementer entry (fix round 2)."""
-    entries = [entries[0] for role, entries in models.items() if role not in ("explorer", "correctness")]
-    entries += [correctness_entry(models), *models["implementer"][1:2]]
-    return sorted(set(entries))
+    """Each entry the driver can start an agent on: the first of each role and the second implementer entry (fix
+    round 2)."""
+    return sorted({*(entries[0] for entries in models.values()), *models["implementer"][1:2]})
 
 
 def preflight(models: dict[str, list[str]]) -> list[str]:

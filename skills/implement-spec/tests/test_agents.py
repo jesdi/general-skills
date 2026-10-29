@@ -41,7 +41,7 @@ with calls.open("a") as f:
     f.write(json.dumps(rec) + "\\n")
 plan = json.loads((here / "plan.json").read_text()).get(role, [])
 step = plan[n] if n < len(plan) else {{}}
-if role in ("reviewer", "correctness", "final-reviewer") and "report" not in step:  # a role the test does not script reports no findings
+if role in ("reviewer", "final-reviewer") and "report" not in step:  # a role the test does not script reports no findings
     reds = [f"FAILED {{p}}::test_x - AttributeError" for p in git("diff", "--name-only", "feat/csv...HEAD", "--", "tests").split()]
     proofs = [dict(test=r.split()[1], file="demo/export.py", line=1, red=r) for r in reds]
     step = dict(step, stdout="".join(r + "\\n" for r in reds), report=dict(
@@ -190,8 +190,7 @@ def test_help_lists_the_timeout_flag_and_default_minutes():
 
 @pytest.mark.parametrize("entry", ["openai/gpt-sol@medium"])
 def test_openai_implementer_launches_codex_exec_in_workspace_write(env, entry):
-    # ticket 08: the correctness list needs an entry on another provider than the implementer's
-    w = World(env, refactor=True, implementer=[entry], correctness=["claude-opus-5@medium"])
+    w = World(env, refactor=True, implementer=[entry])
     w.run(runner=False)
     argv = launches(w.tmp, "codex")[0]
     assert argv[0] == "exec" and "--ephemeral" not in argv
@@ -201,10 +200,9 @@ def test_openai_implementer_launches_codex_exec_in_workspace_write(env, entry):
     assert not launches(w.tmp, "claude")
 
 
-@pytest.mark.parametrize("role", ["reviewer", "correctness"])
-def test_reviewing_roles_launch_codex_exec_read_only(env, role):
-    w = World(env, refactor=True, **{role: ["openai/gpt-sol@medium"]})
-    w.run(None, "--only", role, runner=False)
+def test_the_reviewer_launches_codex_exec_read_only(env):
+    w = World(env, refactor=True, reviewer=["openai/gpt-sol@medium"])
+    w.run(None, "--only", "reviewer", runner=False)
     argv = launches(w.tmp, "codex")[0]
     assert argv[0] == "exec" and "--ephemeral" not in argv
     assert value_after(argv, "--sandbox", "-s") == "read-only"
@@ -214,7 +212,7 @@ def test_reviewing_roles_launch_codex_exec_read_only(env, role):
 @pytest.mark.parametrize("writes", ["file", "message"])
 def test_a_read_only_codex_report_is_the_file_it_wrote_else_its_last_message(env, writes):
     # A read-only sandbox can still let the agent write its report; codex then writes the last message to the -o file.
-    w = World(env, refactor=True, correctness=["openai/gpt-sol@medium"])
+    w = World(env, refactor=True, reviewer=["openai/gpt-sol@medium"])
     report = {"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": []}
     (w.tmp / "bin/codex").write_text(f"""#!{sys.executable}
 import re, sys
@@ -229,9 +227,9 @@ elif {writes!r} == "file":
 else:
     last.write_text({json.dumps(report)!r})
 """)
-    ok(w.run(None, "--only", "correctness", runner=False))
-    assert json.loads((w.repo / ".agent/implement/01/correctness-0.json").read_text()) == report
-    assert "correctness ran on openai/gpt-sol@medium" in w.ledger() and "report accepted" in w.ledger()
+    ok(w.run(None, "--only", "reviewer", runner=False))
+    assert json.loads((w.repo / ".agent/implement/01/reviewer-0.json").read_text()) == report
+    assert "reviewer ran on openai/gpt-sol@medium" in w.ledger() and "report accepted" in w.ledger()
 
 
 @pytest.mark.parametrize("entry", ["claude-opus-5@medium", "anthropic/claude-opus-5@medium"])
@@ -278,7 +276,7 @@ def test_implementer_prompt_carries_pointers_and_only_template_sentences(env):
 
 @pytest.mark.parametrize("role, extra, refactor", [
     ("test-writer", (), False), ("implementer", (), True),
-    ("reviewer", ("--only", "reviewer"), True), ("correctness", ("--only", "correctness"), True)])
+    ("reviewer", ("--only", "reviewer"), True)])
 def test_every_prompt_ends_with_report_path_schema_and_the_never_rule(env, role, extra, refactor):
     w = World(env, refactor=refactor)
     w.run(None, *extra)

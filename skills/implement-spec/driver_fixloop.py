@@ -1,16 +1,14 @@
 """A gated ticket tip in, a reviewed tip out: the review, the test-writer corrections and the fix rounds.
 
-Reports of a ticket are `<role>-<K>.json`: K is the fix round the agent follows (reviewer, correctness) or is
+Reports of a ticket are `<role>-<K>.json`: K is the fix round the agent follows (reviewer) or is
 (fixer). A test-writer correction after the review of round K is `test-writer-<K+1>.json`.
 """
 from __future__ import annotations
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-import driver_agents
 import driver_decisions
 import driver_gate
 import driver_merge
@@ -66,58 +64,42 @@ def _log_findings(number: str, findings: list[dict]) -> list[dict]:
     return findings
 
 
-def _run_reviewers(job: Job, cast: list[tuple[str, str]], locked: list[str]) -> list[dict]:
-    """Run the (role, model entry) pairs of `cast` at the same time in the one slot. Returns their reports.
-    A role that stops (BLOCKED, NEEDS_CONTEXT) asks a `review-stopped` question, unless an `accept` ruling on an
-    earlier stop of that role lets the review go on with its report. A role whose report the driver rejects two
-    times asks a `review-rejected` question; after `retry`, its first prompt says why (issue #136)."""
+def _run_reviewer(job: Job, locked: list[str]) -> dict:
+    """Run the reviewer in the slot. Returns its report. A reviewer that stops (BLOCKED, NEEDS_CONTEXT) asks a
+    `review-stopped` question, unless an `accept` ruling on an earlier stop lets the review go on with its report. A
+    report that the driver rejects two times asks a `review-rejected` question; after `retry`, the first prompt says
+    why (issue #136)."""
     number = job.ticket.number
-    values, running = job.pointers(job.round - 1), [role for role, _ in cast]
+    values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
-    errors, stops, rejected = {}, {}, {}
     state = job.run.state.read()
+    # Why the driver rejected the reviewer before the ruling; a record of a removed role is no longer read.
+    before = state["tickets"][number]["rejected"].get("reviewer", "")
+    evidence = str(OUT / number / f"reviewer-{job.round}.json")
+    # A full review (no fix range) must give a mutation proof for each locked test file, not for a locked fixture
+    # (#118); the prompt names them.
+    notes = ["rereview"] if job.previous else ["full-review"]
+    notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
+    notes += ["rejected"] * bool(before)
+    try:
+        return job.run.agent("reviewer", number, job.slot, {**values, "rejection": before}, fix_round=job.round,
+                             notes=notes, check={} if job.previous else {"full": True, "locked": locked})
+    except Stopped as stopped:
+        if _stop_accepted(state, number):
+            ledger(f"Ticket {number}: {stopped}; by the ruling (accept), the review goes on with its report.")
+            return stopped.report
+        job.run.ask(number, "review-stopped", [str(stopped)], evidence)
+        raise Blocked(f"the reviewer: {stopped}") from None
+    except Blocked as blocked:  # the driver rejected its report two times
+        job.run.ask(number, "review-rejected", [f"the reviewer: {blocked}"], evidence,
+                    rejected={"reviewer": str(blocked)})
+        raise Blocked(f"the reviewer: {blocked}") from None
+
+
+def _stop_accepted(state: dict, number: str) -> bool:
+    """Whether an `accept` ruling on an earlier stop of the reviewer lets the review go on past a stop."""
     accepted = driver_decisions.accepted(state["run"]["questions"], number, "review-stopped")
-    before = state["tickets"][number]["rejected"]  # role -> why the driver rejected it before the ruling
-
-    def call(role: str, entry: str) -> dict:
-        # A full review (no fix range) must give a mutation proof for each locked test file, not for a locked fixture
-        # (#118); the prompt names them.
-        full = not job.previous and role == "reviewer"
-        notes = ["rereview"] if job.previous else ["full-review"] if full else []
-        notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
-        notes += ["rejected"] * (role in before)
-        try:
-            return job.run.agent(role, job.ticket.number, job.slot, {**values, "rejection": before.get(role, "")},
-                                 entry=entry, fix_round=job.round,
-                                 notes=notes, check={"full": True, "locked": locked} if full else {},
-                                 alone=lambda: len(running) == 1)
-        except Stopped as stopped:
-            if any(subject.startswith(f"the {role} ") for subject in accepted):
-                ledger(f"Ticket {number}: {stopped}; by the ruling (accept), the review goes on with the other reports.")
-                return stopped.report
-            stops[role] = str(stopped)
-            errors[role] = f"the {role}: {stopped}"
-            return {}
-        except Blocked as blocked:  # the driver rejected its report two times
-            rejected[role] = str(blocked)
-            errors[role] = f"the {role}: {blocked}"
-            return {}
-        finally:
-            running.remove(role)
-
-    with ThreadPoolExecutor(len(cast)) as pool:
-        reports = list(pool.map(lambda agent: call(*agent), cast))
-    if stops:
-        first = next(role for role, _ in cast if role in stops)
-        job.run.ask(number, "review-stopped", [stops[role] for role, _ in cast if role in stops],
-                    str(OUT / number / f"{first}-{job.round}.json"))
-    elif rejected:
-        first = next(role for role, _ in cast if role in rejected)
-        job.run.ask(number, "review-rejected", [errors[role] for role, _ in cast if role in rejected],
-                    str(OUT / number / f"{first}-{job.round}.json"), rejected=rejected)
-    if errors:
-        raise Blocked("; ".join(errors[role] for role, _ in cast if role in errors))
-    return reports
+    return any(subject.startswith("the reviewer ") for subject in accepted)
 
 
 def _prior_open(job: Job) -> dict[tuple[str, str, str], str | None]:
@@ -145,15 +127,13 @@ def _partition_findings(role: str, report: dict, prior: dict, scoped: bool) -> t
     return active, deferred
 
 
-def _reviewer_results(job: Job, cast: list[tuple[str, str]], reports: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Collect ticket findings, deferred observations, and mutation proofs from both reviewer roles."""
-    prior, found, observations = _prior_open(job), [], []
-    for (role, _), report in zip(cast, reports):
-        active, deferred = _partition_findings(role, report, prior, bool(job.previous))
-        found += active + [{**finding, "source": role, "basis": finding.get("basis", "regression")}
-                           for finding in report.get("regressions", [])]
-        observations += deferred + [{**finding, "source": role} for finding in report.get("observations", [])]
-        job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
+def _reviewer_results(job: Job, report: dict) -> tuple[list[dict], list[dict]]:
+    """Collect ticket findings, deferred observations, and mutation proofs from the reviewer's report."""
+    active, deferred = _partition_findings("reviewer", report, _prior_open(job), bool(job.previous))
+    found = active + [{**finding, "source": "reviewer", "basis": finding.get("basis", "regression")}
+                      for finding in report.get("regressions", [])]
+    observations = deferred + [{**finding, "source": "reviewer"} for finding in report.get("observations", [])]
+    job.proofs |= {(proof["file"], proof["line"]) for proof in report.get("mutations", [])}
     return found, observations
 
 
@@ -167,19 +147,15 @@ def _store_observations(job: Job, observations: list[dict]) -> None:
 
 
 def _review(job: Job) -> list[dict]:
-    """Review `job.tip`. Returns the findings of the driver and of each reviewer."""
+    """Review `job.tip`. Returns the findings of the driver and of the reviewer."""
     run, number = job.run, job.ticket.number
     state = run.state.ticket(number, phase="review")
     merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
     found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
-    cast = [("reviewer", "")]
-    if job.ticket.risk:
-        cast.append(("correctness", driver_agents.correctness_entry(run.models)))
-    reports = run.read_only(number, job.slot, job.values["branch"], job.tip,
-                            lambda: _run_reviewers(job, cast, tested(state)))
+    report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job, tested(state)))
     if state["rejected"]:
         run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
-    reviewed, observations = _reviewer_results(job, cast, reports)
+    reviewed, observations = _reviewer_results(job, report)
     found += _log_findings(number, reviewed)
     _store_observations(job, observations)
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")

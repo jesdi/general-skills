@@ -8,6 +8,7 @@ Locked files: {locked}
 Test-writer report, when the ticket has a test-writer: {writer_report}
 
 Check the diff against the ticket and the spec. Put only an unmet ticket criterion or a regression of a merged ticket's behavior in `findings`; set `basis` to `criterion` or `regression` accordingly; put every other observation in `observations` for final review. A red gate is a finding made by the driver. Check that each criterion has a locked test. Test each suspicion that the ticket names in its Suspicions line.
+{risk}
 To make a mutation proof for a locked test, break the production line the test protects, run the test, print its failing output, then revert the edit. The end of this prompt names the proofs that this review needs. A test that stays green is a critical finding. Run again each mutation that the test-writer report names in `concerns`.
 A mutation proof is keyed to its test and its production line: a later round repeats it only when that line changed.
 In `mutations`, give for each proof the test as `<locked file>::<test name>`, the production file and line, and one failure line copied exactly from the output you printed.

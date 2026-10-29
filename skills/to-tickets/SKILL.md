@@ -123,7 +123,7 @@ The **Touches** line is a best guess, for scheduling: `implement-spec` never run
 
 <risk-rule>
 
-The optional **Risk** line names the shared state, persistence keys or identities, concurrency, money or auth the ticket touches, and turns on `implement-spec`'s correctness pass: a second, independent reviewer on another provider. The driver does not start when it has no CLI of another provider: the reviewer never does this pass. Any text on the line turns the pass on, so a ticket with no such risk has no **Risk** line, never `**Risk:** none`.
+The optional **Risk** line names the shared state, persistence keys or identities, concurrency, money or auth the ticket touches. `implement-spec`'s reviewer checks it as one more criterion: a risk that the diff does not handle is an unmet criterion, which starts a fix round and blocks the ticket at the cap. The driver reads any text on the line as a risk, so a ticket with no such risk has no **Risk** line, never `**Risk:** none`.
 
 </risk-rule>
 

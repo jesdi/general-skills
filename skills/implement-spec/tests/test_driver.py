@@ -87,20 +87,11 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
     # The default reviewer and final-reviewer start on codex, so this file gives both a claude entry.
     claude = {"reviewer": ["claude-opus-5-5@medium"], "final-reviewer": ["claude-opus-5-5@medium"]}
-    models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude,
-                                  "correctness": ["openai/gpt-sol@medium"], "fixer": ["other/x@low"]}))
+    models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude, "fixer": ["other/x@low"]}))
     assert run(capsys, "--models", str(models)) == (
         3, "implementer: codex is not on PATH (model entry openai/gpt-sol@medium)\n"
            "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n"
-           "implementer: a second implementer model entry is required for fix round 2\n"
-           "correctness: no entry of its list (openai/gpt-sol@medium) is on another provider than the implementer's "
-           "first entry openai/gpt-sol@medium; the correctness pass never runs on the implementer's provider\n")
-    # Requirement 2 names the first entry only: a later implementer entry whose CLI is missing is no error. For the
-    # correctness role it names the entry requirement 13 selects, which here is the second of its list.
-    models.write_text(json.dumps({"implementer": ["opus@medium", "openai/gpt-sol@medium"], **claude,
-                                  "correctness": ["opus@high", "openai/gpt-sol@low", "openai/gpt-astra@low"]}))
-    assert run(capsys, "--models", str(models)) == (
-        3, "correctness: codex is not on PATH (model entry openai/gpt-sol@low)\n")
+           "implementer: a second implementer model entry is required for fix round 2\n")
 
 
 # Each entry is invalid on purpose: `turbo` is no effort of the anthropic provider, the second entry has no
@@ -140,7 +131,7 @@ COMMIT = "echo $role >> work.txt; git add -A; git commit -q -m $role\n"
 WRITER = """fields='"locked": ["work.txt"], "red": [{"test": "t", "line": "FAILED t"}]'; echo FAILED t\n"""
 IMPLEMENTER = """fields='"green": ["1 passed"]'; echo '{"total_cost_usd": 0.25}'\n"""
 # The reviewer of a plain run: it finds nothing and proves the locked file of WRITER.
-CLEAN = """case $role in reviewer|correctness|final-reviewer) echo FAILED t
+CLEAN = """case $role in reviewer|final-reviewer) echo FAILED t
     printf '{"status": "DONE", "commits": [], "files": [], "concerns": [], "findings": [], "mutations": [{"test": "work.txt::t", "file": "work.txt", "line": 1, "red": "FAILED t"}]}' > "$report"; exit 0;; esac
 """
 ONCE = '[ -e "$0.again" ] || { touch "$0.again"; %s; }\n'  # the first attempt only

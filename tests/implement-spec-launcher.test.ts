@@ -67,7 +67,7 @@ describe('implement-spec README.md', () => {
     const text = readme();
     expect(text).toMatch(/^#+ .*schema/im);
     const section = text.slice(text.search(/^#+ .*schema/im));
-    for (const role of ['test-writer', 'implementer', 'reviewer', 'correctness', 'fixer', 'final-reviewer', 'conflict'])
+    for (const role of ['test-writer', 'implementer', 'reviewer', 'fixer', 'final-reviewer', 'conflict'])
       expect(section, role).toContain(role);
   });
 
@@ -90,13 +90,12 @@ describe('implement-spec README.md', () => {
     }
   });
 
-  it('lists the five non-negotiable checks, each with a pointer to a file', () => {
+  it('lists the non-negotiable checks, each with a pointer to a file', () => {
     const lines = readme().split('\n');
     const pointer = /`[\w./-]*\.(py|md|sh|json)`|\]\([\w./-]+\)/;
     const checks: Record<string, RegExp> = {
       'locked test with a demonstrated red': /red/i,
       'mutation proof per locked test': /mutation/i,
-      'correctness pass per risky ticket': /correctness/i,
       'full gate per candidate': /gate/i,
       'post-merge check': /post-merge|after (each|every) merge/i,
     };
@@ -133,7 +132,7 @@ describe('to-tickets template', () => {
     const rules = text.slice(text.indexOf('</ticket-template>'));
     expect(rules).toMatch(/\*\*Risk\*\*/);
     expect(rules).toMatch(/\*\*Suspicions\*\*/);
-    expect(rules).toMatch(/correctness/i);
+    expect(rules).toMatch(/reviewer checks it as one more criterion/i);
   });
 });
 
