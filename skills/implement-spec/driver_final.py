@@ -377,11 +377,11 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
     file = folder / f"findings-{done}.json"
     file.write_text(json.dumps(found, indent=1) + "\n")
     for finding in found:
-        # A finding of an older driver has no source: its one final reviewer reported it.
         ledger(f"Final review round {done + 1}: {finding['severity']} finding of kind {finding['kind']} from "
-               f"{finding.get('source', 'final-reviewer')} at {finding['file']}:{finding['line']}: {finding['title']}.")
+               f"{finding['source']} at {finding['file']}:{finding['line']}: {finding['title']}.")
     to_fix = [finding for finding in found if finding["severity"] in driver_review.OPEN]
-    evidence = [str(file), str(folder / f"final-reviewer-{done}.json")]
+    # The report of the scoped review; the evidence of the full review is its merged findings.
+    evidence = [str(file)] + ([str(folder / f"final-reviewer-{done}.json")] if done else [])
     run.state.update(lambda state: _record_review(state, tip, to_fix, evidence))
     ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
            f"{len(to_fix)} critical or important finding{'s are' if len(to_fix) != 1 else ' is'} open.")
@@ -417,16 +417,22 @@ def _review(run: Run, final: dict, tip: str) -> None:
     # the tickets' own checks only the conflict agent of the rebase ran, which has the same check.
     found = driver_review.locked_changes(".", final["tidied"], _locked_files(run))
     with during("the final review"):
-        if done:
-            report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-                "final-reviewer", FINAL, ".", values, entry=driver_agents.correctness_entry(run.models), fix_round=done))
-        else:
-            report = _lenses(run, values, tip)
-    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(report["findings"], found),
-                                                                     _carried_must_fix(final, done, report)))
+        # The full review resolves no must-fix finding: only the scoped review verifies a fix.
+        reviewed, resolved = _scoped(run, values, tip, done) if done else (_lenses(run, values, tip), set())
+    carried = [finding for finding in final["must_fix"] if _title(finding) not in resolved]
+    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(reviewed, found), carried))
 
 
-def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
+def _scoped(run: Run, values: dict[str, str], tip: str, done: int) -> tuple[list[dict], set[str]]:
+    """The scoped review after the fix batch, one `final-reviewer`. Returns (its findings, each with the source
+    `final-reviewer`; the titles of the must-fix findings it resolved)."""
+    report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
+        "final-reviewer", FINAL, ".", values, entry=driver_agents.correctness_entry(run.models), fix_round=done))
+    return ([{**finding, "source": "final-reviewer"} for finding in report["findings"]],
+            set(report.get("resolved_must_fix", [])))
+
+
+def _lenses(run: Run, values: dict[str, str], tip: str) -> list[dict]:
     """The full review: the three lenses at the same time in slot 1, inside one read-only check. Returns their
     findings, each with the source of its lens. A lens with an accepted report for `tip` does not run again, unless
     a lens changed the slot: then all three run again. The accepted reports are kept only once the slot is as the
@@ -444,8 +450,8 @@ def _lenses(run: Run, values: dict[str, str], tip: str) -> dict:
         {role: {"tip": tip, "report": report} for role, report in reports.items()}))
     if errors:
         raise Blocked("; ".join(errors))
-    return {"findings": [{**finding, "source": lens.source} for role, lens in driver_agents.LENSES.items()
-                         for finding in reports[role]["findings"]]}
+    return [{**finding, "source": lens.source} for role, lens in driver_agents.LENSES.items()
+            for finding in reports[role]["findings"]]
 
 
 def _lens_values(lens: driver_agents.Lens, values: dict[str, str]) -> dict[str, str]:
@@ -491,15 +497,6 @@ def _merged(reviewed: list[dict], driver: list[dict]) -> list[dict]:
         if key not in kept or SEVERITIES.index(finding["severity"]) < SEVERITIES.index(kept[key]["severity"]):
             kept[key] = finding
     return list(kept.values())
-
-
-def _carried_must_fix(final: dict, done: int, report: dict) -> list[dict]:
-    """The must-fix findings that stay open after the round: all of them after the full review, else those the
-    scoped review did not resolve."""
-    if not done:
-        return final["must_fix"]
-    resolved = set(report.get("resolved_must_fix", []))
-    return [finding for finding in final["must_fix"] if _title(finding) not in resolved]
 
 
 def _round_findings(final: dict, found: list[dict], carried: list[dict]) -> list[dict]:
