@@ -8,8 +8,6 @@ Interface choices (ticket 04):
 - a fix round runs the role `fixer` (report `fixer-<round>.json`) on the implementer's model list: entry 0 in round
   1, entry 1 in round 2. `state.json` `round` counts fix rounds only. The review that follows round K writes
   `reviewer-K.json` (the first review `reviewer-0.json`).
-- `mutations[].test` is `<locked file>::test_x`; a re-review prompt names each mutation proof to repeat as
-  `<file>:<line>`, with the line number it has at the new tip.
 - a second conflict on one merge: the PR branch moved again while the conflict agent worked.
 """
 
@@ -32,7 +30,6 @@ assert HOOKED.count("git_after") == 1 and HOOKED.count('step.get("git", [])') ==
 ONE = {"01-export-rows.md": ticket("01", "Export rows")}
 RISKY = {"02-quote-fields.md": ticket("02", "Quote fields", risk="persistence")}
 OPUS, FABLE = "claude-opus-5@medium", "claude-fable-5-1@high"
-LONG = "".join(f"v{i} = {i}\n" for i in range(1, 41))
 
 
 class Review(Rig):
@@ -57,23 +54,10 @@ def finding(title, severity="important", kind="code", file="demo/export.py", lin
     return dict(severity=severity, file=file, line=line, title=title, evidence=title, kind=kind)
 
 
-def red(nn, line):
-    return f"FAILED tests/test_{nn}.py::test_x - AssertionError at demo/export.py:{line}"
-
-
-def review(nn="01", findings=(), lines=(1,), **extra):
-    """A reviewer step: findings plus a mutation proof per production line, its red line printed to the log."""
-    proofs = [dict(test=f"tests/test_{nn}.py::test_x", file="demo/export.py", line=n, red=red(nn, n)) for n in lines]
-    report = dict(status="DONE", commits=[], files=[], concerns=[], findings=list(findings), mutations=proofs)
-    return {"stdout": "".join(p["red"] + "\n" for p in proofs), "report": report, **extra}
-
-
-def edit(text, **new):
-    """`text` with line N replaced (keyword `l<N>`)."""
-    lines = text.splitlines(keepends=True)
-    for key, value in new.items():
-        lines[int(key[1:]) - 1] = value + "\n"
-    return "".join(lines)
+def review(nn="01", findings=(), **extra):
+    """A reviewer step with `findings`."""
+    report = dict(status="DONE", commits=[], files=[], concerns=[], findings=list(findings))
+    return {"report": report, **extra}
 
 
 # ---------------------------------------------------------------- locked-file check
@@ -288,62 +272,6 @@ def test_a_fixture_finding_runs_one_test_writer_correction_outside_the_rounds(tm
     assert rig.led("tests/test_01.py", "STALEMARK")
     assert rig.state()["tickets"]["01"]["round"] == 0 and rig.state()["tickets"]["01"]["phase"] == "merged"
     assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == new
-
-
-# ---------------------------------------------------------------- mutation proofs
-
-def scoped(tmp, lines, fixes, last_lines):
-    """01's implementer writes 40 lines; the reviewer proves `lines`; each fix replaces the file."""
-    rig = Review(tmp)
-    bad = review("01", [STUCK], lines=lines)
-    reviews = [bad] * len(fixes) + [review("01", lines=last_lines)]
-    rig.run(plan(**{"01/implementer": [impl("01", text=LONG)], "01/reviewer": reviews,
-                    "01/fixer": [fix("01", n, text=t) for n, t in enumerate(fixes, 1)]}))
-    return rig
-
-
-def test_a_re_review_asks_the_mutation_proof_only_for_the_lines_the_fix_changed(tmp_path):
-    first = edit(LONG, l12="v12 = 'a'", l30="v30 = 'a'")
-    rig = scoped(tmp_path, (12, 30), [first, edit(first, l30="v30 = 'b'")], (30,))
-    assert rig.code == 0, rig.output()
-    after1, after2 = (c["prompt"] for c in rig.calls("01", "reviewer")[1:])
-    assert "demo/export.py:12" in after1 and "demo/export.py:30" in after1
-    assert "demo/export.py:30" in after2 and "demo/export.py:12" not in after2
-
-
-def test_a_mutation_proof_follows_its_production_line_when_a_fix_moves_it(tmp_path):
-    lines = LONG.splitlines(keepends=True)
-    moved = "".join(lines[:19] + ["i1 = 1\n", "i2 = 2\n"] + lines[19:29] + ["v30 = 'changed'\n"] + lines[30:])
-    rig = scoped(tmp_path, (12, 30, 35), [moved], (32,))
-    assert rig.code == 0, rig.output()
-    prompt = rig.calls("01", "reviewer")[1]["prompt"]
-    assert "demo/export.py:32" in prompt, "line 30 is line 32 after two inserted lines"
-    for gone in (":30", ":12", ":35", ":37"):  # the old number, and the lines that did not change
-        assert f"demo/export.py{gone}" not in prompt, gone
-
-
-def test_a_first_review_without_a_mutation_for_a_locked_test_is_a_violation(tmp_path):
-    rig = Review(tmp_path)
-    rig.run(plan(**{"01/reviewer": [review("01", lines=()), review("01")]}))
-    assert rig.code == 0, rig.output()
-    first, second = rig.calls("01", "reviewer")
-    appended = second["prompt"].replace(first["prompt"].strip(), "")
-    assert first["prompt"].strip() in second["prompt"] and "tests/test_01.py" in appended
-    assert "mutation" in appended.lower()
-
-
-@pytest.mark.parametrize("second_matches", [True, False])
-def test_a_red_line_missing_from_the_reviewer_log_reruns_once_then_blocks(tmp_path, second_matches):
-    rig = Review(tmp_path)
-    bad = review("01")
-    bad["report"]["mutations"][0]["red"] = "NEVER PRINTED"
-    rig.run(plan(**{"01/reviewer": [bad, review("01") if second_matches else bad]}))
-    first, second = rig.calls("01", "reviewer")
-    assert "red line not found in log" in second["prompt"] and "red line not found" not in first["prompt"]
-    assert rig.code == (0 if second_matches else 2), rig.output()  # 2: the `review-rejected` question
-    assert len(rig.calls("01", "reviewer")) == 2
-    if not second_matches:
-        assert rig.led("01", "BLOCKED") and "feat: 01 rows" not in rig.pr_subjects()
 
 
 # ---------------------------------------------------------------- conflict agent

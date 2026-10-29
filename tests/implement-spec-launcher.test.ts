@@ -95,7 +95,6 @@ describe('implement-spec README.md', () => {
     const pointer = /`[\w./-]*\.(py|md|sh|json)`|\]\([\w./-]+\)/;
     const checks: Record<string, RegExp> = {
       'locked test with a demonstrated red': /red/i,
-      'mutation proof per locked test': /mutation/i,
       'full gate per candidate': /gate/i,
       'post-merge check': /post-merge|after (each|every) merge/i,
     };

@@ -278,14 +278,6 @@ def test_a_correction_of_its_own_file_leaves_the_work_in_the_tree_to_the_impleme
     assert git(rig.repo, "show", f"feat/csv:{OTHER}") == OTHER_TEST
 
 
-def proved(findings=()):
-    """A reviewer step with a mutation proof for each of the two locked files."""
-    step = review("01", findings)
-    red = "FAILED tests/test_01b.py::test_y - AssertionError at demo/export.py:1"
-    step["report"]["mutations"].append(dict(test=f"{OTHER}::test_y", file="demo/export.py", line=1, red=red))
-    return {**step, "stdout": step["stdout"] + red + "\n"}
-
-
 STRONGER = "def test_x():\n    assert '01' == '01'  # stronger\n"
 
 
@@ -306,7 +298,7 @@ def test_a_second_correction_of_a_locked_file_is_its_new_reference(tmp_path, cap
         fix("01", 1)]
     scenario = plan(**{"01/test-writer": [two_locked(), correction(), unlisted, listed],
                        "01/implementer": [blocked(), impl("01")], "01/fixer": fixes,
-                       "01/reviewer": [proved([vacuous]), proved([finding("STUCK")])] + [proved()] * 3})
+                       "01/reviewer": [review("01", [vacuous]), review("01", [finding("STUCK")])] + [review("01")] * 3})
     rig = Inside(tmp_path, ONE).run(scenario)
     rig.run(scenario, "--answer", f"{Q1}=overrule-test")
     assert rig.code == 0, rig.ledger()
@@ -327,16 +319,15 @@ def test_a_locked_file_keeps_its_old_reference_until_a_test_writer_lists_it(repo
     old = commit("b.py", "1\n")
     commit("b.py", "the implementer changed it\n")
     tip = commit("a.py", "the correction\n")
-    first = driver_review.written(".", {"test_writer_sha": None, "locked": [], "held": {}, "fixtures": []},
-                                  ["a.py", "b.py", "c.py"], [], old)
-    assert first == {"test_writer_sha": old, "locked": ["a.py", "b.py", "c.py"], "held": {}, "fixtures": []}
-    after = driver_review.written(".", first, ["a.py"], [], tip)
-    assert after == {"test_writer_sha": tip, "locked": ["a.py", "b.py", "c.py"], "held": {"b.py": old}, "fixtures": []}
+    first = driver_review.written(".", {"test_writer_sha": None, "locked": [], "held": {}}, ["a.py", "b.py", "c.py"], old)
+    assert first == {"test_writer_sha": old, "locked": ["a.py", "b.py", "c.py"], "held": {}}
+    after = driver_review.written(".", first, ["a.py"], tip)
+    assert after == {"test_writer_sha": tip, "locked": ["a.py", "b.py", "c.py"], "held": {"b.py": old}}
     (finding,) = driver_review.locked_findings(".", after)
     assert (finding["title"], finding["evidence"]) == ("locked file changed: b.py", f"git diff {old}..HEAD -- b.py")
-    assert driver_review.written(".", after, ["b.py"], [], tip)["held"] == {}, "the test-writer corrected it: a new reference"
+    assert driver_review.written(".", after, ["b.py"], tip)["held"] == {}, "the test-writer corrected it: a new reference"
     # A diff that git cannot make holds each other file, and then the check of the review fails in the open.
-    lost = driver_review.written(".", {**first, "test_writer_sha": "0" * 40}, ["a.py"], [], tip)
+    lost = driver_review.written(".", {**first, "test_writer_sha": "0" * 40}, ["a.py"], tip)
     assert lost["held"] == {"b.py": "0" * 40, "c.py": "0" * 40}
     assert [f["title"].split(":")[0] for f in driver_review.locked_findings(".", lost)] == ["locked file check failed"]
 
@@ -570,25 +561,27 @@ def test_a_fixer_that_stops_asks_the_operator_and_retry_runs_its_round_again(tmp
 # ---------------------------------------------------------------- a review report rejected twice; a question of a merged ticket
 
 REJECTED = "01-review-rejected-1"
-NO_PROOF = "mutations: no mutation proof for the locked test file tests/test_01b.py"
+NO_FINDINGS = "report: 'findings' is a required property"
 
 
 def test_a_review_report_rejected_twice_asks_the_operator_and_retry_resumes_it(tmp_path):
-    """Issue #136: a reviewer that gave no mutation proof for a second locked file, two times, was a dead end."""
-    # Both attempts give a proof for tests/test_01.py only; the third reviewer is the unscripted one, with every proof.
-    steps = plan(**{"01/test-writer": [two_locked()], "01/reviewer": [review("01"), review("01")]})
+    """Issue #136: a reviewer whose report the driver rejected two times was a dead end."""
+    # Both attempts give no `findings`; the third reviewer is the unscripted one, with a valid report.
+    bad = review("01")
+    del bad["report"]["findings"]
+    steps = plan(**{"01/reviewer": [bad, bad]})
     rig = Inside(tmp_path, ONE).run(steps)
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
     (question,) = rig.state()["run"]["questions"]
     assert (question["id"], question["recommended"]) == (REJECTED, "retry")
     assert [o["id"] for o in question["options"]] == ["retry", "redesign"]
     assert question["evidence"][0] == ".agent/implement/01/reviewer-0.json"
-    assert question["subject"] == f"the reviewer: {NO_PROOF}"
+    assert question["subject"] == f"the reviewer: {NO_FINDINGS}"
     rig.run(steps, "--answer", f"{REJECTED}=retry")
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
     assert len(rig.calls("01", "reviewer")) == 3
-    assert rig.led(f"Ruling: 01 review runs again (retry): the reviewer: {NO_PROOF}")
-    assert NO_PROOF in rig.calls("01", "reviewer")[2]["prompt"]
+    assert rig.led(f"Ruling: 01 review runs again (retry): the reviewer: {NO_FINDINGS}")
+    assert NO_FINDINGS in rig.calls("01", "reviewer")[2]["prompt"]
 
 
 def test_a_test_writer_report_that_locks_a_file_it_deleted_is_rejected(tmp_path):

@@ -12,10 +12,9 @@ this session; this file only starts the driver. The method text is in the prompt
 templates (prompts/*.md) and in README.md. The driver keeps what this fork added
 to upstream: a model list per role; a context-isolated test-writer that commits
 locked acceptance tests at the ticket's Seam; a review before each merge by one
-reviewer, with a mutation proof per locked test file and the ticket's Risk line as
-one more criterion; at most 2 fix rounds with escalation at round 2; one gate
-record per trusted commit, run by the driver; tickets that touch the same function
-run in sequence; a gate on each merge commit; one commit per ticket before the
+reviewer, with the ticket's Risk line as one more criterion; at most 2 fix rounds
+with escalation at round 2; one gate record per trusted commit, run by the driver;
+tickets that touch the same function run in sequence; a gate on each merge commit; one commit per ticket before the
 final review; no push and no PR until every ticket is merged and the final review
 has passed. The review rounds adapt superpowers' subagent-driven-development
 (obra/superpowers, MIT).

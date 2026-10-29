@@ -1,11 +1,10 @@
 """Report validation: validate(role, path, context) -> list of errors, empty when the report is accepted.
 
-context: repo (slot path), branch, start (HEAD when the role started), log, full (a full review: no fix range), locked,
-  correction (a test-writer corrects locked tests), restored (locked files the driver put back before it),
-  restore_red (the gate is red on the commit of that restore), findings (the titles a correction gets),
-  owners (ticket numbers, for the final fix batch), merged (locked files of merged tickets, not its own), pr (tip),
-  fix (the titles of the findings a fixer gets), red (the red gate a fix must make green, as
-  `the <tier> gate is red on <sha7>`)."""
+context: repo (slot path), branch, start (HEAD when the role started), log, correction (a test-writer corrects locked
+  tests), restored (locked files the driver put back before it), restore_red (the gate is red on the commit of that
+  restore), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), merged (locked
+  files of merged tickets, not its own), pr (tip), fix (the titles of the findings a fixer gets), red (the red gate a
+  fix must make green, as `the <tier> gate is red on <sha7>`)."""
 from __future__ import annotations
 
 import json
@@ -143,34 +142,12 @@ def _merged_errors(report: dict, context: dict) -> list[str]:
             and blob(context["branch"], path) not in (blob(context["start"], path), blob(context["pr"], path))]
 
 
-def _proof_errors(report: dict, context: dict) -> list[str]:
-    """Every claimed red line (a test-writer `red`, a reviewer `mutations`) is in the agent's log."""
-    lines = ([(r["test"], r["line"]) for r in report.get("red", [])]
-             + [(m["test"], m["red"]) for m in report.get("mutations", [])])
+def _red_errors(report: dict, context: dict) -> list[str]:
+    """Every red line that a test-writer or a correction claims is in the agent's log."""
+    lines = [(r["test"], r["line"]) for r in report.get("red", [])]
     log = Path(context["log"]).read_text(errors="replace") if lines else ""
-    errors = [f"{RED}: {test}: {line if len(line) <= 200 else line[:197] + '...'}"
-              for test, line in lines if not _seen(line, log)]
-    if context.get("full") and "findings" in report and "mutations" not in report:
-        errors.append("mutations: required in a full review")
-    return errors
-
-
-def _locked_errors(report: dict, context: dict) -> list[str]:
-    """In a full review, each locked test file has a mutation proof (`mutations[].test` is `<file>::<test>`).
-    `locked` names no fixture of the ticket: a fixture holds no test that a proof could name (#118). A locked file
-    that is not at the reviewed tip holds no test either (issue #136)."""
-    if not context.get("full") or "findings" not in report:
-        return []
-    locked = context.get("locked", [])
-    tests, present = [proof["test"] for proof in report.get("mutations", [])], _present(context["repo"], context["start"], locked)
-    return [f"mutations: no mutation proof for the locked test file {path}" for path in locked
-            if path in present and not any(test.startswith(path) for test in tests)]
-
-
-def _fixture_errors(report: dict) -> list[str]:
-    """Each fixture of a test-writer report (a locked file that holds no test) is in its `locked`."""
-    return [f"fixtures: {path} is not in `locked`" for path in report.get("fixtures", [])
-            if path not in report.get("locked", [])]
+    return [f"{RED}: {test}: {line if len(line) <= 200 else line[:197] + '...'}"
+            for test, line in lines if not _seen(line, log)]
 
 
 def _space_errors(report: dict) -> list[str]:
@@ -199,5 +176,4 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         report["locked"] = locked_files(report["locked"])
     return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
-            + _merged_errors(report, context) + _proof_errors(report, context) + _locked_errors(report, context)
-            + _fixture_errors(report))
+            + _merged_errors(report, context) + _red_errors(report, context))
