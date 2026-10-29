@@ -32,7 +32,7 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "held": {}, "rejected": {}, "landing": None}
+            "slot": None, "note": "", "held": {}, "rejected": "", "landing": None}
 
 
 def _final() -> dict:

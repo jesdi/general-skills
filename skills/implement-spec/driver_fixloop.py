@@ -65,8 +65,8 @@ def _run_reviewer(job: Job) -> dict:
     values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
     state = job.run.state.read()
-    # Why the driver rejected the reviewer before the ruling; a record of a removed role is no longer read.
-    before = state["tickets"][number]["rejected"].get("reviewer", "")
+    # Why the driver rejected the reviewer before the ruling; the role -> reason record of an older driver is not read.
+    before = rejected if isinstance(rejected := state["tickets"][number]["rejected"], str) else ""
     evidence = str(OUT / number / f"reviewer-{job.round}.json")
     notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
@@ -82,7 +82,7 @@ def _run_reviewer(job: Job) -> dict:
         raise Blocked(f"the reviewer: {stopped}") from None
     except Blocked as blocked:  # the driver rejected its report two times
         job.run.ask(number, "review-rejected", [f"the reviewer: {blocked}"], evidence,
-                    rejected={"reviewer": str(blocked)})
+                    rejected=str(blocked))
         raise Blocked(f"the reviewer: {blocked}") from None
 
 
@@ -92,22 +92,22 @@ def _stop_accepted(state: dict, number: str) -> bool:
     return any(subject.startswith("the reviewer ") for subject in accepted)
 
 
-def _prior_open(job: Job) -> dict[tuple[str, str, str], str | None]:
-    """The source, file, title and basis of findings that this re-review may revisit."""
+def _prior_open(job: Job) -> dict[tuple[str, str], str | None]:
+    """The file, title and basis of the reviewer's findings that this re-review may revisit."""
     if not job.previous:
         return {}
     number = job.ticket.number
-    previous = json.loads((OUT / number / f"findings-{job.round - 1}.json").read_text()) if job.previous else []
-    return {(finding["source"], finding["file"], finding["title"]): finding.get("basis")
-            for finding in previous if finding["severity"] in driver_review.OPEN}
+    previous = json.loads((OUT / number / f"findings-{job.round - 1}.json").read_text())
+    return {(finding["file"], finding["title"]): finding.get("basis") for finding in previous
+            if finding["severity"] in driver_review.OPEN and finding["source"] == "reviewer"}
 
 
-def _partition_findings(role: str, report: dict, prior: dict, scoped: bool) -> tuple[list[dict], list[dict]]:
-    """On a re-review, only the role's previously open findings stay in ticket scope."""
+def _partition_findings(report: dict, prior: dict, scoped: bool) -> tuple[list[dict], list[dict]]:
+    """On a re-review, only the reviewer's previously open findings stay in ticket scope."""
     active, deferred = [], []
     for raw in report["findings"]:
-        finding = {**raw, "source": role}
-        key = (role, finding["file"], finding["title"])
+        finding = {**raw, "source": "reviewer"}
+        key = (finding["file"], finding["title"])
         if scoped and key not in prior:
             deferred.append(finding)
             continue
@@ -119,7 +119,7 @@ def _partition_findings(role: str, report: dict, prior: dict, scoped: bool) -> t
 
 def _reviewer_results(job: Job, report: dict) -> tuple[list[dict], list[dict]]:
     """Collect ticket findings and deferred observations from the reviewer's report."""
-    active, deferred = _partition_findings("reviewer", report, _prior_open(job), bool(job.previous))
+    active, deferred = _partition_findings(report, _prior_open(job), bool(job.previous))
     found = active + [{**finding, "source": "reviewer", "basis": finding.get("basis", "regression")}
                       for finding in report.get("regressions", [])]
     observations = deferred + [{**finding, "source": "reviewer"} for finding in report.get("observations", [])]
@@ -143,7 +143,7 @@ def _review(job: Job) -> list[dict]:
     found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
     report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job))
     if state["rejected"]:
-        run.state.ticket(number, rejected={})  # the rejection is answered: no later review repeats it
+        run.state.ticket(number, rejected="")  # the rejection is answered: no later review repeats it
     reviewed, observations = _reviewer_results(job, report)
     found += _log_findings(number, reviewed)
     _store_observations(job, observations)

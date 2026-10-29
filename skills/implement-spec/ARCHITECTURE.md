@@ -172,9 +172,9 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   `driver_fixloop._run_reviewer` turns it into a `review-stopped` question, or, after an `accept` ruling on the
   reviewer (`driver_decisions.accepted`), uses the report as it is.
 - A reviewer whose report the driver rejects two times asks a `review-rejected` question. The stop records the
-  rejection in the ticket's `rejected` (role -> why); after `retry`, the reviewer's first prompt carries it
-  (`prompts/rejected.md`), and the next review that ends clears it. A record or a ruling of a removed role, from an
-  older driver, is never read.
+  rejection in the ticket's `rejected` (why, as a string); after `retry`, the reviewer's first prompt carries it
+  (`prompts/rejected.md`), and the next review that ends clears it. The role -> why record of an older driver and a
+  ruling of a removed role are never read.
 - An implementer or a fixer that reports BLOCKED or NEEDS_CONTEXT asks a question in `Run._ask_stop`: `locked-test`
   for a contradicted locked test, else `implementer-stopped` or `fixer-stopped`. The stop of a fixer sets the round
   back by one, so its `retry` (gate and review the tip, then a fixer) runs the same round again.
