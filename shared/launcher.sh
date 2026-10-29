@@ -1,7 +1,9 @@
 # Sourced by a skill wrapper. The wrapper sets: inherited (`export -p` output
 # taken before its first assignment), skill_dir, name (cache dir name,
 # e.g. crap-gate), env_prefix (e.g. CRAP_GATE), prefix (message prefix), fail_code, engine (file in
-# skill_dir), and optionally defines setup_failed MESSAGE (stdout on failure).
+# skill_dir), and optionally defines setup_failed MESSAGE (stdout on failure) and
+# pins (space-separated requirements) with venv_key (e.g. jsonschema-4.26.0, whose
+# first word names the package in errors): the engine then runs in a venv per pin set.
 set -eu
 
 fail() {
@@ -72,6 +74,27 @@ python=$(managed_uv python find --no-project --system --managed-python --no-pyth
     managed_uv python install --no-bin "$python_version" >&2 || fail 'Cannot provision Python; check network access and retry'
     python=$(managed_uv python find --no-project --system --managed-python --no-python-downloads "$python_version") || fail 'Cannot locate managed Python'
 }
+if [ -n "${pins:-}" ]; then
+    venv=$cache/venv/$python_version-$venv_key
+    if [ ! -x "$venv/bin/python" ]; then
+        [ "$offline" != 1 ] || fail "${venv_key%%-*} is not cached; provision this cache online first"
+        mkdir -p "$cache/venv" || fail 'Cannot create runtime cache'
+        stage=$(mktemp -d "$cache/venv/.build.XXXXXX") || fail 'Cannot create build directory'
+        trap 'rm -rf "$stage"' EXIT
+        trap 'exit "$fail_code"' HUP INT TERM
+        # shellcheck disable=SC2086 # pins is a deliberate word list
+        managed_uv venv --quiet --python "$python" "$stage/venv" >&2 &&
+            managed_uv pip install --quiet --python "$stage/venv/bin/python" $pins >&2 ||
+            fail "Cannot provision ${venv_key%%-*}; check network access and retry"
+        # Publish by rename(2): a concurrent first run never sees a partial venv. A run that loses the
+        # race fails the rename (mv would move into the winner's directory) and uses the winner's venv.
+        [ -x "$venv/bin/python" ] || "$python" -I -c 'import os, sys; os.rename(*sys.argv[1:])' "$stage/venv" "$venv" 2>/dev/null || :
+        [ -x "$venv/bin/python" ] || fail 'Cannot install cached venv'
+        rm -rf "$stage"
+        trap - EXIT HUP INT TERM
+    fi
+    python=$venv/bin/python
+fi
 # Ignore Python-specific ambient settings for the engine, but preserve them for
 # child coverage processes. -I would also remove the sibling module directory.
 set -- "$python" -E -s "$skill_dir/$engine" "$@"

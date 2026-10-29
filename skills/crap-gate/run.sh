@@ -16,6 +16,8 @@ done
 skill_dir=$(CDPATH= cd -- "$(dirname -- "$entry")" && pwd)
 
 name=crap-gate env_prefix=CRAP_GATE prefix=crap fail_code=2 engine=crap.py
+# No pinned venv: ignore any inherited pins/venv_key.
+pins= venv_key=
 json=false
 for arg in "$@"; do
     [ "$arg" != --json ] || json=true
