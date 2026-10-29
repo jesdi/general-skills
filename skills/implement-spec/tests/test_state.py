@@ -45,6 +45,19 @@ def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
         "note": "", "held": {}, "rejected": "", "landing": None}
 
 
+
+def test_start_reads_the_role_record_of_an_older_driver_as_the_reviewer_rejection(tmp_path):
+    state = driver_state.State(tmp_path / "state.json")
+    state.start("feat/x", ["01", "02"])
+
+    def older(record):  # an older driver kept why it rejected each role of the ticket review
+        record["tickets"]["01"]["rejected"] = {"reviewer": "no line", "correctness": "no mutation proof"}
+        record["tickets"]["02"]["rejected"] = {"correctness": "no mutation proof"}
+
+    state.update(older)
+    again = state.start("feat/x", ["01", "02"])
+    assert [again["tickets"][n]["rejected"] for n in ("01", "02")] == ["no line", ""]
+
 def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_path):
     repo()
     tests = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
