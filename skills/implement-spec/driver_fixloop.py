@@ -13,6 +13,7 @@ import driver_dispute
 import driver_gate
 import driver_review
 import driver_slots
+from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger
 from driver_tickets import Ticket
 
@@ -132,9 +133,9 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
     entry = run.state.read()["tickets"][number]
-    found = [(finding["file"], entry["corrected"].get(finding["file"], {}).get("test", finding["file"]),
-              f"{finding['title']}: {finding['evidence']}") for finding in findings]
-    if again := driver_dispute.seconds(found, entry["corrected"]):
+    found = [Dispute(finding["file"], entry["corrected"].get(finding["file"], {}).get("test", finding["file"]),
+                     f"{finding['title']}: {finding['evidence']}") for finding in findings]
+    if again := driver_dispute.second_readings(found, entry["corrected"]):
         with during("the review"):
             driver_dispute.ambiguous(run, number, again, "review", {})
     with during("the test-writer correction"):
@@ -144,8 +145,8 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
     code = _uncorrected(job, findings, report.get("not_addressed", []))
-    corrected = {finding["file"]: {"test": finding["file"], "requirement": "", "reason": reason}
-                 for (_, _, reason), finding in zip(found, findings) if finding["title"] not in
+    corrected = {finding["file"]: {"test": finding["file"], "requirement": "", "reason": one.reason}
+                 for one, finding in zip(found, findings) if finding["title"] not in
                  [item["title"] for item in code]}
     run.state.update(lambda state: state["tickets"][number]["corrected"].update(corrected))
     return code
@@ -208,10 +209,10 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
     job.corrected = False
 
 
-def _unkept(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
+def _still_to_correct(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
     """The findings for a correction, but those on a file whose `spec-ambiguous` question was answered `keep-test`."""
     number = job.ticket.number
-    kept = driver_dispute.kept(state["run"]["questions"], number)
+    kept = driver_dispute.kept_files(state["run"]["questions"], number)
     for finding in to_correct:
         if finding["file"] in kept:
             ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
@@ -248,7 +249,7 @@ def _routed(job: Job, found: list[dict]) -> tuple[list[dict], list[dict]]:
     locked = state["tickets"][job.ticket.number]["locked"]
     protected = [path for path in driver_review.others(state["tickets"], job.ticket.number) if path not in locked]
     to_correct, to_fix = driver_review.route(found, locked, protected)
-    to_correct = _unkept(job, state, to_correct)
+    to_correct = _still_to_correct(job, state, to_correct)
     if job.round == ROUNDS:
         # No correction at the cap: no fix round could make its new locked tests green.
         return [], [finding for finding in found if finding in to_correct + to_fix]
