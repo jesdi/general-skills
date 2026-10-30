@@ -11,6 +11,6 @@ Run the engine through the wrapper:
 sh <skill-dir>/run.sh <repo-path> [--pytest-args "<options>"]
 ```
 
-`<skill-dir>` is the directory holding this file. `<repo-path>` is the Python repo whose suite to weigh. The engine prints the path of the JSON snapshot it wrote, and exits non-zero with a message on stderr when it cannot run.
+`<skill-dir>` is the directory holding this file. `<repo-path>` is the Python repo whose suite to weigh. The engine writes a JSON snapshot and `dashboard.html`, opens the dashboard unless `--no-open` is given, prints the five scores, the inventory line and both paths, and exits non-zero with a message on stderr when it cannot run.
 
 Relay the engine's output to the user exactly as printed. Do not add interpretation, scores, advice or a summary of your own.

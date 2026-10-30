@@ -22,8 +22,12 @@ def commit_state(repo):
     return git(repo, "rev-parse", "--short", "HEAD"), bool(git(repo, "status", "--porcelain"))
 
 
+def home_dir(repo):
+    return Path.home() / ".test-weigh-in" / repo_key(repo)
+
+
 def write_snapshot(repo, data):
-    home = Path.home() / ".test-weigh-in" / repo_key(repo)
+    home = home_dir(repo)
     home.mkdir(parents=True, exist_ok=True)
     now = os.environ.get("TEST_WEIGH_IN_NOW")
     when = datetime.fromisoformat(now.replace("Z", "+00:00")) if now else datetime.now(timezone.utc)

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>test-weigh-in</title>
+<style>
+body{font:14px system-ui,sans-serif;margin:24px;color:#222}
+#gauges{display:flex;gap:12px;margin:16px 0}
+.gauge{flex:1;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
+.gauge[aria-pressed=true]{border-color:#2563eb}
+.score{display:block;font-size:32px;font-weight:600}
+.flag{display:block;color:#92400e}
+table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
+</style></head><body>
+<h1>test-weigh-in</h1>
+<p data-testid="inventory" id="inventory"></p>
+<div id="gauges"></div>
+<section data-testid="details" id="details"></section>
+<script>
+const data = __DATA__;
+const shown = (s) => Math.min(99, Math.max(1, Math.round(s)));
+const el = (tag, text, parent) => { const e = document.createElement(tag); e.textContent = text; parent.appendChild(e); return e; };
+const fmt = (n) => String(Math.round(n * 100) / 100);
+let selected = 0;
+function render() {
+  document.getElementById('inventory').textContent = data.inventory;
+  const gauges = document.getElementById('gauges'), details = document.getElementById('details');
+  gauges.replaceChildren(); details.replaceChildren();
+  data.pillars.forEach((p, i) => {
+    const g = el('button', '', gauges);
+    g.className = 'gauge'; g.dataset.testid = 'gauge'; g.setAttribute('data-testid', 'gauge');
+    g.setAttribute('aria-pressed', i === selected);
+    el('span', p.name, g);
+    el('span', p.score === null ? '–' : shown(p.score), g).className = 'score';
+    if (p.partial) el('span', 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured', g).className = 'flag';
+    g.onclick = () => { selected = i; render(); };
+  });
+  const p = data.pillars[selected];
+  el('h2', p.name, details);
+  el('h3', 'Metrics', details);
+  const t = el('table', '', details);
+  p.metrics.forEach((m) => {
+    const r = el('tr', '', t);
+    el('td', m.name, r); el('td', fmt(m.value), r); el('td', String(shown(m.score)), r);
+  });
+}
+render();
+</script></body></html>
