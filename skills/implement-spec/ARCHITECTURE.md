@@ -88,7 +88,8 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   (`driver_locked.for_end_of_run`): against the tidied tip, or for the rebase that makes it, the recovery point. When
   the rebase conflict agent ends, the driver goes on with the rebase it left open (`driver_final._rebase_check`, the
   `locked` of its `Call`), so the check reads the
-  rebased tip, and a rejected agent's rerun amends that tip. A rebase that stops at a later conflict is checked by
+  rebased tip, and a rejected agent's rerun amends that tip. A `git rebase --continue` that fails at the same stop
+  rejects the report with git's error, so the agent reruns on the open rebase. A rebase that stops at a later conflict is checked by
   nobody, as the driver aborts it. The final review has no locked-file findings of the driver.
 
 ### The PR branch

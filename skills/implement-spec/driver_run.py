@@ -97,8 +97,9 @@ class Call:
     retry: str = ""
     # A BLOCKED report that disputes a locked test is accepted, not a stop: `driver_dispute.agent` settles it.
     may_dispute: bool = False
-    # Reads the locked-file check of its report when the agent ends; by default that of a ticket agent.
-    locked: Callable[[], driver_locked.Locked | None] | None = None
+    # Reads the locked-file check of its report when the agent ends, given the validation context, to which it may add
+    # (driver_report.validate); by default that of a ticket agent.
+    locked: Callable[[dict], driver_locked.Locked | None] | None = None
 
 
 class Ask(NamedTuple):
@@ -162,10 +163,10 @@ class Run:
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
         return report
 
-    def locked(self, call: Call) -> driver_locked.Locked | None:
+    def locked(self, call: Call, context: dict) -> driver_locked.Locked | None:
         """The locked-file check of the report of `call`, read when the agent ends."""
         if call.locked:
-            return call.locked()
+            return call.locked(context)
         return driver_locked.for_ticket(self.state.read()["tickets"], call.role, call.number, f"refs/heads/{self.pr}")
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
@@ -379,8 +380,9 @@ def _attempts(run: Run, call: Call) -> dict:
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
         driver_agents.settle_report(report)
-        context["locked"] = run.locked(call)
-        error, rerun_lines, same = _rejection(call, code, minutes, report, context)
+        checked = {**context}  # what the check of the agent's end adds holds for this attempt only
+        checked["locked"] = run.locked(call, checked)
+        error, rerun_lines, same = _rejection(call, code, minutes, report, checked)
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:
             return json.loads(report.read_text())
