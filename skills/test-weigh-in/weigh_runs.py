@@ -45,3 +45,24 @@ def aggregate(cases):
             outcome = "passed"
         result[node] = {"outcome": outcome, "duration": sum(c["duration"] for c in group), "cases": len(group)}
     return result
+
+
+def coverage_run(python, repo, overlay, pytest_args):
+    """Branch coverage percent of the repo's own files over one pytest run under coverage; None when the run yields no data."""
+    with tempfile.TemporaryDirectory() as tmp:
+        rc = os.path.join(tmp, "rc")
+        open(rc, "w").close()
+        data, report = os.path.join(tmp, "data"), os.path.join(tmp, "report.json")
+        env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
+        cov = [str(python), "-m", "coverage"]
+        subprocess.run([*cov, "run", "--branch", f"--data-file={data}", f"--source={repo}", "--omit=*/.venv/*,*/venv/*",
+                        "-m", "pytest", "-p", "no:randomly", "-p", "no:cacheprovider", *shlex.split(pytest_args)],
+                       cwd=repo, env=env, capture_output=True, text=True)
+        proc = subprocess.run([*cov, "json", f"--data-file={data}", "-o", report, "-q"],
+                              cwd=repo, env=env, capture_output=True, text=True)
+        if proc.returncode or not os.path.exists(report):
+            return None
+        with open(report) as f:
+            totals = json.load(f)["totals"]
+        # Branch arcs only: percent_covered mixes statements in. No branches: the metric is not measured.
+        return 100 * totals["covered_branches"] / totals["num_branches"] if totals["num_branches"] else None
