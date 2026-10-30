@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable, Iterator, NamedTuple, NoReturn, TypeVar
 
 import driver_agents
-import driver_decisions
 import driver_gate
 import driver_report
 import driver_review
@@ -47,6 +46,11 @@ class Stopped(Blocked):
     def __init__(self, why: str, report: dict):
         super().__init__(why)
         self.report = report
+
+
+class Disputed(Stopped):
+    """An implementer or a fixer of a ticket reports BLOCKED because a locked test contradicts the spec: the one stop
+    of a ticket agent that `_attempts` returns. `driver_dispute.agent` settles it."""
 
 
 class Halted(Exception):
@@ -117,17 +121,13 @@ class Run:
         if role == "test-writer":
             others = driver_review.others(self.state.read()["tickets"], number)
             values = {**values, "protected": " ".join(others) or "none"}
-            if (options.get("check") or {}).get("correction"):
-                options["notes"] = [*options.get("notes", ()), "corrected"]
         report = _attempts(self, role, number, slot, values, **options)
         if role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
         if report.get("status") in STOPS:
             concerns = "; ".join(report["concerns"]) or "no concern given"
             why = f"the {role} reported {report['status']}: {concerns}"
-            if number != FINAL:
-                self._ask_stop(role, number, slot, report, options.get("fix_round", 0))
-            raise Stopped(why, report)
+            raise (Stopped if number == FINAL else Disputed)(why, report)
         return report
 
     def locked_check(self, role: str, number: str) -> dict:
@@ -140,14 +140,6 @@ class Run:
         if role in _CHECKED:
             check["own"] = (tickets[number]["test_writer_sha"], tickets[number]["locked"])
         return check
-
-    def _ask_stop(self, role: str, number: str, slot: str, report: dict, fix_round: int) -> None:
-        """The `locked-test` question of an implementer or a fixer that says a locked test contradicts the spec: the
-        one stop of a ticket agent that `_attempts` returns. Its commits stay: after the ruling the ticket goes on
-        from them."""
-        if subject := driver_decisions.contradicted(role, report):
-            self.ask(number, "locked-test", [subject], str(OUT / number / f"{role}-{fix_round}.json"),
-                     tip=driver_slots.head(slot))
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""
@@ -250,7 +242,7 @@ def _timeout_lines(role: str, minutes: float, context: dict, alone: Callable[[],
 def _stop(role: str, number: str, report: Path) -> str:
     """Why the valid report of a ticket agent is a stop: BLOCKED or NEEDS_CONTEXT and no dispute; else ""."""
     accepted = json.loads(report.read_text())
-    if number == FINAL or accepted["status"] not in STOPS or driver_decisions.contradicted(role, accepted):
+    if number == FINAL or accepted["status"] not in STOPS or driver_report.disputes(role, accepted, []):
         return ""
     return f"it reported {accepted['status']}: {'; '.join(accepted['concerns']) or 'no concern given'}"
 
@@ -286,24 +278,40 @@ def _cli_failure(role: str, entry: str, code: int | None, report: Path, log: Pat
     return f"the {role} on {entry} exited {code} with no report: {driver_agents.last_words(log)}"
 
 
-def _ask_blocked(run: Run, role: str, number: str, slot: str, report: Path, error: str, fix_round: int) -> None:
-    """The `ticket-blocked` question of a ticket agent whose rerun stopped or was rejected too. `retry` takes the
-    ticket back to the phase that runs the role again, from the tip it left; the round of a fixer does not count."""
-    fields = {"tip": driver_slots.head(slot)} if role in _COMMITS else {}
+def retry_point(role: str, tip: str, fix_round: int) -> tuple[str, dict]:
+    """(the phase that runs a ticket's `role` again, the ticket fields that go with it): a role that commits goes on
+    from `tip`, and the round of a fixer does not count."""
+    fields = {"tip": tip} if role in _COMMITS else {}
     if role == "fixer":
         fields["round"] = fix_round - 1
-    run.ask(number, "ticket-blocked", [f"the {role}: {error}"], str(report), _RETRY[role], **fields)
+    return _RETRY[role], fields
+
+
+def _ask_blocked(run: Run, role: str, number: str, report: Path, error: str, retry: str, tip: str,
+                 fix_round: int) -> None:
+    """The `ticket-blocked` question of a ticket agent whose rerun stopped or was rejected too. `retry` takes the
+    ticket back to the phase that runs `retry` again, from `tip`."""
+    resume, fields = retry_point(retry, tip, fix_round)
+    run.ask(number, "ticket-blocked", [f"the {role}: {error}"], str(report), resume, **fields)
 
 
 def _give_up(run: Run, role: str, number: str, slot: str, report: Path, error: str, failed: str, same: bool,
-             fix_round: int) -> NoReturn:
+             retry: str, start: str, fix_round: int) -> NoReturn:
     """After the rerun failed too: Halted for a CLI that wrote no report, else Blocked, with a `ticket-blocked`
-    question when a ticket agent stopped or was rejected."""
+    question when a ticket agent stopped or was rejected. An agent that ran for `retry` leaves no work: its question
+    goes back to `start`."""
     if failed:
         raise Halted(failed)
     if not (same or number == FINAL):
-        _ask_blocked(run, role, number, slot, report, error, fix_round)
+        tip = start if retry else driver_slots.head(slot)
+        _ask_blocked(run, role, number, report, error, retry or role, tip, fix_round)
     raise Blocked(error)
+
+
+def _files(folder: Path, role: str, fix_round: int, name: str) -> tuple[Path, Path, Path]:
+    """The report, log and prompt of an agent: `<name>.*`, by default `<role>-<fix_round>.*`."""
+    name = name or f"{role}-{fix_round}"
+    return folder / f"{name}.json", folder / f"{name}.log", folder / f"{name}.prompt.md"
 
 
 def _first_prompt(template: str, values: dict[str, str], notes: tuple | list, report: str) -> str:
@@ -330,7 +338,8 @@ def _command(run: Run, role: str, entry: str, prompt: str, report: str) -> list[
 
 def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str], notes: tuple | list = (),
               entry: str = "", fix_round: int = 0, check: dict | None = None, template: str = "",
-              alone: Callable[[], bool] = lambda: True, detached: bool = False, entries: list[str] | None = None) -> dict:
+              alone: Callable[[], bool] = lambda: True, detached: bool = False, entries: list[str] | None = None,
+              name: str = "", retry: str = "") -> dict:
     """Run one role in its slot, with at most one rerun, and return the accepted report. A ticket agent that stops or
     is rejected reruns on the next entry of its list; a timeout or a moved branch reruns on the same entry. A ticket
     agent whose rerun stops or is rejected too asks `ticket-blocked`.
@@ -343,10 +352,13 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
     template   the prompt and schema, when it is not the one named after the role
     alone      whether no other agent works in the slot now
     detached   the agent works on a detached HEAD
+    name       the name of its files, when it is not `<role>-<fix_round>`
+    retry      the role that a `retry` of its `ticket-blocked` question runs again from the start commit, when the
+               agent runs for that role (an arbitration, a correction): its own work is not kept
     """
     folder, entry = OUT / number, entry or run.models[role][0]
     folder.mkdir(parents=True, exist_ok=True)
-    report, log, prompt = (folder / f"{role}-{fix_round}{suffix}" for suffix in (".json", ".log", ".prompt.md"))
+    report, log, prompt = _files(folder, role, fix_round, name)
     report_in_slot = os.path.relpath(report, slot)  # the agent works in its slot
     context = {"repo": slot, "branch": values["branch"], "start": values["start_sha"], "log": str(log),
                "template": template or role, **(check or {})}
@@ -373,4 +385,4 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
         if code is None:
             minutes *= 2
         entry = entry if same else rerun_on
-    _give_up(run, role, number, slot, report, error, failed, same, fix_round)
+    _give_up(run, role, number, slot, report, error, failed, same, retry, values["start_sha"], fix_round)

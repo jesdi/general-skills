@@ -9,7 +9,7 @@ Findings of the review: {findings}
 
 Fix each finding of severity critical or important in the findings file. Leave the minor findings: the final review gets them. Leave each finding of kind `fixture` and each finding of kind `test` on a locked file: the test-writer corrects those.
 Never edit a locked file, of this ticket or of another: the driver rejects a report whose commits change one.
-If a locked test contradicts the spec or the ticket, so that no fix can make it green, stop and report BLOCKED with a concern that starts with `locked test contradicts spec:`, then the test and the evidence.
+If a locked test contradicts the spec or the ticket, so that no fix can make it green, commit your work, then report BLOCKED with one concern per such test: `locked test contradicts spec: <locked file>::<test>: <evidence>`. The reviewer rules on it, and you run again: on the corrected test, or with the ruling, to make the test green.
 Use targeted tests while you work.
 Before you report DONE or DONE_WITH_CONCERNS, make the fast gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} and IMPLEMENT_SPEC_LOCKED='{locked}' (the locked files above) in the environment, then fix, commit, and run it again until it passes. The driver runs the fast gate again on that commit, and a re-review reads the lines you changed.
 A finding from the `gate` is a red gate: its file is the gate record. Read the output there and make the gate green.

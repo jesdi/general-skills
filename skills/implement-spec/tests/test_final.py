@@ -37,7 +37,7 @@ import pytest
 from test_cli import SKILL, git, ticket
 from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
 from test_stops import UNATTENDED, decisions, stage
-from test_walk import fix, impl, plan, tw
+from test_walk import fix, impl, plan
 
 SCOPED = HOOKED
 RUNNER = SCOPED.replace(
@@ -187,22 +187,20 @@ def stop_lines(out):
 
 # ---------------------------------------------------------------- the story: stop, local stop, rerun, push
 
-NEW_03 = "def test_x():\n    assert '03' == '03'\n"
-CONTRA_03 = "locked test contradicts spec: tests/test_03.py::test_x"
+STOP_03 = {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["no write access to fixtures/"],
+                      "green": []}}
 
 
 @pytest.fixture(scope="module")
 def story(tmp_path_factory):
-    """01 merges, 03 stops on a contradicted locked test and is overruled, 02 is held in review, then end-of-run."""
+    """01 merges, 03 stops two times and is retried, 02 is held in review, then end-of-run."""
     rig = Final(tmp_path_factory.mktemp("story"), THREE, FINAL_MODELS)
     steps = plan(**{
-        "03/test-writer": [tw("03"), {**tw("03"), "files": {"tests/test_03.py": NEW_03}, "commit": "test: 03 overruled"}],
-        "03/implementer": [{"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": [CONTRA_03],
-                                       "green": []}}, impl("03", "demo/cli.py")],
+        "03/implementer": [STOP_03, STOP_03, impl("03", "demo/cli.py")],
         "02/reviewer": [review("02", [finding("M-MINOR", "minor")], hold=0.8)]})
     rig.run(steps)
     stopped = rig.snap()
-    rig.run(steps, "--answer", "03-locked-test-1=overrule-test")
+    rig.run(steps, "--answer", "03-ticket-blocked-1=retry")
     local = rig.snap()
     rig.run(steps)
     again = rig.snap()
@@ -219,11 +217,11 @@ def test_end_of_run_work_does_not_start_while_02_is_in_review(story):
     assert finals and finals[0]["t0"] >= rig.calls("02", "reviewer")[0]["t1"], "no final review before 02 left review"
 
 
-def test_seven_commits_in_merge_order_are_tidied_into_three_ticket_commits_with_the_same_tree(story):
+def test_six_commits_in_merge_order_are_tidied_into_three_ticket_commits_with_the_same_tree(story):
     rig = story.rig
     assert story.local.code == 0, rig.output()
     assert rig.recovery(), "no recovery point"
-    assert len(rig.commits(rig.start, rig.recovery())) == 7
+    assert len(rig.commits(rig.start, rig.recovery())) == 6
     rows = rig.commits(rig.start)
     assert [r["subject"] for r in rows] == [f"feat({nn}): {TITLES[nn]}" for nn in ("01", "03", "02")]
     assert all(f"Ticket: {FILES[nn]}" in r["body"] for nn, r in zip(("01", "03", "02"), rows))
@@ -245,7 +243,7 @@ def test_the_spec_lens_runs_on_the_first_model_entry_pointed_at_review_diff_mino
     rig = story.rig
     assert rig.led("final-spec", FABLE) and not rig.led("final-spec", OPUS)
     prompt = rig.final_calls("final-spec")[0]["prompt"]
-    assert "review-diff" in prompt and "M-MINOR" in prompt and "locked test overruled" in prompt
+    assert "review-diff" in prompt and "M-MINOR" in prompt and "Ruling: 03 runs again (retry)" in prompt
     assert '"severity"' in prompt and '"findings"' in prompt, "the reviewer schema"
 
 
@@ -277,7 +275,7 @@ def test_the_push_rerun_pushes_once_opens_the_pr_with_map_and_rulings_and_runs_o
     lines = pr["body"].splitlines()
     for nn, row in zip(("01", "03", "02"), rig.commits(rig.start)):
         assert [l for l in lines if nn in l and row["sha"][:7] in l], (nn, pr["body"])
-    assert "locked test overruled" in pr["body"]
+    assert "Ruling: 03 runs again (retry)" in pr["body"]
 
 
 # ---------------------------------------------------------------- the fix batch

@@ -10,20 +10,18 @@ Interface choices (ticket 05):
   `json.dumps(file without "revision", sort_keys=True, separators=(",", ":"))` encoded as UTF-8 (ASCII content here).
 - evidence strings are file pointers: `.agent/implement/<NN>/implementer.json` and `.agent/implement/ledger.md:<line>`,
   the line being a ledger line that names the ticket and BLOCKED.
-- question ids are `<NN>-locked-test-<n>` with n counting per run (the first is 1, a second stop on the ticket is 2),
-  and a capped ticket with unmet criteria blocks without a finding question. Options for `locked-test` are
-  `overrule-test` / `overrule-implementer` (recommended: overrule-implementer).
-- an implementer is BLOCKED with a `locked-test` stop only when a `concerns` entry starts with "locked test
-  contradicts spec:"; any other BLOCKED report reruns on the next entry, then asks `ticket-blocked` (test_decisions).
+- question ids are `<NN>-ticket-blocked-<n>` with n counting per run (the first is 1, a second stop on the ticket is
+  2), and a capped ticket with unmet criteria blocks without a finding question. Options for `ticket-blocked` are
+  `retry` / `edit` (recommended: retry).
+- an implementer that reports BLOCKED reruns on the next entry, and a second BLOCKED asks `ticket-blocked`; a dispute
+  of a locked test goes to arbitration instead (test_arbitration).
 - the answers file is `.agent/implement-answers.json` in the schema.md shape: `v`, `stage: "implement"`, `submitted`
   (`"changes"`), `revision`, `answers`. A rerun applies it only with `submitted` set and `revision` equal to the current
   decisions revision; otherwise a ledger line says "ignored" (and "revision" for a stale file, the option id for an
   option the question does not offer), and the stop repeats with exit 2 and the same decisions file.
 - `--answer` with an unknown question id exits 3 before any agent and names the id on stdout or stderr.
-- the ruling for an overruled test is the ledger line "Ruling: 01 locked test overruled"; a finding ruling line
-  names the ticket, the finding title and the chosen option.
-- the stop of the correction is observed in the runner log: a second `test-writer` call on the ticket (before the
-  implementer's second call) and a second `implementer` call whose HEAD is the correction commit.
+- the ruling of a retry is the ledger line "Ruling: 01 runs again (retry)"; a finding ruling line names the ticket,
+  the finding title and the chosen option.
 - stage.json: `{"stage": "implement", "status": "awaiting-review", "artifact": ".agent/implement-review.html",
   "open_questions": N}` at a stop; at a BLOCKED end `{"stage": "implement", "status": "blocked", "blocked": ["01"]}`.
 - ticket 08: `--unattended` pushes at the end, so it is refused in a repository with no `origin`. The unattended tests
@@ -36,16 +34,14 @@ import re
 
 import pytest
 
-import driver_review_page
-from test_cli import git
 from test_review import ONE, Review, finding, fix, review
 from test_review_page import TEMPLATE, check_page
-from test_walk import impl, plan, tw
+from test_walk import impl, plan
 
-CONTRA = "locked test contradicts spec: tests/test_01.py::test_x"
+STOP = "no write access to fixtures/"
 UNATTENDED = ("--unattended", "--stage-json", ".agent/stage.json")
-NEW_TEST = "def test_x():\n    assert '01' == '01'\n"
-Q1 = "01-locked-test-1"
+Q1 = "01-ticket-blocked-1"
+RULED = "Ruling: 01 runs again (retry)"
 
 
 def revision(decisions):
@@ -54,16 +50,12 @@ def revision(decisions):
 
 
 def blocked(*concerns):
-    return {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": list(concerns or [CONTRA]),
+    return {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": list(concerns or [STOP]),
                        "green": []}}
 
 
-def correction():
-    return {**tw("01"), "files": {"tests/test_01.py": NEW_TEST}, "commit": "test: 01 overruled"}
-
-
 def steps(*implementers, **more):
-    return plan(**{"01/implementer": list(implementers), "01/test-writer": [tw("01"), correction()], **more})
+    return plan(**{"01/implementer": list(implementers), **more})
 
 
 def decisions(rig):
@@ -85,9 +77,9 @@ def write_answers(rig, answers, **fields):
 
 
 def stopped(tmp, *extra, then=(impl("01"),), files=ONE, rig=Review):
-    """A rig after run 1: 01's implementer reported the contradicted locked test."""
+    """A rig after run 1: 01's implementer and its rerun reported BLOCKED."""
     rig = rig(tmp, files)
-    return rig.run(steps(blocked(), *then), *extra)
+    return rig.run(steps(blocked(), blocked(), *then), *extra)
 
 
 @pytest.fixture(scope="module")
@@ -97,12 +89,12 @@ def local(tmp_path_factory):
 
 # ---------------------------------------------------------------- the question
 
-def test_a_contradicted_locked_test_writes_one_question_with_pointers(local):
+def test_a_blocked_ticket_writes_one_question_with_pointers(local):
     assert local.code == 2, local.output()
     (q,) = decisions(local)["questions"]
     assert q["id"] == Q1
-    assert {o["id"] for o in q["options"]} == {"overrule-test", "overrule-implementer"}
-    assert q["recommended"] == "overrule-implementer"
+    assert {o["id"] for o in q["options"]} == {"retry", "edit"}
+    assert q["recommended"] == "retry"
     assert q["title"] and q["why"]
     evidence = "\n".join(q["evidence"])
     assert ".agent/implement/01/implementer-0.json" in evidence and (local.folder() / "implementer-0.json").exists()
@@ -121,15 +113,15 @@ def test_revision_is_the_sha256_of_the_file_without_it_and_ids_are_valid_and_uni
 
 
 def test_a_second_stop_on_the_same_ticket_gets_a_new_id_and_a_new_revision(tmp_path):
-    rig = stopped(tmp_path, then=(blocked(), impl("01")))
+    rig = stopped(tmp_path)
     first = decisions(rig)
-    rig.run(steps(blocked(), blocked(), impl("01")), "--answer", f"{Q1}=overrule-test")
+    rig.run(steps(blocked(), blocked(), blocked(), blocked(), impl("01")), "--answer", f"{Q1}=retry")
     assert rig.code == 2, rig.output()
     second = decisions(rig)
     ids = [q["id"] for q in second["questions"]]
-    assert "01-locked-test-2" in ids and len(ids) == len(set(ids))
+    assert "01-ticket-blocked-2" in ids and len(ids) == len(set(ids))
     assert second["revision"] != first["revision"] == revision(first) and second["revision"] == revision(second)
-    assert "01-locked-test-2" in rig.out
+    assert "01-ticket-blocked-2" in rig.out
 
 
 # ---------------------------------------------------------------- the page
@@ -144,51 +136,49 @@ def test_the_stop_renders_the_review_page_from_the_template(local):
 
 def test_without_unattended_the_driver_prints_question_and_options_exits_2_and_launches_nothing_more(local):
     assert local.code == 2
-    for word in (Q1, "overrule-test", "overrule-implementer"):
+    for word in (Q1, "retry", "edit"):
         assert word in local.out + local.err, word
-    assert [c["role"] for c in local.calls()] == ["test-writer", "implementer"]
+    assert [c["role"] for c in local.calls()] == ["test-writer", "implementer", "implementer"]
     assert "feat: 01 rows" not in local.pr_subjects()
 
 
-def test_answer_overrule_test_writes_the_answers_file_rules_corrects_the_test_and_resumes(tmp_path):
+def test_answer_retry_writes_the_answers_file_rules_and_resumes(tmp_path):
     rig = stopped(tmp_path)
     rev = decisions(rig)["revision"]
-    rig.run(steps(blocked(), impl("01")), "--answer", f"{Q1}=overrule-test")
+    rig.run(steps(blocked(), blocked(), impl("01")), "--answer", f"{Q1}=retry")
     assert rig.code == 0, rig.output()
     file = json.loads(answers_file(rig).read_text())
     assert (file["v"], file["stage"], file["submitted"], file["revision"]) == (1, "implement", "changes", rev)
-    assert file["answers"] == {Q1: "overrule-test"}
-    assert rig.led("Ruling: 01 locked test overruled")
-    fixes, resumed = rig.calls("01", "test-writer"), rig.calls("01", "implementer")
-    assert len(fixes) == 2 and len(resumed) == 2, "one test-writer correction, then the implementer again"
-    assert fixes[1]["t1"] <= resumed[1]["t0"] and resumed[1]["head"] == fixes[1]["sha"]
-    assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == NEW_TEST and "feat: 01 rows" in rig.pr_subjects()
+    assert file["answers"] == {Q1: "retry"}
+    assert rig.led(RULED)
+    assert len(rig.calls("01", "test-writer")) == 1 and len(rig.calls("01", "implementer")) == 3
+    assert "feat: 01 rows" in rig.pr_subjects()
 
 
 def test_an_answers_file_from_another_revision_is_ignored_with_a_ledger_line_and_the_stop_repeats(tmp_path):
     rig = stopped(tmp_path)
     before = decisions(rig)
-    write_answers(rig, {Q1: "overrule-test"}, revision="0" * 64)
-    rig.run(steps(blocked(), impl("01")))
+    write_answers(rig, {Q1: "retry"}, revision="0" * 64)
+    rig.run(steps(blocked(), blocked(), impl("01")))
     assert rig.code == 2, rig.output()
-    assert rig.led("ignored", "revision") and not rig.led("Ruling: 01 locked test overruled")
+    assert rig.led("ignored", "revision") and not rig.led(RULED)
     assert decisions(rig) == before and Q1 in rig.out
-    assert [c["role"] for c in rig.calls()] == ["test-writer", "implementer"]
+    assert [c["role"] for c in rig.calls()] == ["test-writer", "implementer", "implementer"]
 
 
 def test_an_answer_naming_an_option_the_question_does_not_offer_is_ignored_with_a_ledger_line(tmp_path):
     rig = stopped(tmp_path)
     write_answers(rig, {Q1: "bogus-option"})
-    rig.run(steps(blocked(), impl("01")))
+    rig.run(steps(blocked(), blocked(), impl("01")))
     assert rig.code == 2, rig.output()
-    assert rig.led("ignored", "bogus-option") and not rig.led("Ruling: 01 locked test overruled")
-    assert [c["role"] for c in rig.calls()] == ["test-writer", "implementer"]
+    assert rig.led("ignored", "bogus-option") and not rig.led(RULED)
+    assert [c["role"] for c in rig.calls()] == ["test-writer", "implementer", "implementer"]
 
 
 def test_answer_for_an_unknown_question_id_exits_3_naming_it_before_any_agent(tmp_path):
     rig = stopped(tmp_path)
     seen = len(rig.calls())
-    rig.run(steps(blocked(), impl("01")), "--answer", "no-such-question=accept")
+    rig.run(steps(blocked(), blocked(), impl("01")), "--answer", "no-such-question=accept")
     assert rig.code == 3, rig.output()
     assert "no-such-question" in rig.out + rig.err and len(rig.calls()) == seen
 
@@ -219,11 +209,11 @@ def test_unattended_stop_writes_stage_json_and_exits_2(tmp_path):
 def test_unattended_rerun_with_a_submitted_answers_file_at_the_current_revision_continues_silently(tmp_path):
     from test_final import Final
     rig = stopped(tmp_path, *UNATTENDED, rig=Final)
-    write_answers(rig, {Q1: "overrule-test"})
-    rig.run(steps(blocked(), impl("01")), *UNATTENDED)
+    write_answers(rig, {Q1: "retry"})
+    rig.run(steps(blocked(), blocked(), impl("01")), *UNATTENDED)
     assert rig.code == 0, rig.output()
-    assert Q1 not in rig.out + rig.err and rig.led("Ruling: 01 locked test overruled")
-    assert len(rig.calls("01", "implementer")) == 2 and "feat: 01 rows" in rig.pr_subjects()
+    assert Q1 not in rig.out + rig.err and rig.led(RULED)
+    assert len(rig.calls("01", "implementer")) == 3 and "feat: 01 rows" in rig.pr_subjects()
     assert stage(rig) == {"stage": "implement", "status": "done"}
 
 

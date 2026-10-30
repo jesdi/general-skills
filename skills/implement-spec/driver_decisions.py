@@ -10,7 +10,6 @@ import json
 from typing import NamedTuple
 
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
-CONTRADICTS = "locked test contradicts spec:"
 
 
 class Option(NamedTuple):
@@ -24,25 +23,11 @@ class Kind(NamedTuple):
     parks: bool  # an open question of this kind ends the run with exit 2
     title: str
     why: str
-    recommended: str
+    recommended: str  # "" for a kind that recommends no option
     options: dict[str, Option]
 
 
 KINDS = {
-    "locked-test": Kind(
-        True,
-        "Ticket {ticket}: the implementer reports that a locked test contradicts the spec: {subject}",
-        "The implementer of ticket {ticket} stopped with BLOCKED. The ticket and each ticket that it blocks wait "
-        "until the test or the implementer is overruled.",
-        "overrule-implementer",
-        {"overrule-test": Option(
-            "The test is wrong. The test-writer corrects it in one correction run, then the implementer runs again.",
-            "Ruling: {ticket} locked test overruled: the test-writer corrects {subject}, then the implementer runs "
-            "again.", {"phase": "test-writer", "note": "overruled", "round": 0}),  # new tests, new fix rounds
-         "overrule-implementer": Option(
-            "The test is right. The implementer runs again and makes the test green as it is.",
-            "Ruling: {ticket} locked test stands: the implementer is overruled on {subject} and runs again.",
-            {"phase": "implement", "note": "stands"})}),
     "finding": Kind(
         False,
         "Ticket {ticket}: a finding is open after fix round 4: {subject}",
@@ -58,24 +43,24 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    "locked-test-again": Kind(
+    "spec-ambiguous": Kind(
         True,
-        "Ticket {ticket}: a locked-test finding is open after the test-writer correction: {subject}",
-        "The test-writer correction did not close this finding on the locked tests: the review after it found it "
-        "again, or the driver rejected the correction (the ledger line says which). Ticket {ticket} is BLOCKED and "
-        "each ticket that it blocks waits.",
-        "correct-again",
-        {"correct-again": Option(
-            "The test-writer corrects the locked tests once more, from the next review. Then the fix rounds go on.",
-            "Ruling: {ticket} locked-test finding goes back to the test-writer for one more correction "
-            "(correct-again): {subject}.", {"phase": "review"}),
-         "accept": Option(
-            "Close the finding as it is: the locked tests stay as they are, and no more correction runs for the "
-            "ticket. The ticket goes on to its fix rounds with its other findings.",
-            "Ruling: {ticket} locked-test finding closed as it is (accept): {subject}.", {"phase": "review"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+        "Ticket {ticket}: the spec reads two ways on a locked test: {subject}",
+        "This locked test was ruled on or corrected once in ticket {ticket}, and a second dispute or a second "
+        "correction needs it again: the spec supports both readings. Ticket {ticket} is BLOCKED and each ticket that "
+        "it blocks waits.",
+        "",
+        {"keep-test": Option(
+            "The test stands as it is. The role that disputed it runs again and makes it green; a review finding that "
+            "asks to correct it again is closed.",
+            "Ruling: {ticket} locked test stands (keep-test): {subject}.", {"phase": "{resume}"}),
+         "correct-test": Option(
+            "The test-writer corrects the test once more, to the second reading, then the implementer runs again.",
+            "Ruling: {ticket} locked test is corrected to the second reading (correct-test): {subject}.",
+            {"phase": "test-writer", "note": "correction"}),
+         "edit-spec": Option(
+            "Keep the ticket BLOCKED, so the spec can be edited to say which reading it means.",
+            "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", {})}),
     "ticket-blocked": Kind(
         True,
         "Ticket {ticket}: an agent stopped or was rejected, and its rerun too: {subject}",
@@ -104,19 +89,6 @@ KINDS = {
 }
 
 
-AGAIN = 2  # the extra corrections a ticket may get: a test-writer and a reviewer that never agree cannot loop
-
-
-def corrections(questions: list[dict], ticket: str) -> tuple[int, bool]:
-    """(the extra corrections that the `locked-test-again` stops of `ticket` gave, whether one stop accepted its
-    findings). A stop with one `correct-again` answer gives one correction; a stop with only `accept` accepts."""
-    stops: dict[int, set] = {}
-    for q in questions:
-        if (q["ticket"], q["kind"]) == (ticket, "locked-test-again") and q["answer"]:
-            stops.setdefault(q["stop"], set()).add(q["answer"])
-    return sum("correct-again" in answers for answers in stops.values()), {"accept"} in stops.values()
-
-
 def drop_merged(state: dict) -> list[dict]:
     """Remove the open questions of each merged ticket from `state`: the stop that asked them is over (issue #136).
     Returns them."""
@@ -127,33 +99,15 @@ def drop_merged(state: dict) -> list[dict]:
     return dropped
 
 
-def contradicted(role: str, report: dict) -> str:
-    """The locked tests that a BLOCKED report of an implementer or a fixer says contradict the spec; "" when it is not
-    that stop."""
-    if role not in ("implementer", "fixer") or report.get("status") != "BLOCKED":
-        return ""
-    return "; ".join(filter(None, (concern[len(CONTRADICTS):].strip() for concern in report["concerns"]
-                                   if concern.startswith(CONTRADICTS))))
-
-
-def _offered(kind: str, ticket: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
-    """(the options of a new question, the recommended one), after what `asked` already tried."""
-    options = KINDS[kind].options
-    if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
-        return {name: options[name] for name in ("accept", "redesign")}, "accept"
-    return options, KINDS[kind].recommended
-
-
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
              resume: str = "") -> dict:
     """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run.
-    `resume` is the phase a `retry` takes the ticket back to."""
+    `resume` is the phase a `retry` or a `keep-test` takes the ticket back to."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    options, recommended = _offered(kind, ticket, asked)
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
-            "evidence": evidence, "recommended": recommended,
-            "options": [{"id": name, "description": option.description} for name, option in options.items()],
+            "evidence": evidence, "recommended": made.recommended,
+            "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume, "answer": None}
 
 

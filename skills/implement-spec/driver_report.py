@@ -4,7 +4,8 @@ context: repo (slot path), branch, start (HEAD when the role started), log, corr
   tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), others (the locked
   files of every other ticket whose test-writer has run), own (the test-writer commit of the ticket and its locked
   files, for a role that may not change a locked file), pr (the PR branch ref), fix (the titles of the findings a fixer
-  gets), red (the red gate a fix must make green, as `the <tier> gate is red on <sha7>`)."""
+  gets), red (the red gate a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an
+  arbitration rules on)."""
 from __future__ import annotations
 
 import json
@@ -16,6 +17,8 @@ import jsonschema
 
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 RED = "red line not found in log"
+CONTRADICTS = "locked test contradicts spec:"
+DISPUTING = ("implementer", "fixer")  # the roles whose BLOCKED report can dispute a locked test
 
 
 def schema(role: str) -> dict:
@@ -183,6 +186,45 @@ def _space_errors(report: dict) -> list[str]:
             "rename the file" for path in report.get("locked", []) if re.search(r"\s", path)]
 
 
+def _locked_file(name: str, locked: list[str]) -> str:
+    """The locked file that `name` names: itself, or the one locked path that ends with it; "" for none."""
+    if name in locked:
+        return name
+    found = [path for path in locked if path.endswith("/" + name)]
+    return found[0] if len(found) == 1 else ""
+
+
+def disputes(role: str, report: dict, locked: list[str]) -> list[tuple[str, str, str]]:
+    """(locked file, test, reason) for each concern `locked test contradicts spec: <file>::<test>: <reason>` of a
+    BLOCKED implementer or fixer report; the file is "" when it names no file of `locked`."""
+    if role not in DISPUTING or report.get("status") != "BLOCKED":
+        return []
+    found = []
+    for concern in report["concerns"]:
+        if concern.startswith(CONTRADICTS):
+            test, _, reason = concern[len(CONTRADICTS):].strip().partition(": ")
+            found.append((_locked_file(test.partition("::")[0], locked), test, reason))
+    return found
+
+
+def _dispute_errors(role: str, report: dict, context: dict) -> list[str]:
+    """A dispute names a locked file of the ticket, and leaves no uncommitted change: the arbitration is read-only
+    and the correction commits."""
+    found = disputes(role, report, context.get("own", ("", []))[1])
+    errors = [f"the dispute of {test or 'no test'} names no locked file of the ticket: write it as `{CONTRADICTS} "
+              "<locked file>::<test>: <reason>`" for file, test, _ in found if not file]
+    if found and _git(context["repo"], "status", "--porcelain"):
+        errors.append("a dispute leaves no uncommitted change: commit your work, then report the dispute")
+    return errors
+
+
+def _ruling_errors(report: dict, context: dict) -> list[str]:
+    """An arbitration rules on each disputed test."""
+    given = {ruling["test"] for ruling in report.get("rulings", [])}
+    return [f"rulings: no ruling on {test}: give one ruling per disputed test, its id as the list gives it"
+            for test in context.get("disputed", []) if test not in given]
+
+
 def locked_files(listed: list[str]) -> list[str]:
     """The files of a `locked` list: a test node id `<file>::<test>` names its file. In order, each file once."""
     return list(dict.fromkeys(entry.partition("::")[0] for entry in listed))
@@ -203,4 +245,5 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         report["locked"] = locked_files(report["locked"])
     return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
-            + _others_errors(role, report, context) + _breach_errors(context) + _red_errors(report, context))
+            + _others_errors(role, report, context) + _breach_errors(context) + _red_errors(report, context)
+            + _dispute_errors(role, report, context) + _ruling_errors(report, context))

@@ -63,7 +63,7 @@ Track pills, in `track`. Check the proposed track:
 
 - Never edit the `<script>` or the CSS. Only fill slots.
 - Every question has an id that matches `[a-z0-9_-]{1,64}`. The id `track` is reserved for the track pills. Slot content never carries the id `state`, or the name `track` outside the track slot: the script owns them.
-- Every question has exactly one recommended option, marked with `chip rec`. It is one recommended option, never zero and never two.
+- Every question has exactly one recommended option, marked with `chip rec`, never two. The one exception is a question whose choice must stay with the reader, such as implement-spec's `spec-ambiguous`: it marks none.
 - Option values are short ids. Put no option text in a value.
 - The page has no network, no storage and no external file: no script `src`, no `<link>`, no image or font URL.
 - Keep `<meta name="agent-ops-review" content="1">`. The dispatcher looks for it.

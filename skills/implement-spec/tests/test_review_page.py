@@ -1,7 +1,8 @@
 """Ticket 05 acceptance tests for `driver_review_page.render(decisions) -> html`.
 
 Interface choice: `decisions` is the dict of decisions.json (`revision`, `questions[]` with `id`, `title`, `why`,
-`evidence` (list of strings), `options` (list of `{id, description}`), `recommended` (an option id)); the result is the
+`evidence` (list of strings), `options` (list of `{id, description}`), `recommended` (an option id, or "" for none));
+the result is the
 whole page as a string. The checks are only those that skills/review-page/SKILL.md and schema.md state.
 """
 import re
@@ -22,7 +23,7 @@ def question(qid, options, recommended, title=None):
 
 
 DECISIONS = {"revision": "ab" * 32, "questions": [
-    question("01-locked-test-1", ["overrule-test", "overrule-implementer"], "overrule-implementer"),
+    question("01-spec-ambiguous-1", ["keep-test", "correct-test", "edit-spec"], ""),
     question("02-finding-1", ["accept", "split", "redesign", "other"], "split", title=WHAT)]}
 
 
@@ -50,6 +51,9 @@ def check_page(html, decisions):
         assert radios == [(qid, o["id"]) for o in want["options"]], "name is the question id, value is the option id"
         labels = block.split('<label class="opt">')[1:]
         recommended = [i for i, label in enumerate(labels) if "chip rec" in label]
+        if not want["recommended"]:
+            assert not recommended, "a question that recommends no option marks none"
+            continue
         assert block.count("chip rec") == 1 and len(recommended) == 1, "exactly one recommended option"
         assert f'value="{want["recommended"]}"' in labels[recommended[0]]
 
@@ -63,5 +67,5 @@ def test_titles_whys_and_descriptions_show_up_and_markup_in_them_is_escaped():
     for want in DECISIONS["questions"]:
         assert f"Why {want['id']} matters" in html
         assert all(f"Trade-off of {o['id']}" in html for o in want["options"])
-    assert "Title of 01-locked-test-1" in html
+    assert "Title of 01-spec-ambiguous-1" in html
     assert WHAT not in html and "&lt;b&gt;" in html, "a title is text, never markup"

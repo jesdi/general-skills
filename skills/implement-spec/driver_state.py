@@ -3,11 +3,13 @@
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note,
-                     landing}}}
+                     landing, disputes, corrected}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
 full one. landing is the commit whose full gate was red at the landing while the fixer of the round it started has
-not reported, else None."""
+not reported, else None. disputes is {locked file: {test, requirement, ruling, reason}}, the reviewer's ruling on
+the file; corrected is {locked file: {test, requirement, reason}}, the reading of its one correction. A locked file has
+at most one of each per ticket, and no answer writes them."""
 from __future__ import annotations
 
 import fcntl
@@ -32,7 +34,7 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "landing": None}
+            "slot": None, "note": "", "landing": None, "disputes": {}, "corrected": {}}
 
 
 def _final() -> dict:
