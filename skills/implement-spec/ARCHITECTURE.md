@@ -162,17 +162,21 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
   stays the source of truth: an agent's run of the gate counts for nothing.
 - A finding that a correction reports in `not_addressed` goes to the fixer of the same round as kind `code`
-  (`driver_fixloop._correct` rewrites it in the findings file): the test needs a production change first, so a
+  (`driver_fixloop._uncorrected` rewrites it in the findings file): the test needs a production change first, so a
   second correction could not close it.
+- Every test-writer correction, after a `test-wrong` ruling, a review finding or a `correct-test` answer, is one
+  `driver_dispute.correct`: it runs the test-writer on the findings it is given, makes its commit the baseline,
+  keeps the reading of each file it corrected in `corrected` (none after an answer) and logs one line per finding.
+  The callers differ only by the findings and the readings they pass.
 - No test-writer correction runs after round 2 (`driver_fixloop._act_on`): a red gate or an unmet criterion blocks
   the ticket. Other open findings go to the final must-fix list when the gate is green. A correction at the cap
   would add locked tests that no fix round could make green.
 - A locked file is arbitrated once and corrected once per ticket. The ticket record keeps them in `disputes` and
   `corrected`, keyed by the file (the part of a test id before `::`, resolved against the ticket's `locked` by
-  `driver_report._locked_file`), so a renamed or parametrized test cannot dodge the rule. Only `driver_dispute` and
-  `driver_fixloop._correct` write them; no `Option.fields` does, so no answer resets them. A second dispute or a second
+  `driver_report._locked_file`), so a renamed or parametrized test cannot dodge the rule. Only `driver_dispute._settle`
+  and `driver_dispute.correct` write them; no answer does, so no answer resets them. A second dispute or a second
   correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its evidence file is the findings file a
-  `correct-test` correction reads (`driver._role_check`), and its files are the ones `keep-test` closes for later
+  `correct-test` correction reads (`driver_dispute.correct_as_answered`), and its files are the ones `keep-test` closes for later
   reviews (`driver_dispute.kept_files`, `driver_fixloop._still_to_correct`).
 - `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
