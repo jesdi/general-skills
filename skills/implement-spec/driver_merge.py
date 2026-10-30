@@ -88,3 +88,9 @@ def rebase_is_open() -> bool:
 
 def files_in_conflict() -> list[str]:
     return git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
+
+
+def go_on() -> None:
+    """Go on with the rebase that is open in slot 1, when the conflict agent resolved it and did not go on."""
+    env = {**os.environ, **identity("HEAD")}
+    subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)

@@ -80,10 +80,10 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   reviewer judges it against the spec. A review finding on such a file goes to a correction, since a fixer may not
   change it (issue #116).
 - The final fixer and the rebase conflict agent get the same check over every ticket's locked files
-  (`Run._final_check`): against the tidied tip, or for the rebase that makes it, the recovery point. The rebase
-  conflict agent goes on with the rebase itself, so the check reads the rebased tip: a report that leaves the rebase
-  open with no conflict is rejected, and one that stops at a later conflict is checked by nobody, as the driver
-  aborts that rebase. The final review has no locked-file findings of the driver.
+  (`Run._final_check`): against the tidied tip, or for the rebase that makes it, the recovery point. When the rebase
+  conflict agent ends, the driver goes on with the rebase it left open (`driver_merge.go_on`), so the check reads the
+  rebased tip, and a rejected agent's rerun amends that tip. A rebase that stops at a later conflict is checked by
+  nobody, as the driver aborts it. The final review has no locked-file findings of the driver.
 
 ### The PR branch
 
