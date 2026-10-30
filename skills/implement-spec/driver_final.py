@@ -201,13 +201,24 @@ def _files_in_conflict() -> list[str]:
     return git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
 
 
-def _rebase_check(run: Run) -> driver_locked.Locked | None:
+def _stop() -> str:
+    """The commit the open rebase stopped at; "" when none."""
+    return git(".", "rev-parse", "-q", "--verify", "REBASE_HEAD").stdout.strip()
+
+
+def _rebase_check(run: Run, stop: str, context: dict) -> driver_locked.Locked | None:
     """The locked-file check of the rebase conflict agent when it ends: every ticket's locked files as the recovery
-    point has them. The driver goes on with a rebase that the agent left open, so the check reads the rebased tip; one
-    that stopped again at a later conflict has no tip to check (None), and the driver aborts it."""
+    point has them. The driver goes on with a rebase that the agent left open, so the check reads the rebased tip. A
+    rebase that git cannot go on with at `stop`, the stop the agent was given, rejects a done report with git's error;
+    one that stopped again at a later conflict has no tip to check (None), and the driver aborts it."""
     if _rebase_is_open():
         env = {**os.environ, **driver_merge.identity("HEAD")}
-        subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
+        done = subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True,
+                              text=True, env=env)
+        if done.returncode and _stop() == stop:
+            why = (done.stderr or done.stdout).strip()  # git names an unstaged resolution on stdout
+            context["rejected"] = [f"git rebase --continue failed at the stop you resolved: {why}"]
+            return None
         if _rebase_is_open():
             return None
     recovery = git(".", "rev-parse", run.names.recovery).stdout.strip()
@@ -217,9 +228,10 @@ def _rebase_check(run: Run) -> driver_locked.Locked | None:
 def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
     """Run the conflict agent on the open rebase; the driver goes on with the rebase after it, and its report is
     rejected while the rebased tip changes a locked file. Returns "" or why it blocked."""
+    stop = _stop()
     try:
         run.agent(Call("conflict", FINAL, ".", values, template="rebase-conflict", detached=True,
-                       locked=lambda: _rebase_check(run)))
+                       locked=lambda context: _rebase_check(run, stop, context)))
     except Blocked as blocked:
         return str(blocked)
     except Halted:
@@ -524,7 +536,7 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str) -> dict:
         return run.agent(Call("fixer", FINAL, ".", values, template="final-fixer", fix_round=final["round"],
                               check={"owners": [ticket.number for ticket in tickets],
                                      "must_fix": [_title(finding) for finding in final["must_fix"]]},
-                              locked=lambda: driver_locked.for_end_of_run(run.state.read()["tickets"], tidied)))
+                              locked=lambda _: driver_locked.for_end_of_run(run.state.read()["tickets"], tidied)))
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
     except Halted as halted:

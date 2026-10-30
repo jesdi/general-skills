@@ -3,7 +3,8 @@
 context: repo (slot path), branch, start (HEAD when the role started), log, correction (a test-writer corrects locked
   tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), locked (the
   locked-file check, a driver_locked.Locked, or None), fix (the titles of the findings a fixer gets), red (the red gate
-  a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an arbitration rules on)."""
+  a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an arbitration rules on), rejected
+  (errors the driver found when the agent ended, for a done report)."""
 from __future__ import annotations
 
 import json
@@ -68,6 +69,11 @@ def _must_fix_errors(report: dict, context: dict) -> list[str]:
         return []
     return [f"addressed_must_fix: missing {title}" for title in context.get("must_fix", [])
             if title not in report.get("addressed_must_fix", [])]
+
+
+def _rejected_errors(report: dict, context: dict) -> list[str]:
+    """What the driver found wrong when the agent ended, for a report that says the agent is done."""
+    return context.get("rejected", []) if report.get("status") in ("DONE", "DONE_WITH_CONCERNS") else []
 
 
 def _commit_errors(report: dict, context: dict) -> list[str]:
@@ -209,7 +215,8 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     report = {name: value for name, value in report.items() if name in rules["properties"]}
     if "locked" in report:
         report["locked"] = locked_files(report["locked"])
-    return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
+    return (_rejected_errors(report, context) + _space_errors(report) + _commit_errors(report, context)
+            + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
             + driver_locked.errors(role, report, context) + _red_errors(report, context)
             + _dispute_errors(role, report, context) + _ruling_errors(report, context))
