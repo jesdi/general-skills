@@ -11,6 +11,8 @@ HERE = Path(__file__).resolve().parent
 PLUGIN = "weigh_pytest_plugin.py"
 MIN_PYTHON = (3, 10)
 MIN_PYTEST = (7, 0)
+# the wrapper's cached uv; a direct `python3 weigh.py` uses the one on PATH
+UV = os.environ.get("TEST_WEIGH_IN_UV") or "uv"
 
 
 class SetupError(Exception):
@@ -22,7 +24,7 @@ def find_interpreter(repo, explicit=None):
     if explicit:
         return Path(explicit).absolute()  # not resolve(): a venv's python is a symlink to the base one
     if (repo / "uv.lock").is_file() and not (repo / ".venv").exists():
-        proc = subprocess.run(["uv", "sync", "--frozen", "-q"], cwd=repo, capture_output=True, text=True)
+        proc = subprocess.run([UV, "sync", "--frozen", "-q"], cwd=repo, capture_output=True, text=True)
         if proc.returncode:
             raise SetupError("uv sync failed:\n" + proc.stdout + proc.stderr)
     for rel in (".venv/bin/python", "venv/bin/python"):
@@ -45,16 +47,24 @@ def check_versions(python):
         raise SetupError(f"pytest {pytest} is below the supported minimum 7.0")
 
 
-def build_overlay():
-    """Plugin-only directory (no pytest, so the repo's pytest is the one used); built aside, then renamed into place.
+def build_overlay(python):
+    """Plugin and coverage (installed --no-deps, so no pytest: the repo's pytest is the one used); built aside, then renamed into place.
 
-    Keyed by the plugin's content, so an overlay left by an older plugin is never reused."""
+    Keyed by the plugin's content and the interpreter's version, so an overlay left by an older plugin or another Python is never reused."""
     root = Path(os.environ.get("TEST_WEIGH_IN_CACHE_DIR") or Path.home() / ".cache" / "test-weigh-in")
-    overlay = root / f"overlay-{hashlib.sha256((HERE / PLUGIN).read_bytes()).hexdigest()[:16]}"
+    version = subprocess.run([str(python), "-I", "-B", "-c", "import sys;print(*sys.version_info[:2], sys.implementation.name)"],
+                             capture_output=True, text=True).stdout.strip()
+    digest = hashlib.sha256((HERE / PLUGIN).read_bytes() + version.encode()).hexdigest()[:16]
+    overlay = root / f"overlay-{digest}"
     if not overlay.is_dir():
         root.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(dir=root))
         shutil.copy(HERE / PLUGIN, tmp)
+        proc = subprocess.run([UV, "pip", "install", "-q", "--no-deps", "--python", str(python), "--target", str(tmp), "coverage"],
+                              capture_output=True, text=True)
+        if proc.returncode:
+            shutil.rmtree(tmp)
+            raise SetupError("cannot install coverage into the overlay:\n" + proc.stdout + proc.stderr)
         try:
             tmp.rename(overlay)
         except OSError:  # another run won the race

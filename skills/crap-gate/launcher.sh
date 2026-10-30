@@ -1,7 +1,7 @@
 # Sourced by a skill wrapper. The wrapper sets: inherited (`export -p` output
 # taken before its first assignment), skill_dir, name (cache dir name,
 # e.g. crap-gate), env_prefix (e.g. CRAP_GATE), prefix (message prefix), fail_code, engine (file in
-# skill_dir), and optionally defines setup_failed MESSAGE (stdout on failure) and
+# skill_dir; it gets the cached uv's path as <env_prefix>_UV), and optionally defines setup_failed MESSAGE (stdout on failure) and
 # pins (space-separated requirements) with venv_key (e.g. jsonschema-4.26.0, whose
 # first word names the package in errors): the engine then runs in a venv per pin set.
 set -eu
@@ -99,4 +99,6 @@ fi
 # child coverage processes. -I would also remove the sibling module directory.
 set -- "$python" -E -s "$skill_dir/$engine" "$@"
 eval "$inherited"
+# The engine finds the cached uv here: PATH stays the caller's.
+export "${env_prefix}_UV=$uv"
 exec "$@"
