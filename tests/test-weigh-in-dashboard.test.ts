@@ -19,12 +19,12 @@ beforeAll(() => {
   const repo = join(sandbox, 'work/demo');
   const build = spawnSync(
     'python3',
-    ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from fixture_repo import build_repo; build_repo(sys.argv[2])', join(skill, 'tests'), repo],
+    ['-c', 'import sys; sys.path.insert(0, sys.argv[1]); from fixture_repo import build_repo, uv; build_repo(sys.argv[2]); print(uv())', join(skill, 'tests'), repo],
     { encoding: 'utf8' },
   );
   expect(build.status, build.stderr).toBe(0);
   const home = join(sandbox, 'home');
-  const env = { ...process.env, HOME: home, TEST_WEIGH_IN_CACHE_DIR: join(sandbox, 'cache') };
+  const env = { ...process.env, HOME: home, TEST_WEIGH_IN_CACHE_DIR: join(sandbox, 'cache'), TEST_WEIGH_IN_UV: build.stdout.trim() };
   delete env.VIRTUAL_ENV;
   delete env.PYTHONPATH;
   const weigh = spawnSync('python3', [join(skill, 'weigh.py'), repo, '--no-open'], { env, encoding: 'utf8' });
