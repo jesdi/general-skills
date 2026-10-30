@@ -197,7 +197,7 @@ def test_a_test_ruled_wrong_that_a_review_corrected_before_asks_spec_ambiguous(t
     assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 2, rig.ledger()
     (question,) = asked(rig)
     assert "STALE" in question["subject"] and "R3 says single quotes" in question["subject"]
-    assert question["resume"] == "review" and rig.state()["tickets"]["01"]["round"] == 0
+    assert question["resume"]["phase"] == "review" and rig.state()["tickets"]["01"]["round"] == 0
 
 
 def test_a_ruling_that_asks_spec_ambiguous_is_kept_so_a_dispute_after_keep_test_is_not_arbitrated_again(tmp_path):
@@ -293,7 +293,7 @@ def test_an_arbitration_correction_rejected_twice_asks_ticket_blocked_and_retry_
     rig = Inside(tmp_path, ONE).run(steps)
     assert rig.code == 2, rig.ledger()
     (question,) = asked(rig)
-    assert question["kind"] == "ticket-blocked" and question["resume"] == "implement"
+    assert question["kind"] == "ticket-blocked" and question["resume"]["phase"] == "implement"
     assert "its commits also change demo/export.py" in question["subject"]
     start = rig.calls("01", "test-writer")[1]["head"]
     assert rig.state()["tickets"]["01"]["tip"] == start and rig.state()["tickets"]["01"]["disputes"] == {}

@@ -14,6 +14,7 @@ open asks `final-ticket-blocked-<n>`: only a `retry` runs another batch and scop
     open       the findings the fix batch is due for
     lenses     {lens role: {tip, report}}: the accepted report of each lens of the full review and the tip it covers
     batch      the tip of the fix batch that the driver validated and named
+    phase      `blocked` at a stop with questions, until a `retry` answer makes it `pending` again
     green_gates, pushed, pr
 """
 from __future__ import annotations
@@ -34,7 +35,7 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_tidy
-from driver_run import FINAL, OUT, Blocked, Call, Halted, Run, during, ledger
+from driver_run import FINAL, FINAL_RESUME, OUT, Blocked, Call, Halted, Run, during, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
@@ -351,7 +352,7 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
         # Another batch is the operator's call: one `final-ticket-blocked` question per finding.
         titles = [_title(finding) for finding in to_fix]
         run.ask(FINAL, "ticket-blocked", [f"a finding open after the scoped review: {title}" for title in titles],
-                str(file))
+                str(file), FINAL_RESUME)
         raise Blocked(f"the scoped review leaves {len(titles)} finding{'s' * (len(titles) > 1)} open: "
                       + "; ".join(titles))
 
@@ -682,25 +683,17 @@ def run(run: Run, tickets: list[Ticket]) -> tuple[bool, list[str]]:
         _review_until_reviewed(run, tickets)
         return False, _close(run, tickets)
     except Blocked as blocked:
-        _ask(run, ledger(f"End of run: BLOCKED at {blocked}."))
+        line = ledger(f"End of run: BLOCKED at {blocked}.")
+        if FINAL in run.asks:  # with no question, the end of run is not recorded BLOCKED: the next run tries again
+            run.block(FINAL, line)
         return True, [f"End of run: BLOCKED at {blocked}"]
 
 
 def _parked(state: dict) -> bool:
-    """True while a question of the last stop of the end of run is open. Raises Blocked when the operator answered
-    `edit`: nothing runs and nothing is pushed until the run starts again."""
-    asked = [question for question in state["run"]["questions"] if question["ticket"] == FINAL]
-    last = max((question["stop"] for question in asked), default=0)
-    answers = [question["answer"] for question in asked if question["stop"] == last]
-    if "edit" in answers:
-        raise Blocked("the operator keeps the end of run BLOCKED for an edit (edit): nothing is pushed")
-    return None in answers
-
-
-def _ask(run: Run, line: int) -> None:
-    """The `final-ticket-blocked` questions of the stop that the ledger line `line` names, when it has any."""
-    ask = run.asks.pop(FINAL, None)
-    if ask:
-        evidence = [ask.report, f"{OUT / 'ledger.md'}:{line}"]
-        run.state.update(lambda state: driver_decisions.stop(state["run"], ask.kind, FINAL, ask.subjects, evidence))
-        ledger(f"End of run: {driver_decisions.decides(ask.kind, len(ask.subjects))} in {OUT / 'decisions.json'}.")
+    """True while the end of run is BLOCKED at a question that is open. Raises Blocked when it is BLOCKED with every
+    question answered, so by an `edit`: nothing runs and nothing is pushed."""
+    if state["run"]["final"]["phase"] != "blocked":
+        return False
+    if any(q["ticket"] == FINAL and q["answer"] is None for q in state["run"]["questions"]):
+        return True
+    raise Blocked("the operator keeps the end of run BLOCKED for an edit (edit): nothing is pushed")

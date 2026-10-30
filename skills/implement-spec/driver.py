@@ -34,6 +34,7 @@ import driver_merge
 import driver_report
 import driver_review
 import driver_review_page
+import driver_run
 import driver_slots
 import driver_state
 import driver_summary
@@ -113,7 +114,7 @@ def _run_role(run: Run, call: Call, entry: dict) -> tuple[str, dict]:
     if call.role == "test-writer" and entry["test_writer_sha"] and (question := driver_dispute.correction(questions,
                                                                                                        call.number)):
         driver_dispute.correct_as_answered(run, call, question)
-        return question["resume"], {}
+        return question["resume"]["phase"], {}
     report = driver_dispute.agent(run, call)
     if call.role != "test-writer":
         return AFTER.get(call.role, "review"), {}
@@ -199,8 +200,8 @@ def _refuse_breach(number: str, run: Run, landing: _Landing) -> None:
     paths = [path for path in driver_review.others(tickets, number) if path not in tickets[number]["locked"]]
     if errors := driver_report.landing_errors(".", landing.pr_tip, landing.commit, paths):
         error = "; ".join(errors)
-        resume, fields = retry_point("implementer", landing.ticket_tip, 0)
-        run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE), resume, **fields)
+        run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE),
+                retry_point("implementer", landing.ticket_tip, 0))
         raise Blocked(error)
 
 
@@ -265,22 +266,6 @@ def _merge(ticket: Ticket, slot: str, run: Run) -> None:
 
 # ---------------------------------------------------------------- one ticket, and the walk of the graph
 
-def _block(number: str, run: Run, ledger_line: int) -> None:
-    """Block the ticket and add the questions it asked for, in one write of state.json."""
-    ask = run.asks.pop(number, None)
-
-    def change(state: dict) -> None:
-        state["tickets"][number]["phase"] = "blocked"
-        if ask:
-            state["tickets"][number].update(ask.fields)
-            evidence = [ask.report, f"{OUT / 'ledger.md'}:{ledger_line}"]
-            driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence, ask.resume)
-
-    run.state.update(change)
-    if ask and ask.subjects:
-        ledger(f"Ticket {number}: {driver_decisions.decides(ask.kind, len(ask.subjects))} in {DECISIONS}.")
-
-
 def _drop_merged(state: driver_state.State) -> None:
     """Drop the open questions of each merged ticket: a stopped ticket that the operator set to `merge` has them."""
     dropped: list[dict] = []
@@ -311,7 +296,7 @@ def _run_ticket(ticket: Ticket, slot_number: int, run: Run) -> bool:
                 except driver_fixloop.Unlanded:
                     pass  # the merge lock is released and the next fix round has started: its fixer runs now
     except Blocked as blocked:
-        _block(number, run, ledger(f"Ticket {number}: BLOCKED at {blocked}."))
+        run.block(number, ledger(f"Ticket {number}: BLOCKED at {blocked}."))
         print(f"{ticket.file}: BLOCKED at {blocked}")
     except Halted as halted:
         _halt(run, f"Ticket {number}", str(halted))
@@ -458,8 +443,7 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
     def change(new: dict) -> None:
         new["run"]["questions"] = questions
         for number, fields in moved.items():
-            if number in new["tickets"]:  # the end of run has no record: driver_final reads the answers of its stop
-                new["tickets"][number].update(fields)
+            driver_run.record_of(new, number).update(fields)
 
     state.update(change)
     error = _publish_questions(run)

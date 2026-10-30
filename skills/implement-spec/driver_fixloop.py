@@ -13,6 +13,7 @@ import driver_dispute
 import driver_gate
 import driver_review
 import driver_slots
+from driver_decisions import Resume
 from driver_dispute import Corrected
 from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger
@@ -142,7 +143,7 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
                      f"{finding['title']}: {finding['evidence']}") for finding in findings]
     if again := driver_dispute.second_readings(found, corrected):
         with during("the review"):
-            driver_dispute.ambiguous(run, number, again, "review", {})
+            driver_dispute.ambiguous(run, number, again, Resume("review"))
     call = Call("test-writer", number, job.slot, job.pointers(job.round), fix_round=job.round + 1, retry="reviewer")
     with during("the test-writer correction"):
         reasons = driver_dispute.correct(run, call, findings, {one.file: Corrected(one.test, "", one.reason)
