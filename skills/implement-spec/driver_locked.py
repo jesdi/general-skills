@@ -148,7 +148,7 @@ def _clean_merge(repo: str, base: str, ours: str, theirs: str, path: str) -> str
 
 def _own_errors(context: dict, locked: Locked) -> list[str]:
     """The agent's own locked files that the branch changed since `locked.since`. A file is no change when it is the
-    clean three-way merge of its version there and the PR tip's, from their merge base: a conflict merge takes in what
+    clean three-way merge of its version there and the PR tip's, from their merge base, in content and mode: a conflict merge takes in what
     landed and keeps the test-writer's tests."""
     repo, branch, pr, since = context["repo"], context["branch"], locked.pr, locked.since
     if not (since and locked.own):
@@ -157,8 +157,22 @@ def _own_errors(context: dict, locked: Locked) -> list[str]:
     if changed is None:
         return [f"the locked-file check failed: git cannot compare {since[:7]} and {branch}"]
     base = _merge_base(repo, since, pr)
-    return [_breach(path, since) for path in sorted(changed)
-            if (merged := _clean_merge(repo, base, since, pr, path)) is None or _show(repo, branch, path) != merged]
+    return [_breach(path, since) for path in sorted(changed) if not _merged(repo, (base, since, pr), branch, path)]
+
+
+def _mode(repo: str, commit: str, path: str) -> str:
+    """The git mode of `path` at `commit`, which names its type too (file, executable, link); "" when it is not there."""
+    listed = git(repo, "ls-tree", commit, "--", path).stdout.split()
+    return listed[0] if listed else ""
+
+
+def _merged(repo: str, sides: tuple[str, str, str], branch: str, path: str) -> bool:
+    """`path` at `branch` is the clean three-way merge of `sides` (base, ours, theirs), in content and in mode: a mode
+    that ours did not change is theirs."""
+    base, ours, theirs = (_mode(repo, commit, path) for commit in sides)
+    merged = _clean_merge(repo, *sides, path)
+    return (merged is not None and _show(repo, branch, path) == merged
+            and _mode(repo, branch, path) == (theirs if ours == base else ours))
 
 
 def landing_errors(tickets: dict, number: str, pr_tip: str, commit: str) -> list[str]:
