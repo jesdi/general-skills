@@ -390,6 +390,16 @@ def test_a_listed_change_to_a_merged_ticket_locked_file_is_in_the_reviewer_promp
     assert rig.state()["tickets"]["02"]["locked"] == ["tests/test_02.py", "tests/test_01.py"]
 
 
+def test_an_implementer_that_puts_its_own_locked_file_back_to_the_pr_tip_is_rejected(tmp_path):
+    """02's test-writer extends and locks 01's file; the PR tip still holds the version before it."""
+    reverts = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", "tests/test_01.py": LOCKED_01})
+    rig = Inside(tmp_path, three()).run(plan(**{"02/test-writer": [extends(MORE_01, True)],
+                                                "02/implementer": [reverts, reverts]}))
+    assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
+    assert all(CHANGED_01 in line for line in attempts(rig, "02", "implementer"))
+    assert on_pr(rig, "tests/test_01.py") == LOCKED_01
+
+
 def test_an_unlisted_change_to_a_merged_ticket_locked_file_is_rejected_and_the_test_writer_runs_on_its_second_entry(tmp_path):
     puts_back = {**extends(LOCKED_01, False), "commit": "test: 02 red again"}
     rig = Inside(tmp_path, three(), models=TWO).run(plan(**{"02/test-writer": [extends(MORE_01, False), puts_back]}))
@@ -1041,14 +1051,14 @@ def test_a_conflict_is_resolved_once_in_the_ticket_slot_and_a_second_one_blocks(
     assert len(again.calls("01", "conflict")) == 1
 
 
-def conflict(tmp_path, resolve, then=None, models=None):
+def conflict(tmp_path, resolve, then=None, models=None, **more):
     """01 and 03 both add demo/cli.py and 03 merges first (as test_review.conflicted); `resolve` is 01's conflict step,
-    `then` its rerun (`resolve` again by default)."""
+    `then` its rerun (`resolve` again by default), `more` other steps."""
     rig = Inside(tmp_path, {k: v for k, v in three().items() if not k.startswith("02")}, models=models)
     one = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", "demo/cli.py": test_review.cli("one")})
     rig.steps = plan(**{"01/test-writer": [{**tw("01"), "touch": ["s1"]}], "01/conflict": [resolve, then or resolve],
                         "03/implementer": [{**impl("03", "demo/cli.py", test_review.cli("three")), "wait": ["s1"]}],
-                        "01/implementer": [{**one, "wait_pr_moves": True}]})
+                        "01/implementer": [{**one, "wait_pr_moves": True}], **more})
     return rig.run(rig.steps)
 
 
@@ -1075,6 +1085,19 @@ def test_a_conflict_resolution_that_changes_a_locked_file_of_a_merged_ticket_is_
     assert "locked file changed: tests/test_03.py" in first and second.endswith("report accepted.")
     assert entries(rig, "01", "conflict") == [OPUS_5_5, SONNET] and not rig.state()["run"]["questions"]
     assert on_pr(rig, "tests/test_03.py") == locked_03 and on_pr(rig, "demo/cli.py") == test_review.cli("resolved")
+
+
+def test_a_conflict_resolution_that_takes_in_another_ticket_s_listed_change_to_its_own_locked_file_is_accepted(tmp_path):
+    """03 extends 01's locked file, lists it and merges first: its version on the PR tip is what landed."""
+    extended = LOCKED_01 + "\n\ndef test_y():\n    assert 03 == 'y'\n"
+    writer = tw("03")
+    writer["files"]["tests/test_01.py"] = extended
+    writer["report"]["locked"] += ["tests/test_01.py"]
+    takes = {"files": {"demo/cli.py": test_review.cli("resolved"), "tests/test_01.py": extended},
+             "commit": "merge: resolve cli", "report": RESOLVED}
+    rig = conflict(tmp_path, takes, **{"03/test-writer": [{**writer, "wait": ["s1"]}]})
+    assert rig.code == 0 and not rig.led("locked file changed"), rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == extended
 
 
 def test_a_conflict_agent_that_gives_up_leaves_no_open_merge_in_the_slot(tmp_path):

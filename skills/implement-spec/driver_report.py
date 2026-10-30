@@ -148,28 +148,37 @@ def _differ(repo: str, old: str, new: str, paths: list[str]) -> set[str] | None:
     return None if diff.returncode else set(filter(None, diff.stdout.split("\0")))
 
 
-def _changed_locked(context: dict, baseline: str, paths: list[str]) -> list[str]:
+def _changed_locked(context: dict, baseline: str, paths: list[str], base: str = "") -> list[str]:
     """The errors for the `paths` that the branch changed since `baseline`. A file as the PR tip has it is no change:
-    it holds what landed."""
+    it holds what landed. With `base` (the merge base of the branch and the PR tip), only a file that the PR side
+    changed since `base` holds what landed: else the PR tip holds the file as it was before the test-writer."""
     repo, branch, pr = context["repo"], context["branch"], context["pr"]
     changed, off_pr = _differ(repo, baseline, branch, paths), _differ(repo, pr, branch, paths)
-    if changed is None or off_pr is None:
+    landed = _differ(repo, base, pr, paths) if base else set(paths)
+    if changed is None or off_pr is None or landed is None:
         return [f"the locked-file check failed: git cannot compare {baseline[:7]}, {pr} and {branch}"]
-    as_landed = set(_present(repo, branch, paths)) - off_pr
+    as_landed = (set(_present(repo, branch, paths)) - off_pr) & landed
     return [f"locked file changed: {path}: only the test-writer may change a locked file, so make it as it is at "
             f"{baseline[:7]}" for path in sorted(changed - as_landed)]
 
 
+def _merge_base(repo: str, commit: str, pr: str) -> str:
+    """The merge base of `commit` and the PR tip; the PR tip when git finds none."""
+    return (_git(repo, "merge-base", commit, pr) or [pr])[0]
+
+
 def _breach_errors(context: dict) -> list[str]:
     """Only the test-writer changes a locked file: the ticket's own locked files are checked against its last
-    test-writer commit, every other ticket's against the merge base of the branch and the PR tip."""
+    test-writer commit, every other ticket's against the merge base of the branch and the PR tip. An own file as the
+    PR tip has it counts as landed only when the PR side changed it since the branch point: the merge base of the
+    role's start and the PR tip, so a conflict merge cannot move it."""
     if "own" not in context:
         return []
-    sha, own = context["own"]
-    base = _git(context["repo"], "merge-base", context["branch"], context["pr"]) or [context["pr"]]
-    groups = ((sha, own), (base[0], [path for path in context["others"] if path not in own]))
-    return [error for baseline, paths in groups if baseline and paths
-            for error in _changed_locked(context, baseline, paths)]
+    (sha, own), pr = context["own"], context["pr"]
+    base, point = _merge_base(context["repo"], context["branch"], pr), _merge_base(context["repo"], context["start"], pr)
+    groups = ((sha, own, point), (base, [path for path in context["others"] if path not in own], ""))
+    return [error for baseline, paths, landed in groups if baseline and paths
+            for error in _changed_locked(context, baseline, paths, landed)]
 
 
 def _red_errors(report: dict, context: dict) -> list[str]:
