@@ -18,7 +18,8 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
 | `driver_report.py` | Validation of one agent report against its schema, git and the agent's log |
-| `driver_review.py` | The locked-file check of a ticket's own tests, the routing of findings |
+| `driver_locked.py` | The one locked-file rule: which files are locked, the baseline of each agent and of the landing, the diff that finds a change |
+| `driver_review.py` | The routing of findings; the slot and the shared git config that a read-only role must leave as they were |
 | `driver_merge.py` | Merges by git plumbing, the move of the PR ref |
 | `driver_gate.py` | One gate of a commit: the command, once more when a signal ended it, and its record |
 | `driver_slots.py` | The worktrees that tickets run in, and the `git` helper |
@@ -56,15 +57,19 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - The driver writes no prose of its own into a prompt: a prompt is a template with its pointers filled. The same
   holds for each title, question and ruling in `driver_decisions.py`.
 - The ledger is written only by the driver, and the driver reads no fact from it.
-- A check that git cannot do is a failed check, never a passed one (`_breach_errors`).
+- A check that git cannot do is a failed check, never a passed one (`driver_locked.errors`).
 
 ### Locked tests
 
+- `driver_locked` is the one place of the locked-file rule: which files are locked (`every`, `others`), the
+  baseline of each agent (`for_ticket`, `for_end_of_run`, `landing_errors`) and the diff. `driver_report.validate`
+  calls `driver_locked.errors` once, with the `Locked` check that `_attempts` reads when the agent ends: the
+  `Call`'s own `locked`, else that of a ticket agent.
 - Only the test-writer changes a locked file, and it lists each one it changes in `locked`, of its own ticket or of
-  another (`driver_report._others_errors`, `_correction_errors`). A correction may change only the files it lists.
-  Its commit becomes the baseline of the ticket's own locked files (`driver_review.written`).
+  another (`driver_locked._unlisted_errors`, `driver_report._correction_errors`). A correction may change only the
+  files it lists. Its commit becomes the baseline of the ticket's own locked files (`driver_locked.written`).
 - After the implementer, a fixer and the ticket conflict agent, the driver checks the locked files with a diff
-  (`driver_report._breach_errors`, its context read when the agent ends by `Run.locked_check`): the ticket's own
+  (`driver_locked._own_errors`, `_others_errors`): the ticket's own
   against its last test-writer commit, every other ticket's whose test-writer has run, merged or not, against the
   merge base of the ticket branch and the PR tip. Another ticket's file as the PR tip has it is no change; the
   ticket's own when it is the clean three-way merge (`git merge-file`) of its test-writer's version and the PR tip's,
@@ -73,15 +78,16 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   rejects the report naming the file, so the rerun on the next entry and `ticket-blocked` apply as to any rejection.
 - At landing, under the merge lock and before the full gate, `driver._refuse_breach` compares the commit that
   would land with the PR tip on every other ticket's locked files (but those the ticket lists as its own,
-  `driver_report.landing_errors`): a change, or a git error, blocks the ticket with one `ticket-blocked` question
+  `driver_locked.landing_errors`): a change, or a git error, blocks the ticket with one `ticket-blocked` question
   and the PR branch does not move. Its `retry` resumes at `implement`, whose check then names the file.
 - The reviewer gets the diff of each locked file of another ticket that the ticket changed
-  (`driver_review.changed_elsewhere`, `prompts/elsewhere.md`): only the test-writer can have made it, and the
+  (`driver_locked.changed_elsewhere`, `prompts/elsewhere.md`): only the test-writer can have made it, and the
   reviewer judges it against the spec. A review finding on such a file goes to a correction, since a fixer may not
   change it (issue #116).
 - The final fixer and the rebase conflict agent get the same check over every ticket's locked files
-  (`Run._final_check`): against the tidied tip, or for the rebase that makes it, the recovery point. When the rebase
-  conflict agent ends, the driver goes on with the rebase it left open (`driver_merge.go_on`), so the check reads the
+  (`driver_locked.for_end_of_run`): against the tidied tip, or for the rebase that makes it, the recovery point. When
+  the rebase conflict agent ends, the driver goes on with the rebase it left open (`driver_final._rebase_check`, the
+  `locked` of its `Call`), so the check reads the
   rebased tip, and a rejected agent's rerun amends that tip. A rebase that stops at a later conflict is checked by
   nobody, as the driver aborts it. The final review has no locked-file findings of the driver.
 

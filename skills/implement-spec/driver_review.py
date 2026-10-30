@@ -1,4 +1,5 @@
-"""The driver's own part of a review: the locked files of the tickets and the routing of the findings.
+"""The driver's own part of a review: the routing of the findings, and the slot and the shared git config that a
+read-only role must leave as it found them.
 
 A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `gate` for a red full gate.
 """
@@ -11,27 +12,6 @@ from pathlib import Path
 from driver_slots import git, head, on_branch
 
 OPEN = ("critical", "important")  # the severities that start a fix round
-
-
-def others(tickets: dict, number: str) -> list[str]:
-    """The locked files of every ticket but `number` whose test-writer has run, merged or not. `tickets` is that of
-    state.json."""
-    return sorted({path for key, entry in tickets.items() if key != number and entry["test_writer_sha"]
-                   for path in entry["locked"]})
-
-
-def changed_elsewhere(slot: str, pr: str, paths: list[str]) -> str:
-    """The diff of each of `paths` that the ticket branch in `slot` changed since its merge base with `pr`."""
-    if not paths:
-        return ""
-    base = git(slot, "merge-base", "HEAD", pr).stdout.strip() or pr
-    return git(slot, "diff", base, "HEAD", "--", *paths).stdout
-
-
-def written(entry: dict, listed: list[str], tip: str) -> dict:
-    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed`: `tip` is
-    the new baseline of the ticket's own locked files."""
-    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed))}
 
 
 def _corrected(finding: dict, locked: list[str], protected: list[str]) -> bool:

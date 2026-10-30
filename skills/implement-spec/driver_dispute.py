@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import NamedTuple, NoReturn
 
 import driver_decisions
+import driver_locked
 import driver_report
-import driver_review
 import driver_slots
 from driver_decisions import Resume
 from driver_report import Dispute
@@ -95,8 +95,8 @@ def second_readings(found: list[Dispute], record: dict) -> list[Reading]:
 def _ruling_findings(path: Path, rulings: list[tuple[str, str, str]]) -> list[dict]:
     """Write the findings file of a correction to rulings: a critical finding of kind `ruling` per (locked file,
     title, evidence). Returns the findings."""
-    findings = [{"severity": "critical", "file": file, "line": 0, "title": title, "evidence": evidence, "kind": "ruling"}
-                for file, title, evidence in rulings]
+    findings = [{"severity": "critical", "file": file, "line": 0, "title": title, "evidence": evidence,
+                 "kind": "ruling"} for file, title, evidence in rulings]
     path.write_text(json.dumps(findings, indent=1) + "\n")
     return findings
 
@@ -109,13 +109,14 @@ def correct(run: Run, call: Call, findings: list[dict], readings: dict[str, Corr
     number = call.number
     report = run.agent(replace(call, notes=["correction"],
                                check={"correction": True, "findings": [finding["title"] for finding in findings]}))
-    tip, reasons = driver_slots.head(call.slot), {item["finding"]: item["reason"] for item in report.get("not_addressed", [])}
+    tip = driver_slots.head(call.slot)
+    reasons = {item["finding"]: item["reason"] for item in report.get("not_addressed", [])}
     kept = {finding["file"]: readings[finding["file"]]._asdict() for finding in findings
             if finding["file"] in readings and finding["title"] not in reasons}
 
     def record(state: dict) -> None:
         entry = state["tickets"][number]
-        entry.update(tip=tip, **driver_review.written(entry, report["locked"], tip))
+        entry.update(tip=tip, **driver_locked.written(entry, report["locked"], tip))
         entry["corrected"].update(kept)
 
     run.state.update(record)
@@ -181,7 +182,8 @@ def _correct(run: Run, call: Call, wrong: dict[str, dict], n: int) -> None:
     findings = _ruling_findings(path, [(file, f"{ruling['test']}, {ruling['requirement']}", ruling["reason"])
                                        for file, ruling in wrong.items()])
     values = {**call.values, "start_sha": driver_slots.head(slot), "findings": os.path.relpath(path, slot)}
-    readings = {file: Corrected(ruling["test"], ruling["requirement"], ruling["reason"]) for file, ruling in wrong.items()}
+    readings = {file: Corrected(ruling["test"], ruling["requirement"], ruling["reason"])
+                for file, ruling in wrong.items()}
     with during("the test-writer correction"):
         correct(run, Call("test-writer", number, slot, values, name=f"correction-{n}", retry=call.role,
                           fix_round=call.fix_round), findings, readings, "")

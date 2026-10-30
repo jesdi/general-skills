@@ -101,7 +101,8 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
              resume: Resume) -> dict:
     """A new open question."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner(ticket)}
-    return {"id": question_id(kind, ticket, asked), "title": made.title.format(**values), "why": made.why.format(**values),
+    return {"id": question_id(kind, ticket, asked), "title": made.title.format(**values),
+            "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
             "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume.fields(), "answer": None}
