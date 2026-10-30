@@ -393,6 +393,16 @@ def test_an_implementer_that_puts_its_own_locked_file_back_to_the_pr_tip_is_reje
     assert on_pr(rig, "tests/test_01.py") == LOCKED_01
 
 
+def test_an_implementer_that_makes_its_own_locked_file_executable_is_rejected(tmp_path):
+    """The text of tests/test_01.py stays as the test-writer left it; its mode becomes 100755."""
+    chmods = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n"},
+                  git=[["update-index", "--chmod=+x", "tests/test_01.py"], ["checkout-index", "-f", "tests/test_01.py"]])
+    rig = Inside(tmp_path, models=TWO).run(plan(**{"01/implementer": [chmods, IDLE]}))
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert all(CHANGED_01 in line for line in attempts(rig, "01", "implementer"))
+    assert "feat: 01 rows" not in rig.pr_subjects()
+
+
 def test_an_unlisted_change_to_a_merged_ticket_locked_file_is_rejected_and_the_test_writer_runs_on_its_second_entry(tmp_path):
     puts_back = {**extends(LOCKED_01, False), "commit": "test: 02 red again"}
     rig = Inside(tmp_path, three(), models=TWO).run(plan(**{"02/test-writer": [extends(MORE_01, False), puts_back]}))
