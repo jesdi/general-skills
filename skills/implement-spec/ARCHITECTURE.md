@@ -67,10 +67,9 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   (`driver_report._breach_errors`, its context read when the agent ends by `Run.locked_check`): the ticket's own
   against its last test-writer commit, every other ticket's whose test-writer has run, merged or not, against the
   merge base of the ticket branch and the PR tip. Another ticket's file as the PR tip has it is no change; the
-  ticket's own only when the PR side changed it since the branch point (the merge base of the role's start and the
-  PR tip), so a conflict merge takes in what landed and an implementer cannot put back the file as it was before
-  its test-writer. The baseline is
-  stateless, so a breach left on the tip by a rejected rerun is found again after a `retry`. A changed locked file
+  ticket's own when it is the clean three-way merge (`git merge-file`) of its test-writer's version and the PR tip's,
+  from their merge base, so a conflict merge takes in what landed and keeps the test-writer's tests, and no role can
+  put the file back to the PR tip's version. The baseline is stateless, so a breach left on the tip by a rejected rerun is found again after a `retry`. A changed locked file
   rejects the report naming the file, so the rerun on the next entry and `ticket-blocked` apply as to any rejection.
 - At landing, under the merge lock and before the full gate, `driver._refuse_breach` compares the commit that
   would land with the PR tip on every other ticket's locked files (but those the ticket lists as its own,
