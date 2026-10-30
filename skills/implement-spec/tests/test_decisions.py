@@ -167,7 +167,7 @@ def test_an_older_run_keeps_the_ruling_of_an_answered_question_of_a_removed_kind
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     rig.run(run, *UNATTENDED)
     assert rig.code == 0 and rig.state()["run"]["schema"] == 4, rig.ledger()
-    sentence = f"Ruling: 01 review-stopped (retry): the implementer: it reported BLOCKED: {STOP}."
+    sentence = f"Ruling: 01 review runs again (retry): the implementer: it reported BLOCKED: {STOP}."  # the older driver's
     assert f"## Rulings\n\n- {sentence}\n" in rig.prs()[0]["body"]
     assert rig.state()["run"]["questions"][0]["ruling"] == sentence
 
