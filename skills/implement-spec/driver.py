@@ -48,7 +48,6 @@ ONLY = ("test-writer", "implementer", "reviewer")  # `--only` is for tests
 # The phase of a ticket while a role runs, and the phase it reaches when the role's report is accepted.
 DURING = {"test-writer": "test-writer", "implementer": "implement"}
 AFTER = {"test-writer": "implement", "implementer": "gate"}
-MERGED_LOCKED = "merged-locked-file"  # the question of a landing that changes a locked file of a merged ticket
 
 
 # ---------------------------------------------------------------- one ticket: the roles
@@ -123,19 +122,14 @@ def _first_notes(number: str, slot_number: int, entry: dict, run: Run, roles: li
     return []
 
 
-def _role_check(role: str, number: str, slot: str, entry: dict, run: Run, values: dict,
-                notes: list[str]) -> tuple[dict, list[str]]:
-    """(the check of the report of `role`, its notes). A test-writer on a ticket that has locked tests is the
-    correction after a ruling: it gets the overruled concerns, and the locked files it changed are put back first."""
+def _role_check(role: str, number: str, entry: dict, run: Run, values: dict) -> dict:
+    """The check of the report of `role`. A test-writer on a ticket that has locked tests is the correction after a
+    ruling: it gets the overruled concerns."""
     check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
-    if not check["correction"]:
-        return check, notes
-    check["findings"] = _overruled(number, run)
-    values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
-    if restored := run.restore_locked_files(number, slot):
-        values.update(start_sha=driver_slots.head(slot), restored=" ".join(restored))
-        notes, check["restored"] = [*notes, "restored"], restored
-    return check, notes
+    if check["correction"]:
+        check["findings"] = _overruled(number, run)
+        values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
+    return check
 
 
 def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
@@ -151,7 +145,7 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         run.state.ticket(number, phase=DURING.get(role, "review"))
         values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, driver_gate.FAST, start),
                                                                  slot))
-        check, notes = _role_check(role, number, slot, entry, run, values, notes)
+        check = _role_check(role, number, entry, run, values)
         with during(f"the {role}"):
             try:
                 report = run.agent(role, number, slot, values, notes=notes, check=check)
@@ -165,7 +159,7 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
             ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
         facts = {"tip": driver_slots.head(slot)}
         if role == "test-writer":
-            facts.update(driver_review.written(slot, entry, report["locked"], facts["tip"]))
+            facts.update(driver_review.written(entry, report["locked"], facts["tip"]))
             values["locked"] = " ".join(facts["locked"])
         run.state.ticket(number, phase=AFTER.get(role, "review"), note="", **facts)
         start, notes = facts["tip"], []
@@ -176,18 +170,8 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
 @dataclass
 class _Landing:
     ticket_tip: str
-    pr_tip: str  # the PR tip that the landing check read
+    pr_tip: str  # the PR tip the merge was made on
     commit: str  # what the PR branch moves to: `pr_tip` (merged already), `ticket_tip` (fast-forward) or a merge
-
-
-@dataclass
-class _Rulings:
-    """The answers to the `merged-locked-file` questions of the ticket, as its landing applies them."""
-    before: str  # the ticket tip before the driver put a file back
-    paths: dict[str, str]  # file -> `restore` or `adopt`
-
-    def adopted(self) -> list[str]:
-        return [path for path, answer in self.paths.items() if answer == "adopt"]
 
 
 def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list[str]) -> str:
@@ -197,11 +181,6 @@ def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list
     try:
         with during("the conflict agent"):
             run.agent("conflict", number, slot, values)
-            # The resolution may not change a locked test of the ticket. Those of the merged tickets are checked
-            # when the resolved tip lands.
-            changed = driver_review.locked_changes(slot, tip, run.state.read()["tickets"][number]["locked"])
-            if changed:
-                raise Blocked("; ".join(finding["title"] for finding in changed))
     except (Blocked, Halted):
         driver_merge.abort(slot)  # closes the merge when the agent did not commit it
         raise
@@ -229,90 +208,47 @@ def _merge_commit(ticket: Ticket, slot: str, run: Run, tip: str, may_resolve: bo
     return _Landing(tip, pr_tip, commit)
 
 
-def _rulings(number: str, slot: str, run: Run) -> _Rulings:
-    """Apply the `restore` rulings on the ticket's files of merged tickets: one commit of the driver. Call it under
-    the merge lock."""
-    paths = {path: answer for path, answer in
-             driver_decisions.ruled(run.state.read()["run"]["questions"], number, MERGED_LOCKED).items()
-             if answer != "redesign"}
-    rulings = _Rulings(run.state.read()["tickets"][number]["tip"], paths)
-    if restore := [path for path, answer in paths.items() if answer == "restore"]:
-        git(slot, "checkout", "-q", run.names.ticket(number))
-        run.restore_merged_files(number, slot, restore)
-    return rulings
+def _red_landing(number: str, slot: str, run: Run, commit: str, record: str) -> None:
+    """A red full gate on `commit`, the commit that would land: a finding of the fix loop, inside the cap."""
+    git(slot, "checkout", "-q", run.names.ticket(number))  # the fixer works on the ticket branch
+    driver_fixloop.red_landing(run, number, slot, commit, record)
 
 
-def _refused(number: str, run: Run, landing: _Landing, rulings: _Rulings) -> None:
-    """The landing check: a locked file of a merged ticket that the landing changes asks a `merged-locked-file`
-    question. A file that an `adopt` ruling names is the ticket's own."""
-    tickets = run.state.read()["tickets"]
-    entry = tickets[number]
-    own = {**tickets, number: {**entry, "locked": entry["locked"] + rulings.adopted()}}
-    changed, error = driver_merge.refused(own, number, landing.pr_tip, landing.commit)
-    if error:
-        raise Blocked(error)
-    if changed:
-        run.ask(number, MERGED_LOCKED, changed,
-                f"git diff {landing.pr_tip[:7]} {landing.commit[:7]} -- {' '.join(changed)}")
-        raise Blocked("; ".join(f"locked file changed: {path}" for path in changed))
-
-
-def _red_landing(number: str, slot: str, run: Run, rulings: _Rulings, commit: str, record: str) -> None:
-    """A red full gate on `commit`, the commit that would land. After `restore` or `adopt` rulings, the restore
-    commit leaves the ticket branch, and each ruled file is asked again, without the option that was tried. Else it
-    is a finding of the fix loop, inside the cap."""
-    if not rulings.paths:
-        git(slot, "checkout", "-q", run.names.ticket(number))  # the fixer works on the ticket branch
-        driver_fixloop.red_landing(run, number, slot, commit, record)
-    if run.state.read()["tickets"][number]["tip"] != rulings.before:
-        driver_review.restore(slot, run.names.ticket(number), rulings.before)
-        run.state.ticket(number, tip=rulings.before)
-        ledger(f"Ticket {number}: the merge gate is red after the restore, so the driver took the restore commit "
-               f"back: the ticket tip is {rulings.before[:7]} again.")
-    run.ask(number, MERGED_LOCKED, list(rulings.paths), record)
-    raise Blocked(f"the full gate is red on {commit[:7]}, record {record}")
-
-
-def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool, rulings: _Rulings) -> _Landing:
-    """The commit to land, with the locked-file check passed and the full gate green. Call it under the merge lock."""
+def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> _Landing:
+    """The commit to land, with the full gate green. Call it under the merge lock."""
     number = ticket.number
     # An earlier try left the slot on its merge commit.
     git(slot, "checkout", "-q", run.names.ticket(number))
     tip = run.state.ticket(number, phase="merge")["tip"]
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
-    _refused(number, run, landing, rulings)
     if landing.commit != landing.pr_tip:
         # The full gate runs on the commit that lands, a fast-forward as well as a merge commit: a fast green record
         # does not count. When the checkout fails, the slot is on another commit and the gate refuses to run.
         git(slot, "checkout", "-q", "--detach", landing.commit)
         if record := run.red_gate(number, slot, landing.commit, driver_gate.FULL):
-            _red_landing(number, slot, run, rulings, landing.commit, record)
+            _red_landing(number, slot, run, landing.commit, record)
     return landing
 
 
-def _land(ticket: Ticket, slot: str, run: Run) -> tuple[_Landing, _Rulings]:
+def _land(ticket: Ticket, slot: str, run: Run) -> _Landing:
     """Move the PR branch to the checked commit. Call it under the merge lock."""
-    rulings = _rulings(ticket.number, slot, run)
-    landing = _checked_landing(ticket, slot, run, True, rulings)
+    landing = _checked_landing(ticket, slot, run, True)
     # git moves the ref only from the tip that the check read, so the check and the move are one step.
     error = driver_merge.land(run.pr, landing.commit, landing.pr_tip)
     if error and run.tip() != landing.pr_tip:
         # Another hand moved the PR branch in between: start again from the new tip, one time, with no conflict agent.
-        landing = _checked_landing(ticket, slot, run, False, rulings)
+        landing = _checked_landing(ticket, slot, run, False)
         error = driver_merge.land(run.pr, landing.commit, landing.pr_tip)
     if error:
         raise Blocked(error)
-    return landing, rulings
+    return landing
 
 
-def _record_landing(state: dict, number: str, landing: _Landing, adopted: list[str]) -> None:
+def _record_landing(state: dict, number: str, landing: _Landing) -> None:
     """The ticket is merged, and `landing.commit` is the PR tip its merge made: a later merge of the ticket replaces
-    it. The ticket locks each `adopted` file from its landed tip on."""
-    entry, pr_tip = state["tickets"][number], landing.commit
-    entry["phase"] = "merged"
-    new = [path for path in adopted if path not in entry["locked"]]
-    entry["locked"] += new
-    entry["held"].update(dict.fromkeys(new, landing.ticket_tip))
+    it."""
+    pr_tip = landing.commit
+    state["tickets"][number]["phase"] = "merged"
     earlier = [landed for landed in state["run"]["landed"] if landed[0] != number]
     state["run"]["landed"] = earlier + [[number, pr_tip]]
 
@@ -322,12 +258,9 @@ def _merge(ticket: Ticket, slot: str, run: Run) -> None:
     number, branch = ticket.number, run.names.ticket(ticket.number)
     # The merge gate and the conflict agent run under the lock: the commit the gate saw is the one that lands.
     with run.merging, during("the merge"):
-        landing, rulings = _land(ticket, slot, run)
-        run.state.update(lambda state: _record_landing(state, number, landing, rulings.adopted()))
+        landing = _land(ticket, slot, run)
+        run.state.update(lambda state: _record_landing(state, number, landing))
     _drop_merged(run.state)
-    for path in rulings.adopted():
-        ledger(f"Ticket {number}: by the ruling (adopt), the ticket locks {path}, so its change to that locked file of "
-               "a merged ticket landed.")
     driver_slots.release(slot)  # git deletes no branch that a worktree has checked out
     kept = "" if driver_merge.delete(branch, run.pr) else f"; {branch} is kept"
     if landing.commit == landing.pr_tip:

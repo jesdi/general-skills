@@ -1,14 +1,12 @@
 """Merges into the PR branch through git plumbing: no checkout, so no slot's tree changes. Only a conflicting merge
-gets a tree: `begin` opens it in the ticket's own slot for the conflict agent.
-
-`refused` is the locked-file check of a landing. The caller holds the merge lock.
+gets a tree: `begin` opens it in the ticket's own slot for the conflict agent. The caller holds the merge lock.
 """
 from __future__ import annotations
 
 import os
 import subprocess
 
-from driver_slots import ancestor, git, names
+from driver_slots import ancestor, git
 
 
 def identity(tip: str, slot: str = ".") -> dict[str, str]:
@@ -68,50 +66,6 @@ def begin(slot: str, pr_tip: str) -> list[str]:
 def abort(slot: str) -> None:
     """Close the merge that `begin` opened."""
     git(slot, "merge", "--abort")
-
-
-def protected(tickets: dict, number: str) -> list[str]:
-    """The locked files of the merged tickets that ticket `number` does not lock itself. `tickets` is that of
-    state.json; a record with no `locked` locked nothing."""
-    merged = {path for entry in tickets.values() if entry.get("phase") == "merged" for path in entry.get("locked") or []}
-    return sorted(merged - set(tickets.get(number, {}).get("locked") or []))
-
-
-def _entries(commit: str, paths: list[str]) -> tuple[dict[str, str], str]:
-    """({path: "mode type object-id"} for each of `paths` that `commit` has, "") or ({}, why git cannot tell)."""
-    tree = git(".", "ls-tree", "-z", f"{commit}^{{commit}}", "--", *paths)
-    if tree.returncode:
-        return {}, f"cannot read the locked files at {commit}: {tree.stderr.strip() or f'git ls-tree exit {tree.returncode}'}"
-    return {path: entry for entry, _, path in (line.partition("\t") for line in names(tree.stdout))}, ""
-
-
-def refused(tickets: dict, number: str, old: str, new: str) -> tuple[list[str], str]:
-    """Why ticket `number` may not land `new` on the PR tip `old`: (each locked file of a merged ticket that is not
-    the same blob with the same mode in both, "") or ([], why git cannot tell). ([], "") lets it land."""
-    paths = protected(tickets, number)
-    if not paths:
-        return [], ""  # `git ls-tree` with no path lists the whole tree
-    (before, error), (after, failed) = _entries(old, paths), _entries(new, paths)
-    if error or failed:
-        return [], error or failed
-    return [path for path in paths if before.get(path) != after.get(path)], ""
-
-
-def changed(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
-    """Each of `paths` that the ticket changed in the tree of `slot`."""
-    # Against the merge base: a file that only the PR branch changed since then is not the ticket's change.
-    base = git(slot, "merge-base", "HEAD", pr_tip).stdout.strip() or pr_tip
-    return names(git(slot, "diff", "--name-only", "-z", base, "--", *paths).stdout) if paths else []
-
-
-def restore(slot: str, pr_tip: str, paths: list[str]) -> list[str]:
-    """Put each of `paths` that the ticket changed back to the version of the PR tip, in the tree of `slot` only; a
-    file the PR tip does not have is removed. Returns those paths."""
-    restored = changed(slot, pr_tip, paths)
-    for path in restored:
-        if git(slot, "checkout", "-q", pr_tip, "--", path).returncode:
-            git(slot, "rm", "-q", "-f", "--", path)
-    return restored
 
 
 def land(pr_branch: str, new: str, old: str) -> str:

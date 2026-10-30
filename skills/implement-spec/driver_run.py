@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import threading
 import time
 from contextlib import contextmanager
@@ -19,19 +18,19 @@ from typing import Callable, Iterator, NamedTuple, NoReturn, TypeVar
 import driver_agents
 import driver_decisions
 import driver_gate
-import driver_merge
 import driver_report
 import driver_review
 import driver_slots
 import driver_state
 from driver_names import Names
-from driver_slots import git, names
+from driver_slots import git
 
 OUT = Path(".agent/implement")
 FINAL = "final"  # the end of run has its reports and gate records under this name, as a ticket has under its number
 _LEDGER = threading.Lock()
 STOPS = ("BLOCKED", "NEEDS_CONTEXT")
 _COMMITS = ("test-writer", "implementer", "fixer")  # the ticket agents whose commits are the ticket's work
+_CHECKED = ("implementer", "fixer", "conflict")  # the ticket agents whose commits may not change a locked file
 # The phase that runs a ticket agent again: the fixer's round runs again after a review of the tip it left.
 _RETRY = {"test-writer": "test-writer", "implementer": "implement", "reviewer": "review", "fixer": "review",
           "conflict": "merge"}
@@ -116,11 +115,9 @@ class Run:
     def agent(self, role: str, number: str, slot: str, values: dict[str, str], **options) -> dict:
         """Run one role and return its accepted report. `options` are those of `_attempts`."""
         if role == "test-writer":
-            # Its report may change a locked file of a merged ticket only when it lists the file.
-            merged = driver_merge.protected(self.state.read()["tickets"], number)
-            options["check"] = {**(options.get("check") or {}), "merged": merged, "pr": self.tip()}
-            values = {**values, "protected": " ".join(merged) or "none"}
-            if options["check"].get("correction"):
+            others = driver_review.others(self.state.read()["tickets"], number)
+            values = {**values, "protected": " ".join(others) or "none"}
+            if (options.get("check") or {}).get("correction"):
                 options["notes"] = [*options.get("notes", ()), "corrected"]
         report = _attempts(self, role, number, slot, values, **options)
         if role == "test-writer":
@@ -132,6 +129,17 @@ class Run:
                 self._ask_stop(role, number, slot, report, options.get("fix_round", 0))
             raise Stopped(why, report)
         return report
+
+    def locked_check(self, role: str, number: str) -> dict:
+        """The context of the locked-file checks of a report, read when the agent ends: the locked files of every other
+        ticket whose test-writer has run, and for a ticket role that may not change a locked file, its own."""
+        if number == FINAL or role not in ("test-writer", *_CHECKED):
+            return {}
+        tickets = self.state.read()["tickets"]
+        check = {"others": driver_review.others(tickets, number), "pr": f"refs/heads/{self.pr}"}
+        if role in _CHECKED:
+            check["own"] = (tickets[number]["test_writer_sha"], tickets[number]["locked"])
+        return check
 
     def _ask_stop(self, role: str, number: str, slot: str, report: dict, fix_round: int) -> None:
         """The `locked-test` question of an implementer or a fixer that says a locked test contradicts the spec: the
@@ -164,9 +172,9 @@ class Run:
         if record := self.red_gate(number, slot, commit, tier):
             raise Blocked(f"the {tier} gate is red on {commit[:7]}, record {record}")
 
-    def red_gate(self, number: str, slot: str, commit: str, tier: str, restored: list[str] | tuple = ()) -> str:
+    def red_gate(self, number: str, slot: str, commit: str, tier: str) -> str:
         """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green. The fast gate
-        checks the ticket's locked files and the `restored` ones, as the state holds them now."""
+        checks the ticket's locked files, as the state holds them now."""
         state = self.state.read()
         if commit in _gate_record(state, number)["green_gates"][tier]:
             return ""
@@ -174,7 +182,7 @@ class Run:
         if at != commit:
             raise Blocked(f"the slot is at {at[:7]}, not at {commit[:7]}: the {tier} gate did not run")
         command = self.args.fast_gate if tier == driver_gate.FAST else self.args.gate
-        locked = list(dict.fromkeys([*state["tickets"][number]["locked"], *restored])) if tier == driver_gate.FAST else []
+        locked = state["tickets"][number]["locked"] if tier == driver_gate.FAST else []
         green, record, killed = driver_gate.run(command, tier, slot, OUT / number, self.pr, locked)
         for sentence in killed:
             ledger(f"{_owner(number)}: {sentence}.")
@@ -189,43 +197,6 @@ class Run:
             return str(record)
         ledger(f"{_owner(number)}: the {tier} gate is green on {commit[:7]}, record {record}.")
         return ""
-
-    def restore_locked_files(self, number: str, slot: str) -> list[str]:
-        """Before a test-writer correction: put each locked file the implementer changed back to its locked
-        version in one commit of the driver, so the correction starts from the locked versions on a clean index and
-        its commit carries no change of the implementer. Other work in the tree stays. Returns the paths."""
-        tickets = self.state.read()["tickets"]
-        paths = (driver_review.restore_locked(slot, tickets[number])
-                 + driver_merge.restore(slot, self.tip(), driver_merge.protected(tickets, number)))
-        self._commit_restored(number, slot, paths, "implement-spec: restore the locked files before the correction")
-        for path in paths:
-            ledger(f"Ticket {number}: {path} was not the locked version at the correction: the driver restored it in "
-                   "a commit, so the correction starts from the locked version.")
-        return paths
-
-    def restore_merged_files(self, number: str, slot: str, paths: list[str]) -> list[str]:
-        """Before a landing, by a `restore` ruling: put each of `paths` that is a locked file of a merged ticket and
-        that the ticket changed back to the version of the PR branch, in one commit of the driver. Returns those."""
-        protected = driver_merge.protected(self.state.read()["tickets"], number)
-        restored = driver_merge.restore(slot, self.tip(), [path for path in paths if path in protected])
-        self._commit_restored(number, slot, restored,
-                              "implement-spec: restore the locked files of merged tickets before the landing")
-        for path in restored:
-            ledger(f"Ticket {number}: by the ruling (restore), the driver put back {path}, a locked file of a merged "
-                   "ticket, at the version of the PR branch in a commit before the landing.")
-        return restored
-
-    def _commit_restored(self, number: str, slot: str, paths: list[str], words: str) -> None:
-        """Commit the restored `paths` in the slot as a commit of the driver, and make it the ticket tip."""
-        # A path whose change was never committed is back at HEAD already, and `git commit -- <path>` refuses it.
-        changed = names(git(slot, "diff", "--name-only", "-z", "HEAD", "--", *paths).stdout) if paths else []
-        if not changed:
-            return
-        made = subprocess.run(["git", "-C", slot, "commit", "-q", "--no-verify", "-m", words, "--", *changed],
-                              capture_output=True, text=True, env={**os.environ, **driver_merge.identity("HEAD", slot)})
-        if made.returncode:
-            raise Blocked(f"the driver cannot commit the restored locked files: {made.stderr.strip()}")
-        self.state.ticket(number, tip=driver_slots.head(slot))
 
 
 def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: driver_review.Config,
@@ -391,6 +362,7 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
         driver_agents.settle_report(report)
+        context.update(run.locked_check(role, number))
         error, rerun_lines, same = _rejection(role, number, code, minutes, report, context, alone, detached)
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:

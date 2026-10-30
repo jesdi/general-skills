@@ -60,21 +60,6 @@ def review(nn="01", findings=(), **extra):
     return {"report": report, **extra}
 
 
-# ---------------------------------------------------------------- locked-file check
-
-def test_a_changed_locked_file_is_a_critical_finding_that_starts_a_fix_round(tmp_path):
-    rig = Review(tmp_path)
-    locked = tw("01")["files"]
-    cheat = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", "tests/test_01.py": "# edited\n"})
-    steps = plan(**{"01/implementer": [cheat], "01/fixer": [fix("01", 1, files={**locked, "demo/export.py": "x = 1\n"})]})
-    rig.run(steps)
-    assert rig.code == 0, rig.output()
-    (line,) = rig.led("locked file changed: tests/test_01.py")
-    assert "critical" in line.lower()
-    assert len(rig.calls("01", "fixer")) == 1 and rig.state()["tickets"]["01"]["round"] == 1
-    assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == locked["tests/test_01.py"]
-
-
 # ---------------------------------------------------------------- the reviewer alone
 
 @pytest.fixture(scope="module")
