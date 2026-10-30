@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 import jsonschema
 
@@ -245,16 +246,22 @@ def _locked_file(name: str, locked: list[str]) -> str:
     return found[0] if len(found) == 1 else ""
 
 
-def disputes(role: str, report: dict, locked: list[str]) -> list[tuple[str, str, str]]:
-    """(locked file, test, reason) for each concern `locked test contradicts spec: <file>::<test>: <reason>` of a
-    BLOCKED implementer or fixer report; the file is "" when it names no file of `locked`."""
+class Dispute(NamedTuple):
+    """One concern `locked test contradicts spec: <file>::<test>: <reason>` of a BLOCKED implementer or fixer."""
+    file: str  # the locked file it names; "" when it names no file of the ticket's `locked`
+    test: str
+    reason: str
+
+
+def disputes(role: str, report: dict, locked: list[str]) -> list[Dispute]:
+    """The disputes of a BLOCKED implementer or fixer report, each file resolved against `locked`."""
     if role not in DISPUTING or report.get("status") != "BLOCKED":
         return []
     found = []
     for concern in report["concerns"]:
         if concern.startswith(CONTRADICTS):
             test, _, reason = concern[len(CONTRADICTS):].strip().partition(": ")
-            found.append((_locked_file(test.partition("::")[0], locked), test, reason))
+            found.append(Dispute(_locked_file(test.partition("::")[0], locked), test, reason))
     return found
 
 
@@ -262,8 +269,8 @@ def _dispute_errors(role: str, report: dict, context: dict) -> list[str]:
     """A dispute names a locked file of the ticket, and leaves no uncommitted change: the arbitration is read-only
     and the correction commits."""
     found = disputes(role, report, context.get("own", ("", []))[1])
-    errors = [f"the dispute of {test or 'no test'} names no locked file of the ticket: write it as `{CONTRADICTS} "
-              "<locked file>::<test>: <reason>`" for file, test, _ in found if not file]
+    errors = [f"the dispute of {dispute.test or 'no test'} names no locked file of the ticket: write it as "
+              f"`{CONTRADICTS} <locked file>::<test>: <reason>`" for dispute in found if not dispute.file]
     if found and _git(context["repo"], "status", "--porcelain"):
         errors.append("a dispute leaves no uncommitted change: commit your work, then report the dispute")
     return errors

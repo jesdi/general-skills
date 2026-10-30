@@ -10,14 +10,21 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import NoReturn
+from typing import NamedTuple, NoReturn
 
 import driver_report
 import driver_review
 import driver_slots
-from driver_run import OUT, Blocked, Call, Disputed, Run, during, ledger, retry_point
+from driver_report import Dispute
+from driver_run import OUT, Blocked, Call, Run, during, ledger, retry_point
 
-Reading = tuple[str, str, str, str, str]  # (locked file, test, requirement, the first reading, the second reading)
+class Reading(NamedTuple):
+    """The two readings of a locked test that a `spec-ambiguous` question asks about."""
+    file: str  # the locked file
+    test: str
+    requirement: str
+    first: str  # the reading of its ruling or of its one correction
+    second: str  # the reading of the new dispute or finding
 
 
 def _rulings(entry: dict) -> str:
@@ -32,10 +39,10 @@ def agent(run: Run, call: Call) -> dict:
         entry = run.state.read()["tickets"][call.number]
         values = {**call.values, "locked": " ".join(entry["locked"]), "rulings": _rulings(entry)}
         ruled = call.role in driver_report.DISPUTING and bool(entry["disputes"])
-        try:
-            return run.agent(replace(call, values=values, notes=[*call.notes, *["ruled"] * ruled]))
-        except Disputed as disputed:
-            _settle(run, replace(call, values=values), disputed.report)
+        report = run.agent(replace(call, values=values, notes=[*call.notes, *["ruled"] * ruled], may_dispute=True))
+        if not (disputed := driver_report.disputes(call.role, report, entry["locked"])):
+            return report
+        _settle(run, replace(call, values=values), disputed)
         call = replace(call, values={**call.values, "start_sha": driver_slots.head(call.slot)})
 
 
@@ -45,18 +52,18 @@ def ambiguous(run: Run, number: str, readings: list[Reading], resume: str, field
     asked = run.state.read()["run"]["questions"]
     n = 1 + sum((q["ticket"], q["kind"]) == (number, "spec-ambiguous") for q in asked)
     path = OUT / number / f"spec-ambiguous-{n}.json"
-    subjects = [f"{test}{f', {requirement}' * bool(requirement)}: the first reading: {first}; the second reading: "
-                f"{second}" for _, test, requirement, first, second in readings]
-    findings = [{"severity": "critical", "file": file, "line": 0, "title": subject, "kind": "ruling",
-                 "evidence": f"correct the test to the second reading: {second}"}
-                for (file, *_, second), subject in zip(readings, subjects)]
+    subjects = [f"{one.test}{f', {one.requirement}' * bool(one.requirement)}: the first reading: {one.first}; the "
+                f"second reading: {one.second}" for one in readings]
+    findings = [{"severity": "critical", "file": one.file, "line": 0, "title": subject, "kind": "ruling",
+                 "evidence": f"correct the test to the second reading: {one.second}"}
+                for one, subject in zip(readings, subjects)]
     path.write_text(json.dumps(findings, indent=1) + "\n")
     subject = "; ".join(subjects)
     run.ask(number, "spec-ambiguous", [subject], str(path), resume, **fields)
     raise Blocked(f"the spec reads two ways on a locked test: {subject}")
 
 
-def kept(questions: list[dict], number: str) -> set[str]:
+def kept_files(questions: list[dict], number: str) -> set[str]:
     """The locked files of the `spec-ambiguous` questions of `number` answered `keep-test`."""
     return {finding["file"] for q in questions if (q["ticket"], q["kind"], q["answer"]) ==
             (number, "spec-ambiguous", "keep-test") for finding in json.loads(Path(q["evidence"][0]).read_text())}
@@ -70,10 +77,11 @@ def correction(questions: list[dict], number: str) -> dict:
     return answered[-1] if answered else {}
 
 
-def seconds(found: list[tuple[str, str, str]], record: dict) -> list[Reading]:
-    """The readings of each (file, test, reason) in `found` whose file `record` (`disputes` or `corrected`) has."""
-    return [(file, test, record[file]["requirement"], record[file]["reason"], reason) for file, test, reason in found
-            if file in record]
+def second_readings(found: list[Dispute], record: dict) -> list[Reading]:
+    """The readings of each dispute in `found` whose file `record` (`disputes` or `corrected`) has: the record's is
+    the first, the dispute's the second."""
+    return [Reading(one.file, one.test, record[one.file]["requirement"], record[one.file]["reason"], one.reason)
+            for one in found if one.file in record]
 
 
 def _record(entry: dict, ruled: dict[str, dict], wrong: dict[str, dict]) -> None:
@@ -82,21 +90,20 @@ def _record(entry: dict, ruled: dict[str, dict], wrong: dict[str, dict]) -> None
                                for file, ruling in wrong.items()})
 
 
-def _settle(run: Run, call: Call, report: dict) -> None:
+def _settle(run: Run, call: Call, disputed: list[Dispute]) -> None:
     """A locked file disputed before asks `spec-ambiguous`. Else the reviewer rules on each disputed test, a test
     ruled `test-wrong` gets its one correction (a file corrected before asks `spec-ambiguous`), and the ticket record
     keeps the rulings."""
     number = call.number
     entry = run.state.read()["tickets"][number]
-    disputed = driver_report.disputes(call.role, report, entry["locked"])
     resume = retry_point(call.role, driver_slots.head(call.slot), call.fix_round)
-    if again := seconds(disputed, entry["disputes"]):
+    if again := second_readings(disputed, entry["disputes"]):
         ambiguous(run, number, again, *resume)
     n = 1 + len(entry["disputes"])
     ruled = _arbitrate(run, call, disputed, n)
     wrong = {file: ruling for file, ruling in ruled.items() if ruling["ruling"] == "test-wrong"}
-    if again := seconds([(file, ruling["test"], ruling["reason"]) for file, ruling in wrong.items()],
-                         entry["corrected"]):
+    if again := second_readings([Dispute(file, ruling["test"], ruling["reason"]) for file, ruling in wrong.items()],
+                                entry["corrected"]):
         run.state.update(lambda state: _record(state["tickets"][number], ruled, {}))  # the file is arbitrated
         ambiguous(run, number, again, *resume)
     if wrong:
@@ -104,12 +111,12 @@ def _settle(run: Run, call: Call, report: dict) -> None:
     run.state.update(lambda state: _record(state["tickets"][number], ruled, wrong))
 
 
-def _arbitrate(run: Run, call: Call, disputed: list[tuple[str, str, str]], n: int) -> dict[str, dict]:
+def _arbitrate(run: Run, call: Call, disputed: list[Dispute], n: int) -> dict[str, dict]:
     """The reviewer's ruling on each disputed locked file, from `arbitration-<n>.json`."""
     number, slot = call.number, call.slot
-    tip, files = driver_slots.head(slot), {test: file for file, test, _ in disputed}
+    tip, files = driver_slots.head(slot), {one.test: one.file for one in disputed}
     asked = {**call.values, "role": call.role, "start_sha": tip,
-             "disputed": "".join(f"- {test}: {reason}\n" for _, test, reason in disputed),
+             "disputed": "".join(f"- {one.test}: {one.reason}\n" for one in disputed),
              "dispute_report": os.path.relpath(OUT / number / f"{call.role}-{call.fix_round}.json", slot)}
     with during("the arbitration"):
         report = run.read_only(number, slot, call.values["branch"], tip, lambda: run.agent(Call(
