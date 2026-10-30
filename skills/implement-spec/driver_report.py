@@ -75,15 +75,20 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
     file at the branch tip: a deleted file holds no test that a review could prove (issue #136)."""
     repo, branch, commits = context["repo"], context["branch"], _shas(report)
     new = _git(repo, "rev-list", f"{context['start']}..{branch}")
-    errors = [f"commit {sha[:7]} is not a new commit on {branch}"
-              for sha in commits if not any(n.startswith(sha) for n in new)]
-    if locked := report.get("locked"):
-        changed = _git(repo, "log", "--name-only", "-z", "--format=", f"{context['start']}..{branch}", end="\0")
-        errors += [f"locked path {path} is not in the role's commits" for path in locked if path not in changed]
-        present = driver_locked.present(repo, branch, locked)
-        errors += [f"locked path {path} is not a file at the tip of {branch}: list in `locked` only files you keep"
-                   for path in locked if path in changed and path not in present]
-    return errors
+    return [f"commit {sha[:7]} is not a new commit on {branch}"
+            for sha in commits if not any(n.startswith(sha) for n in new)] + _locked_path_errors(report, context)
+
+
+def _locked_path_errors(report: dict, context: dict) -> list[str]:
+    """Every locked path is in a commit of the role and is a file at the branch tip."""
+    repo, branch, locked = context["repo"], context["branch"], report.get("locked", [])
+    if not locked:
+        return []
+    changed = _git(repo, "log", "--name-only", "-z", "--format=", f"{context['start']}..{branch}", end="\0")
+    present = driver_locked.present(repo, branch, locked)
+    return [f"locked path {path} is not in the role's commits" for path in locked if path not in changed] + [
+        f"locked path {path} is not a file at the tip of {branch}: list in `locked` only files you keep"
+        for path in locked if path in changed and path not in present]
 
 
 def _unchanged_errors(role: str, report: dict, context: dict) -> list[str]:
