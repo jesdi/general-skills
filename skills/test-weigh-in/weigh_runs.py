@@ -64,8 +64,10 @@ def coverage_run(python, repo, overlay, pytest_args):
         open(rc, "w").close()
         data, report = os.path.join(tmp, "data"), os.path.join(tmp, "report.json")
         cov = [str(python), "-m", "coverage"]
-        _pytest(python, repo, overlay, pytest_args, tmp, env={"COVERAGE_RCFILE": rc},
-                runner=["-m", "coverage", "run", "--branch", f"--data-file={data}", f"--source={repo}", "--omit=*/.venv/*,*/venv/*"])
+        run, _ = _pytest(python, repo, overlay, pytest_args, tmp, env={"COVERAGE_RCFILE": rc},
+                         runner=["-m", "coverage", "run", "--branch", f"--data-file={data}", f"--source={repo}", "--omit=*/.venv/*,*/venv/*"])
+        if run.returncode not in RAN:
+            raise SetupError(f"pytest under coverage exited {run.returncode} without running the tests:\n" + run.stdout + run.stderr)
         env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
         proc = subprocess.run([*cov, "json", f"--data-file={data}", "-o", report, "-q"],
                               cwd=repo, env=env, capture_output=True, text=True)

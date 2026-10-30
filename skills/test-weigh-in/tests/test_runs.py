@@ -81,6 +81,25 @@ def test_a_run_that_did_not_execute_the_tests_writes_no_snapshot(tmp_path, home,
     assert snapshots(home, KEY) == []
 
 
+COVERAGE_ONLY_FAILURE = '''import sys
+
+if "coverage" in sys.modules:
+    raise RuntimeError("collection fails under coverage")
+
+
+def test_ok():
+    pass
+'''
+
+
+def test_a_coverage_run_that_did_not_execute_the_tests_writes_no_snapshot(tmp_path, home, cache):
+    repo = committed(tmp_path, {"tests/test_coverage_only.py": COVERAGE_ONLY_FAILURE})
+    result = weigh(repo, home, cache=cache)
+    assert result.returncode != 0
+    assert "under coverage" in result.stderr and "collection fails under coverage" in result.stderr
+    assert snapshots(home, KEY) == []
+
+
 def test_python_files_with_spaces_are_counted(tmp_path, home, cache):
     repo = committed(tmp_path, {"demo/space name.py": "A = 1\nB = 2\n"})
     result = weigh(repo, home, cache=cache)
