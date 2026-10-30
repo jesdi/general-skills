@@ -36,7 +36,7 @@ from test_cli import RUN, git, models_file, snapshot, three, ticket
 from test_final import Final
 from test_review import HOOKED, Review, cli
 from test_stops import UNATTENDED, blocked as contradicted
-from test_walk import GATE, Rig, impl, make_env, plan, tw
+from test_walk import GATE, Rig, fix, impl, make_env, plan, tw
 
 T01, T03, SHARED = "tests/test_01.py", "tests/test_03.py", "tests/test_shared.py"
 LOCKED_01, LOCKED_03 = tw("01")["files"][T01], tw("03")["files"][T03]
@@ -176,7 +176,7 @@ def test_a_test_writer_that_changes_a_locked_file_of_a_merged_ticket_and_does_no
         assert rig.code == 0, rig.output()
         assert phase(rig, "02") == "merged" and on_pr(rig, T01) == two and not rig.led("locked file changed")
     else:
-        assert rig.code == 1, rig.output()
+        assert rig.code == 2, rig.output()
         assert rig.led("02", "BLOCKED", T01) and phase(rig, "02") == "blocked"
         assert not rig.calls("02", "implementer") and on_pr(rig, T01) == LOCKED_01
 
@@ -340,7 +340,7 @@ def test_a_driver_on_another_pr_branch_in_another_worktree_runs_while_the_first_
 
 ENDS = {
     0: (plan(), {}, ()),
-    1: (plan(), {"red": ["ticket/feat%2Fcsv/01"]}, ()),
+    1: (plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), {"red": ["ticket/feat%2Fcsv/01"]}, ()),
     2: (plan(**{"01/implementer": [contradicted()]}), {}, ()),
     3: (plan(), {}, ("--prepare", "false")),  # slot 2 cannot be made: the run has started and holds the lock
     130: (plan(**{"01/test-writer": [{**tw("01"), "wait": ["never"]}]}), {}, ()),

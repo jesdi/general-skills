@@ -505,7 +505,7 @@ def test_unattended_with_everything_validated_pushes_once_opens_the_pr_and_write
 
 def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
     rig = Final(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
-    rig.run(plan(), *UNATTENDED)
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert rig.pushes() == [] and not rig.prs() and not ref(rig.origin, "refs/heads/feat/csv")
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}

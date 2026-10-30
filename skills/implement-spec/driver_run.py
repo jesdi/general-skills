@@ -14,7 +14,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator, NamedTuple, TypeVar
+from typing import Callable, Iterator, NamedTuple, NoReturn, TypeVar
 
 import driver_agents
 import driver_decisions
@@ -30,6 +30,11 @@ from driver_slots import git, names
 OUT = Path(".agent/implement")
 FINAL = "final"  # the end of run has its reports and gate records under this name, as a ticket has under its number
 _LEDGER = threading.Lock()
+STOPS = ("BLOCKED", "NEEDS_CONTEXT")
+_COMMITS = ("test-writer", "implementer", "fixer")  # the ticket agents whose commits are the ticket's work
+# The phase that runs a ticket agent again: the fixer's round runs again after a review of the tip it left.
+_RETRY = {"test-writer": "test-writer", "implementer": "implement", "reviewer": "review", "fixer": "review",
+          "conflict": "merge"}
 T = TypeVar("T")
 
 
@@ -83,6 +88,7 @@ class Ask(NamedTuple):
     kind: str
     subjects: list[str]  # one question per subject
     report: str  # the evidence
+    resume: str  # the phase a `retry` takes the ticket back to
     fields: dict  # what the ticket record gets with the stop
 
 
@@ -104,8 +110,8 @@ class Run:
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
 
-    def ask(self, number: str, kind: str, subjects: list[str], report: str, **fields) -> None:
-        self.asks[number] = Ask(kind, subjects, report, fields)
+    def ask(self, number: str, kind: str, subjects: list[str], report: str, resume: str = "", **fields) -> None:
+        self.asks[number] = Ask(kind, subjects, report, resume, fields)
 
     def agent(self, role: str, number: str, slot: str, values: dict[str, str], **options) -> dict:
         """Run one role and return its accepted report. `options` are those of `_attempts`."""
@@ -119,27 +125,21 @@ class Run:
         report = _attempts(self, role, number, slot, values, **options)
         if role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
-        if report.get("status") in ("BLOCKED", "NEEDS_CONTEXT"):
+        if report.get("status") in STOPS:
             concerns = "; ".join(report["concerns"]) or "no concern given"
             why = f"the {role} reported {report['status']}: {concerns}"
             if number != FINAL:
-                self._ask_stop(role, number, slot, report, why, options.get("fix_round", 0))
+                self._ask_stop(role, number, slot, report, options.get("fix_round", 0))
             raise Stopped(why, report)
         return report
 
-    def _ask_stop(self, role: str, number: str, slot: str, report: dict, why: str, fix_round: int) -> None:
-        """The question of a stopped implementer or fixer: `locked-test` when it says a locked test contradicts the
-        spec, else `<role>-stopped` (issue #123). Its commits stay: after the ruling the ticket goes on from them."""
-        if role not in ("implementer", "fixer"):
-            return
-        evidence, tip = str(OUT / number / f"{role}-{fix_round}.json"), driver_slots.head(slot)
+    def _ask_stop(self, role: str, number: str, slot: str, report: dict, fix_round: int) -> None:
+        """The `locked-test` question of an implementer or a fixer that says a locked test contradicts the spec: the
+        one stop of a ticket agent that `_attempts` returns. Its commits stay: after the ruling the ticket goes on
+        from them."""
         if subject := driver_decisions.contradicted(role, report):
-            self.ask(number, "locked-test", [subject], evidence, tip=tip)
-        elif role == "implementer":
-            self.ask(number, "implementer-stopped", [why], evidence, tip=tip)
-        else:
-            # The round that stopped does not count: `retry` reviews the tip and runs that round again.
-            self.ask(number, "fixer-stopped", [why], evidence, tip=tip, round=fix_round - 1)
+            self.ask(number, "locked-test", [subject], str(OUT / number / f"{role}-{fix_round}.json"),
+                     tip=driver_slots.head(slot))
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""
@@ -276,18 +276,63 @@ def _timeout_lines(role: str, minutes: float, context: dict, alone: Callable[[],
     return driver_agents.render("timeout-shared", values)
 
 
-def _rejection(role: str, code: int | None, minutes: float, report: Path, context: dict, alone: Callable[[], bool],
-               detached: bool) -> tuple[str, str]:
-    """(why the attempt is rejected, the lines the rerun prompt gets); ("", ...) when the report is accepted."""
+def _stop(role: str, number: str, report: Path) -> str:
+    """Why the valid report of a ticket agent is a stop: BLOCKED or NEEDS_CONTEXT and no dispute; else ""."""
+    accepted = json.loads(report.read_text())
+    if number == FINAL or accepted["status"] not in STOPS or driver_decisions.contradicted(role, accepted):
+        return ""
+    return f"it reported {accepted['status']}: {'; '.join(accepted['concerns']) or 'no concern given'}"
+
+
+def _rejection(role: str, number: str, code: int | None, minutes: float, report: Path, context: dict,
+               alone: Callable[[], bool], detached: bool) -> tuple[str, str, bool]:
+    """(why the attempt is rejected, the lines the rerun prompt gets, whether the rerun stays on the same entry);
+    ("", ...) when the report is accepted. A stop of a ticket agent is rejected too."""
     branch, tip = context["branch"], context["start"]
     # Read-only agents share a slot, and a rebase is on a detached HEAD: there the driver has no branch to reset.
     owns_branch = role not in driver_agents.READ_ONLY and not detached
     if owns_branch and (moved := _reset_if_moved(context["repo"], branch, tip)):
-        return moved, driver_agents.render("moved", {"branch": branch, "tip": tip})
+        return moved, driver_agents.render("moved", {"branch": branch, "tip": tip}), True
     if code is None:
-        return f"timed out after {minutes:g} minutes", _timeout_lines(role, minutes, context, alone)
-    error = "; ".join(driver_report.validate(context["template"], str(report), context))
-    return error, driver_agents.render("rerun", {"error": error})
+        return f"timed out after {minutes:g} minutes", _timeout_lines(role, minutes, context, alone), True
+    error = "; ".join(driver_report.validate(context["template"], str(report), context)) or _stop(role, number, report)
+    return error, driver_agents.render("rerun", {"error": error}), False
+
+
+def _rerun_entry(run: Run, role: str, number: str, entry: str, entries: list[str] | None) -> str:
+    """The entry of the rerun after a stop or a rejection: the next one of the list, wrapping to the first. The end of
+    run reruns on the same entry."""
+    if number == FINAL:
+        return entry
+    entries = entries or run.models[role]
+    return entries[(entries.index(entry) + 1) % len(entries)]
+
+
+def _cli_failure(role: str, entry: str, code: int | None, report: Path, log: Path) -> str:
+    """Why the run setup is wrong, when the CLI exited with an error and no report: it did not do the role; else ""."""
+    if code in (None, 0) or report.exists():
+        return ""
+    return f"the {role} on {entry} exited {code} with no report: {driver_agents.last_words(log)}"
+
+
+def _ask_blocked(run: Run, role: str, number: str, slot: str, report: Path, error: str, fix_round: int) -> None:
+    """The `ticket-blocked` question of a ticket agent whose rerun stopped or was rejected too. `retry` takes the
+    ticket back to the phase that runs the role again, from the tip it left; the round of a fixer does not count."""
+    fields = {"tip": driver_slots.head(slot)} if role in _COMMITS else {}
+    if role == "fixer":
+        fields["round"] = fix_round - 1
+    run.ask(number, "ticket-blocked", [f"the {role}: {error}"], str(report), _RETRY[role], **fields)
+
+
+def _give_up(run: Run, role: str, number: str, slot: str, report: Path, error: str, failed: str, same: bool,
+             fix_round: int) -> NoReturn:
+    """After the rerun failed too: Halted for a CLI that wrote no report, else Blocked, with a `ticket-blocked`
+    question when a ticket agent stopped or was rejected."""
+    if failed:
+        raise Halted(failed)
+    if not (same or number == FINAL):
+        _ask_blocked(run, role, number, slot, report, error, fix_round)
+    raise Blocked(error)
 
 
 def _first_prompt(template: str, values: dict[str, str], notes: tuple | list, report: str) -> str:
@@ -314,11 +359,14 @@ def _command(run: Run, role: str, entry: str, prompt: str, report: str) -> list[
 
 def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str], notes: tuple | list = (),
               entry: str = "", fix_round: int = 0, check: dict | None = None, template: str = "",
-              alone: Callable[[], bool] = lambda: True, detached: bool = False) -> dict:
-    """Run one role in its slot, with at most one rerun, and return the accepted report.
+              alone: Callable[[], bool] = lambda: True, detached: bool = False, entries: list[str] | None = None) -> dict:
+    """Run one role in its slot, with at most one rerun, and return the accepted report. A ticket agent that stops or
+    is rejected reruns on the next entry of its list; a timeout or a moved branch reruns on the same entry. A ticket
+    agent whose rerun stops or is rejected too asks `ticket-blocked`.
 
     notes      templates whose lines the first prompt gets after the role's own
     entry      the model entry, when it is not the first of the role's list
+    entries    the list `entry` is from, when it is not the role's
     fix_round  the K of the files `<role>-<K>.json`, `.log` and `.prompt.md`
     check      more context for the report validation (driver_report.validate)
     template   the prompt and schema, when it is not the one named after the role
@@ -331,10 +379,11 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
     report_in_slot = os.path.relpath(report, slot)  # the agent works in its slot
     context = {"repo": slot, "branch": values["branch"], "start": values["start_sha"], "log": str(log),
                "template": template or role, **(check or {})}
-    argv = _command(run, role, entry, os.path.relpath(prompt, slot), report_in_slot)
     text = _first_prompt(context["template"], values, notes, report_in_slot)
-    minutes, error, failed = run.args.timeout[role], "", ""
+    rerun_on = _rerun_entry(run, role, number, entry, entries)
+    minutes, error, failed, same = run.args.timeout[role], "", "", True
     for _ in range(2):
+        argv = _command(run, role, entry, os.path.relpath(prompt, slot), report_in_slot)
         prompt.write_text(text)
         report.unlink(missing_ok=True)
         Path(driver_agents.last_message(report)).unlink(missing_ok=True)
@@ -342,17 +391,14 @@ def _attempts(run: Run, role: str, number: str, slot: str, values: dict[str, str
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
         driver_agents.settle_report(report)
-        error, rerun_lines = _rejection(role, code, minutes, report, context, alone, detached)
+        error, rerun_lines, same = _rejection(role, number, code, minutes, report, context, alone, detached)
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:
             return json.loads(report.read_text())
-        # A CLI that exits with an error and no report did not do the role: the run setup is wrong, not the ticket.
-        failed = "" if code in (None, 0) or report.exists() else (
-            f"the {role} on {entry} exited {code} with no report: {driver_agents.last_words(log)}")
+        failed = _cli_failure(role, entry, code, report, log)
         # The rerun prompt is the first prompt, the rejection, then the same ending again.
         text += rerun_lines + driver_agents.tail(text, report_in_slot)
         if code is None:
             minutes *= 2
-    if failed:
-        raise Halted(failed)
-    raise Blocked(error)
+        entry = entry if same else rerun_on
+    _give_up(run, role, number, slot, report, error, failed, same, fix_round)

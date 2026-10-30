@@ -1,7 +1,7 @@
 """Human stops as bounded questions: the question kinds, decisions.json and what an answer does.
 
 A question in state.json `run.questions`; `answer` is None while it is open:
-    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer}
+    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, resume, answer}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ CONTRADICTS = "locked test contradicts spec:"
 class Option(NamedTuple):
     description: str
     ruling: str
-    fields: dict  # what the ticket record gets when its stop is settled; {} keeps the ticket BLOCKED
+    fields: dict  # what the ticket record gets when its stop is settled, texts formatted with the question; {} keeps
+    # the ticket BLOCKED
 
 
 class Kind(NamedTuple):
@@ -75,64 +76,19 @@ KINDS = {
          "redesign": Option(
             "Keep the ticket BLOCKED. The design changes before more work on it.",
             "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    "review-stopped": Kind(
+    "ticket-blocked": Kind(
         True,
-        "Ticket {ticket}: the reviewer stopped: {subject}",
-        "The reviewer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, so the review did not end. Ticket "
-        "{ticket} is BLOCKED and each ticket that it blocks waits.",
+        "Ticket {ticket}: an agent stopped or was rejected, and its rerun too: {subject}",
+        "The agent ran two times, the second time on the next entry of its model list, and stopped or was rejected "
+        "both times. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
         "retry",
         {"retry": Option(
-            "The reviewer runs again.",
-            "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
-         "accept": Option(
-            "The reviewer runs again, and from now on a BLOCKED or NEEDS_CONTEXT report of the reviewer does not "
-            "stop the ticket: the review goes on with its findings.",
-            "Ruling: {ticket} review goes on past this stop (accept): {subject}.", {"phase": "review"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    "review-rejected": Kind(
-        True,
-        "Ticket {ticket}: the driver rejected the reviewer two times: {subject}",
-        "The driver rejected the report of the reviewer of ticket {ticket}, and the report of its rerun too, so "
-        "the review did not end. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
-        "retry",
-        {"retry": Option(
-            "The reviewer runs again, and its first prompt says why the driver rejected its report.",
-            "Ruling: {ticket} review runs again (retry): {subject}.", {"phase": "review"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    "implementer-stopped": Kind(
-        True,
-        "Ticket {ticket}: the implementer stopped: {subject}",
-        "The implementer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, and no concern says that a locked test "
-        "contradicts the spec. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
-        "retry",
-        {"retry": Option(
-            "The implementer runs again from the tip it left.",
-            "Ruling: {ticket} implementer runs again (retry): {subject}.", {"phase": "implement"}),
-         "accept-tip": Option(
-            "The implementer does not run again: the driver gates and reviews the tip it left, and the fix rounds "
-            "close what the review finds.",
-            "Ruling: {ticket} tip goes to the gate and the review as it is (accept-tip): {subject}.",
-            {"phase": "gate"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
-    "fixer-stopped": Kind(
-        True,
-        "Ticket {ticket}: the fixer stopped: {subject}",
-        "The fixer of ticket {ticket} reported BLOCKED or NEEDS_CONTEXT, and no concern says that a locked test "
-        "contradicts the spec. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
-        "retry",
-        {"retry": Option(
-            "The round that stopped does not count: the driver gates and reviews the tip the fixer left, and a fixer "
-            "runs that round again on what the review finds.",
-            "Ruling: {ticket} fix round runs again (retry): {subject}.", {"phase": "review"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
+            "The role runs again on its first entry from the tip the ticket left, with its one rerun on the next "
+            "entry.",
+            "Ruling: {ticket} runs again (retry): {subject}.", {"phase": "{resume}"}),
+         "edit": Option(
+            "Keep the ticket BLOCKED, so the spec or the ticket can be edited before more work on it.",
+            "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", {})}),
     "merged-locked-file": Kind(
         True,
         "Ticket {ticket}: the landing would change the locked file of a merged ticket: {subject}",
@@ -184,11 +140,6 @@ def ruled(questions: list[dict], ticket: str, kind: str) -> dict[str, str]:
     return {q["subject"]: q["answer"] for q in questions if (q["ticket"], q["kind"]) == (ticket, kind) and q["answer"]}
 
 
-def accepted(questions: list[dict], ticket: str, kind: str) -> list[str]:
-    """The subjects of the questions of `kind` on `ticket` that the operator answered `accept`."""
-    return [q["subject"] for q in questions if (q["ticket"], q["kind"], q["answer"]) == (ticket, kind, "accept")]
-
-
 def drop_merged(state: dict) -> list[dict]:
     """Remove the open questions of each merged ticket from `state`: the stop that asked them is over (issue #136).
     Returns them."""
@@ -208,29 +159,44 @@ def contradicted(role: str, report: dict) -> str:
                                    if concern.startswith(CONTRADICTS))))
 
 
-def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int) -> dict:
-    """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run."""
+def _untried(ticket: str, subject: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
+    """The options of a `merged-locked-file` question. The file is asked again only when an answer turned the merge
+    gate red: that answer is not offered again."""
+    kind = "merged-locked-file"
+    tried = {q["answer"] for q in asked if (q["ticket"], q["kind"], q["subject"]) == (ticket, kind, subject)}
+    options = {name: option for name, option in KINDS[kind].options.items() if name == "redesign" or name not in tried}
+    recommended = KINDS[kind].recommended
+    return options, recommended if recommended in options else next(iter(options))
+
+
+def _offered(kind: str, ticket: str, subject: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
+    """(the options of a new question, the recommended one), after what `asked` already tried."""
+    options = KINDS[kind].options
+    if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
+        return {name: options[name] for name in ("accept", "redesign")}, "accept"
+    if kind == "merged-locked-file":
+        return _untried(ticket, subject, asked)
+    return options, KINDS[kind].recommended
+
+
+def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
+             resume: str = "") -> dict:
+    """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run.
+    `resume` is the phase a `retry` takes the ticket back to."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    options, recommended = made.options, made.recommended
-    if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
-        options, recommended = {name: options[name] for name in ("accept", "redesign")}, "accept"
-    if kind == "merged-locked-file":
-        # The file is asked again only when an answer turned the merge gate red: that answer is not offered again.
-        tried = {q["answer"] for q in asked if (q["ticket"], q["kind"], q["subject"]) == (ticket, kind, subject)}
-        options = {name: option for name, option in options.items() if name == "redesign" or name not in tried}
-        recommended = recommended if recommended in options else next(iter(options))
+    options, recommended = _offered(kind, ticket, subject, asked)
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": recommended,
             "options": [{"id": name, "description": option.description} for name, option in options.items()],
-            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "answer": None}
+            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume, "answer": None}
 
 
-def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str]) -> None:
+def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str], resume: str = "") -> None:
     """Count one stop in `run` and add one open question of `kind` per subject. No subject is no stop."""
     run["stops"] += bool(subjects)
     for subject in subjects:
-        run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"]))
+        run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"], resume))
 
 
 def decides(kind: str, subjects: int) -> str:
@@ -254,10 +220,15 @@ def parked(questions: list[dict]) -> bool:
     return any(q["answer"] is None and KINDS[q["kind"]].parks for q in questions)
 
 
+def _fields(q: dict) -> dict:
+    """The ticket fields of the answer to `q`, each text formatted with the question."""
+    fields = KINDS[q["kind"]].options[q["answer"]].fields
+    return {name: value.format(**q) if isinstance(value, str) else value for name, value in fields.items()}
+
+
 def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
     """The ticket fields from the answers of one stop; {} while one is open or one keeps the ticket BLOCKED."""
-    fields = [q["answer"] and KINDS[q["kind"]].options[q["answer"]].fields
-              for q in questions if (q["ticket"], q["stop"]) == (ticket, stop)]
+    fields = [q["answer"] and _fields(q) for q in questions if (q["ticket"], q["stop"]) == (ticket, stop)]
     return {name: value for one in fields for name, value in one.items()} if all(fields) else {}
 
 

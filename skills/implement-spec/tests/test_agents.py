@@ -145,6 +145,11 @@ def blocked(proc):
     assert proc.returncode == 1, proc.stdout + proc.stderr
 
 
+def asks(proc):
+    """A rejected report and a rejected rerun: the ticket blocks with a `ticket-blocked` question."""
+    assert proc.returncode == 2 and "01-ticket-blocked-1" in proc.stdout, proc.stdout + proc.stderr
+
+
 def tw(n=0, stdout=RED + "\n", **changes):
     step = {"files": {"tests/test_export.py": f"def test_rows():\n    assert {n} == 'rows'\n"},
             "stdout": stdout, "commit": "test: red",
@@ -188,7 +193,7 @@ def test_help_lists_the_timeout_flag_and_default_minutes():
 
 @pytest.mark.parametrize("entry", ["openai/gpt-sol@medium"])
 def test_openai_implementer_launches_codex_exec_in_workspace_write(env, entry):
-    w = World(env, refactor=True, implementer=[entry])
+    w = World(env, refactor=True, implementer=[entry, entry])  # the rerun after no report is on the next entry
     w.run(runner=False)
     argv = launches(w.tmp, "codex")[0]
     assert argv[0] == "exec" and "--ephemeral" not in argv
@@ -232,7 +237,7 @@ else:
 
 @pytest.mark.parametrize("entry", ["claude-opus-5@medium", "anthropic/claude-opus-5@medium"])
 def test_claude_entry_launches_claude_p_and_bare_means_anthropic(env, entry):
-    w = World(env, refactor=True, implementer=[entry])
+    w = World(env, refactor=True, implementer=[entry, entry])  # the rerun after no report is on the next entry
     w.run(runner=False)
     argv = launches(w.tmp, "claude")[0]
     assert ("-p" in argv or "--print" in argv)
@@ -298,7 +303,7 @@ def test_each_role_that_runs_commands_stops_only_its_own_processes(role):
 
 def test_no_report_is_a_violation_with_one_rerun_then_blocked(env):
     w = World(env, refactor=True)
-    blocked(w.run({"implementer": [{}, {}, impl()]}))
+    asks(w.run({"implementer": [{}, {}, impl()]}))
     first, second = w.calls("implementer")
     assert first["prompt"].strip() in second["prompt"] and len(second["prompt"]) > len(first["prompt"])
     assert "report" in second["prompt"][len(first["prompt"].rstrip()):].lower()
@@ -321,7 +326,7 @@ def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_
     plan = {"implementer": [{"stderr": REFUSED + "\n", "exit": 1}] * 2 + [impl()]}
     proc = w.run(plan)
     assert proc.returncode == 4, proc.stdout + proc.stderr
-    assert f"implement-spec: the run stopped: the implementer on anthropic/claude-opus-5@medium exited 1 with no " \
+    assert f"implement-spec: the run stopped: the implementer on openai/gpt-sol@medium exited 1 with no " \
         f"report: {REFUSED}" in proc.stdout.splitlines(), proc.stdout
     assert "BLOCKED" not in w.ledger() and "Ticket 01: the run stops and the phase stays for the next run: the implementer" in w.ledger()
     assert json.loads((w.repo / ".agent/implement/state.json").read_text())["tickets"]["01"]["phase"] == "implement"
@@ -340,7 +345,7 @@ def test_finished_status_reruns_the_implementer_once_with_the_error_appended(env
 def test_second_schema_violation_blocks_the_ticket_with_the_error_in_the_ledger(env):
     w = World(env)
     bad = lambda n: with_report(impl(n), status="FINISHED")
-    blocked(w.run({"test-writer": [tw()], "implementer": [bad(0), bad(1), impl(2)]}))
+    asks(w.run({"test-writer": [tw()], "implementer": [bad(0), bad(1), impl(2)]}))
     assert len(w.calls("implementer")) == 2
     assert any("01" in l and "BLOCKED" in l and "FINISHED" in l for l in w.ledger().splitlines()), w.ledger()
 
@@ -358,7 +363,7 @@ def test_red_line_missing_from_the_log_reruns_once_then_blocks(env, second_match
         ok(proc)
         assert len(w.calls("implementer")) == 1
     else:
-        blocked(proc)
+        asks(proc)
         assert len(w.calls("test-writer")) == 2 and not w.calls("implementer")
         assert any("01" in l and "BLOCKED" in l for l in w.ledger().splitlines()), w.ledger()
 
@@ -378,7 +383,7 @@ def test_implementer_report_with_no_new_commit_is_a_violation(env):
     w = World(env)
     nothing = with_report(impl(), commits=[])
     nothing.pop("commit"), nothing.pop("files")
-    blocked(w.run({"test-writer": [tw()], "implementer": [nothing, nothing]}))
+    asks(w.run({"test-writer": [tw()], "implementer": [nothing, nothing]}))
     assert len(w.calls("implementer")) == 2
     assert any("01" in l and "BLOCKED" in l and "commit" in l for l in w.ledger().splitlines()), w.ledger()
 
