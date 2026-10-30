@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 import driver_dispute
 import driver_gate
+import driver_locked
 import driver_review
 import driver_slots
 from driver_decisions import Resume
@@ -68,8 +69,8 @@ def _run_reviewer(job: Job) -> dict:
     run, number = job.run, job.ticket.number
     values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
-    values["elsewhere"] = driver_review.changed_elsewhere(
-        job.slot, run.tip(), driver_review.others(run.state.read()["tickets"], number))
+    values["elsewhere"] = driver_locked.changed_elsewhere(
+        job.slot, run.tip(), driver_locked.others(run.state.read()["tickets"], number))
     notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
     notes += ["elsewhere"] * bool(values["elsewhere"])
@@ -240,7 +241,7 @@ def _routed(job: Job, found: list[dict]) -> tuple[list[dict], list[dict]]:
     """(the findings for a correction, those for a fix round). A locked file of another ticket is protected."""
     state = job.run.state.read()
     locked = state["tickets"][job.ticket.number]["locked"]
-    protected = [path for path in driver_review.others(state["tickets"], job.ticket.number) if path not in locked]
+    protected = [path for path in driver_locked.others(state["tickets"], job.ticket.number) if path not in locked]
     to_correct, to_fix = driver_review.route(found, locked, protected)
     to_correct = _still_to_correct(job, state, to_correct)
     if job.round == ROUNDS:

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from pathlib import Path
 
 from driver_slots import ancestor, git
 
@@ -79,18 +78,3 @@ def delete(branch: str, pr_branch: str) -> bool:
     """Delete a ticket branch whose commits are all in the PR branch. git refuses one a worktree has checked out."""
     return ancestor(branch, pr_branch) and git(".", "branch", "-q", "-D", branch).returncode == 0
 
-
-def rebase_is_open() -> bool:
-    """A rebase is open in slot 1."""
-    return any(Path(git(".", "rev-parse", "--git-path", name).stdout.strip()).exists()
-               for name in ("rebase-merge", "rebase-apply"))
-
-
-def files_in_conflict() -> list[str]:
-    return git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
-
-
-def go_on() -> None:
-    """Go on with the rebase that is open in slot 1, when the conflict agent resolved it and did not go on."""
-    env = {**os.environ, **identity("HEAD")}
-    subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)

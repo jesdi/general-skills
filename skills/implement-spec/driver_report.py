@@ -1,21 +1,20 @@
 """Report validation: validate(role, path, context) -> list of errors, empty when the report is accepted.
 
 context: repo (slot path), branch, start (HEAD when the role started), log, correction (a test-writer corrects locked
-  tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), others (the locked
-  files of every other ticket whose test-writer has run), own (the test-writer commit of the ticket and its locked
-  files, for a role that may not change a locked file), pr (the PR branch ref), fix (the titles of the findings a fixer
-  gets), red (the red gate a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an
-  arbitration rules on)."""
+  tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), locked (the
+  locked-file check, a driver_locked.Locked, or None), fix (the titles of the findings a fixer gets), red (the red gate
+  a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an arbitration rules on)."""
 from __future__ import annotations
 
 import json
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import NamedTuple
 
 import jsonschema
+
+import driver_locked
 
 PROMPTS = Path(__file__).resolve().parent / "prompts"
 RED = "red line not found in log"
@@ -71,11 +70,6 @@ def _must_fix_errors(report: dict, context: dict) -> list[str]:
             if title not in report.get("addressed_must_fix", [])]
 
 
-def _present(repo: str, commit: str, paths: list[str]) -> list[str]:
-    """The `paths` that are files at `commit`."""
-    return _git(repo, "ls-tree", "-r", "--name-only", "-z", commit, "--", *paths, end="\0") if paths else []
-
-
 def _commit_errors(report: dict, context: dict) -> list[str]:
     """Every commit is new since the role started and on the branch; every locked path is in such a commit and is a
     file at the branch tip: a deleted file holds no test that a review could prove (issue #136)."""
@@ -86,7 +80,7 @@ def _commit_errors(report: dict, context: dict) -> list[str]:
     if locked := report.get("locked"):
         changed = _git(repo, "log", "--name-only", "-z", "--format=", f"{context['start']}..{branch}", end="\0")
         errors += [f"locked path {path} is not in the role's commits" for path in locked if path not in changed]
-        present = _present(repo, branch, locked)
+        present = driver_locked.present(repo, branch, locked)
         errors += [f"locked path {path} is not a file at the tip of {branch}: list in `locked` only files you keep"
                    for path in locked if path in changed and path not in present]
     return errors
@@ -130,98 +124,6 @@ def _correction_errors(report: dict, context: dict) -> list[str]:
               ] if more else []
     return errors + [f"not_addressed: {item['finding']} is not the title of a finding of this correction"
                      for item in report.get("not_addressed", []) if item["finding"] not in context.get("findings", [])]
-
-
-def _others_errors(role: str, report: dict, context: dict) -> list[str]:
-    """A test-writer changes a locked file of another ticket only when it lists the file in `locked`."""
-    def blob(commit: str, path: str) -> list[str]:
-        return _git(context["repo"], "rev-parse", "-q", "--verify", f"{commit}:{path}")
-
-    others = context.get("others", []) if role == "test-writer" else []
-    return [f"{path} is a locked file of another ticket, and `locked` does not list it: list it in `locked`, or "
-            "leave the file as it was" for path in others if path not in report.get("locked", [])
-            and blob(context["branch"], path) not in (blob(context["start"], path), blob(context["pr"], path))]
-
-
-def _differ(repo: str, old: str, new: str, paths: list[str]) -> set[str] | None:
-    """The `paths` whose entry (mode, type, content) differs between the two commits; None when git cannot tell."""
-    diff = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", old, new, "--", *paths],
-                          capture_output=True, text=True)
-    return None if diff.returncode else set(filter(None, diff.stdout.split("\0")))
-
-
-def _changed_locked(context: dict, baseline: str, paths: list[str]) -> list[str]:
-    """The errors for the `paths` (the locked files of other tickets) that the branch changed since `baseline`. A file
-    as the PR tip has it is no change: it holds what landed."""
-    repo, branch, pr = context["repo"], context["branch"], context["pr"]
-    changed, off_pr = _differ(repo, baseline, branch, paths), _differ(repo, pr, branch, paths)
-    if changed is None or off_pr is None:
-        return [f"the locked-file check failed: git cannot compare {baseline[:7]}, {pr} and {branch}"]
-    as_landed = set(_present(repo, branch, paths)) - off_pr
-    return [_breach(path, baseline) for path in sorted(changed - as_landed)]
-
-
-def _breach(path: str, baseline: str) -> str:
-    return (f"locked file changed: {path}: only the test-writer may change a locked file, so make it as it is at "
-            f"{baseline[:7]}")
-
-
-def _show(repo: str, commit: str, path: str) -> str | None:
-    """The content of `path` at `commit`; None when it is no file there."""
-    shown = subprocess.run(["git", "-C", repo, "show", f"{commit}:{path}"], capture_output=True, text=True)
-    return None if shown.returncode else shown.stdout
-
-
-def _clean_merge(repo: str, base: str, ours: str, theirs: str, path: str) -> str | None:
-    """The three-way merge of `path` (`git merge-file`) from `base` with `ours` and `theirs`, a missing file empty;
-    None when it conflicts or git fails."""
-    with tempfile.TemporaryDirectory() as folder:
-        files = []
-        for name, commit in (("ours", ours), ("base", base), ("theirs", theirs)):
-            (Path(folder) / name).write_text(_show(repo, commit, path) or "")
-            files.append(str(Path(folder) / name))
-        merged = subprocess.run(["git", "merge-file", "-p", *files], capture_output=True, text=True)
-    return None if merged.returncode else merged.stdout
-
-
-def _own_changed(context: dict, sha: str, paths: list[str]) -> list[str]:
-    """The errors for the ticket's own locked `paths` that the branch changed since its test-writer commit `sha`. A
-    file is no change when it is the clean three-way merge of the test-writer's version and the PR tip's, from their
-    merge base: a conflict merge takes in what landed and keeps the test-writer's tests."""
-    repo, branch, pr = context["repo"], context["branch"], context["pr"]
-    changed = _differ(repo, sha, branch, paths)
-    if changed is None:
-        return [f"the locked-file check failed: git cannot compare {sha[:7]} and {branch}"]
-    base = _merge_base(repo, sha, pr)
-    return [_breach(path, sha) for path in sorted(changed)
-            if (merged := _clean_merge(repo, base, sha, pr, path)) is None or _show(repo, branch, path) != merged]
-
-
-def landing_errors(repo: str, pr_tip: str, commit: str, paths: list[str]) -> list[str]:
-    """The `paths` (the locked files of other tickets) that `commit`, about to land, changes from the PR tip: the PR
-    tip holds what their test-writers locked."""
-    changed = _differ(repo, pr_tip, commit, paths) if paths else set()
-    if changed is None:
-        return [f"the locked-file check failed: git cannot compare {pr_tip[:7]} and {commit[:7]}"]
-    return [f"locked file changed: {path}: the commit that would land changes a locked file of another ticket, so make "
-            "it as the PR tip has it" for path in sorted(changed)]
-
-
-def _merge_base(repo: str, commit: str, pr: str) -> str:
-    """The merge base of `commit` and the PR tip; the PR tip when git finds none."""
-    return (_git(repo, "merge-base", commit, pr) or [pr])[0]
-
-
-def _breach_errors(context: dict) -> list[str]:
-    """Only the test-writer changes a locked file: the ticket's own locked files are checked against its last
-    test-writer commit (`_own_changed`), every other ticket's against the merge base of the branch and the PR tip."""
-    if "own" not in context:
-        return []
-    (sha, own), pr = context["own"], context["pr"]
-    others = [path for path in context["others"] if path not in own]
-    errors = _own_changed(context, sha, own) if sha and own else []
-    return errors + (_changed_locked(context, _merge_base(context["repo"], context["branch"], pr), others)
-                     if others else [])
 
 
 def _red_errors(report: dict, context: dict) -> list[str]:
@@ -268,7 +170,8 @@ def disputes(role: str, report: dict, locked: list[str]) -> list[Dispute]:
 def _dispute_errors(role: str, report: dict, context: dict) -> list[str]:
     """A dispute names a locked file of the ticket, and leaves no uncommitted change: the arbitration is read-only
     and the correction commits."""
-    found = disputes(role, report, context.get("own", ("", []))[1])
+    locked = context.get("locked")
+    found = disputes(role, report, locked.own if locked else [])
     errors = [f"the dispute of {dispute.test or 'no test'} names no locked file of the ticket: write it as "
               f"`{CONTRADICTS} <locked file>::<test>: <reason>`" for dispute in found if not dispute.file]
     if found and _git(context["repo"], "status", "--porcelain"):
@@ -303,5 +206,5 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         report["locked"] = locked_files(report["locked"])
     return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
-            + _others_errors(role, report, context) + _breach_errors(context) + _red_errors(report, context)
+            + driver_locked.errors(role, report, context) + _red_errors(report, context)
             + _dispute_errors(role, report, context) + _ruling_errors(report, context))
