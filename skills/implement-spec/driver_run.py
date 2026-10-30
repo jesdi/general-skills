@@ -42,15 +42,6 @@ class Blocked(Exception):
     """A ticket, or the end of run, cannot go on. The message says why."""
 
 
-class Disputed(Blocked):
-    """An implementer or a fixer of a ticket reports BLOCKED because a locked test contradicts the spec: the one stop
-    that `_attempts` returns. `driver_dispute.agent` settles it. `report` is that report."""
-
-    def __init__(self, why: str, report: dict):
-        super().__init__(why)
-        self.report = report
-
-
 class Halted(Exception):
     """The CLI of an agent failed with no report, two times: a model the account cannot use, a CLI that is not
     signed in. The run starts no other agent and ends with exit 4; the ticket keeps its phase for the next run."""
@@ -103,6 +94,8 @@ class Call:
     # The role that a `retry` of its `ticket-blocked` question runs again from the start commit, when the agent runs
     # for that role (an arbitration, a correction): its own work is not kept.
     retry: str = ""
+    # A BLOCKED report that disputes a locked test is accepted, not a stop: `driver_dispute.agent` settles it.
+    may_dispute: bool = False
 
 
 class Ask(NamedTuple):
@@ -147,10 +140,6 @@ class Run:
         report = _attempts(self, call)
         if call.role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
-        if report.get("status") in STOPS:
-            concerns = "; ".join(report["concerns"]) or "no concern given"
-            why = f"the {call.role} reported {report['status']}: {concerns}"
-            raise Disputed(why, report)
         return report
 
     def locked_check(self, role: str, number: str) -> dict:
@@ -280,11 +269,11 @@ def _timeout_lines(role: str, minutes: float, context: dict, alone: Callable[[],
     return driver_agents.render("timeout-shared", values)
 
 
-def _stop(role: str, number: str, report: Path) -> str:
-    """Why the valid report of an agent is a stop: BLOCKED or NEEDS_CONTEXT and no dispute of a ticket agent; else
-    ""."""
+def _stop(call: Call, report: Path) -> str:
+    """Why the valid report of an agent is a stop: BLOCKED or NEEDS_CONTEXT, and no dispute of an agent that may
+    dispute; else ""."""
     accepted = json.loads(report.read_text())
-    if accepted["status"] not in STOPS or (number != FINAL and driver_report.disputes(role, accepted, [])):
+    if accepted["status"] not in STOPS or (call.may_dispute and driver_report.disputes(call.role, accepted, [])):
         return ""
     return f"it reported {accepted['status']}: {'; '.join(accepted['concerns']) or 'no concern given'}"
 
@@ -299,8 +288,7 @@ def _rejection(call: Call, code: int | None, minutes: float, report: Path, conte
         return moved, driver_agents.render("moved", {"branch": branch, "tip": tip}), True
     if code is None:
         return f"timed out after {minutes:g} minutes", _timeout_lines(role, minutes, context, call.alone), True
-    error = "; ".join(driver_report.validate(context["template"], str(report), context)) or _stop(role, call.number,
-                                                                                                    report)
+    error = "; ".join(driver_report.validate(context["template"], str(report), context)) or _stop(call, report)
     return error, driver_agents.render("rerun", {"error": error}), False
 
 

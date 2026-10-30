@@ -173,7 +173,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   `driver_fixloop._correct` write them; no `Option.fields` does, so no answer resets them. A second dispute or a second
   correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its evidence file is the findings file a
   `correct-test` correction reads (`driver._role_check`), and its files are the ones `keep-test` closes for later
-  reviews (`driver_dispute.kept`, `driver_fixloop._unkept`).
+  reviews (`driver_dispute.kept_files`, `driver_fixloop._still_to_correct`).
 - `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
   is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a
@@ -184,8 +184,9 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   role (an arbitration, a dispute's correction, a review correction) passes that role as `retry`: its `retry` runs that
   role again from the commit the agent started on, so its own work is not kept.
 - A dispute (an implementer or a fixer that reports BLOCKED with `locked test contradicts spec: <file>::<test>:
-  <reason>`) raises `driver_run.Disputed`. `driver_dispute.agent`, which runs the implementer and each ticket fixer,
-  catches it: the reviewer arbitrates with `prompts/arbitration.md` in `Run.read_only` (not a fix round), a test ruled
+  <reason>`) is the one stop that `driver_run._stop` accepts, and only from a `Call` with `may_dispute`, which only
+  `driver_dispute.agent` sets: it runs the implementer and each ticket fixer and reads the accepted report's
+  disputes (`driver_report.disputes`). The reviewer arbitrates with `prompts/arbitration.md` in `Run.read_only` (not a fix round), a test ruled
   `test-wrong` gets one correction, and the role runs again from the tip in the same round, with the ticket's rulings
   in `prompts/ruled.md`. `driver_report._dispute_errors` rejects a dispute that names no locked file of the ticket or
   leaves uncommitted changes: the arbitration is read-only and the correction commits.
