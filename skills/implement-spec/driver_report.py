@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import jsonschema
@@ -148,18 +149,51 @@ def _differ(repo: str, old: str, new: str, paths: list[str]) -> set[str] | None:
     return None if diff.returncode else set(filter(None, diff.stdout.split("\0")))
 
 
-def _changed_locked(context: dict, baseline: str, paths: list[str], base: str = "") -> list[str]:
-    """The errors for the `paths` that the branch changed since `baseline`. A file as the PR tip has it is no change:
-    it holds what landed. With `base` (the merge base of the branch and the PR tip), only a file that the PR side
-    changed since `base` holds what landed: else the PR tip holds the file as it was before the test-writer."""
+def _changed_locked(context: dict, baseline: str, paths: list[str]) -> list[str]:
+    """The errors for the `paths` (the locked files of other tickets) that the branch changed since `baseline`. A file
+    as the PR tip has it is no change: it holds what landed."""
     repo, branch, pr = context["repo"], context["branch"], context["pr"]
     changed, off_pr = _differ(repo, baseline, branch, paths), _differ(repo, pr, branch, paths)
-    landed = _differ(repo, base, pr, paths) if base else set(paths)
-    if changed is None or off_pr is None or landed is None:
+    if changed is None or off_pr is None:
         return [f"the locked-file check failed: git cannot compare {baseline[:7]}, {pr} and {branch}"]
-    as_landed = (set(_present(repo, branch, paths)) - off_pr) & landed
-    return [f"locked file changed: {path}: only the test-writer may change a locked file, so make it as it is at "
-            f"{baseline[:7]}" for path in sorted(changed - as_landed)]
+    as_landed = set(_present(repo, branch, paths)) - off_pr
+    return [_breach(path, baseline) for path in sorted(changed - as_landed)]
+
+
+def _breach(path: str, baseline: str) -> str:
+    return (f"locked file changed: {path}: only the test-writer may change a locked file, so make it as it is at "
+            f"{baseline[:7]}")
+
+
+def _show(repo: str, commit: str, path: str) -> str | None:
+    """The content of `path` at `commit`; None when it is no file there."""
+    shown = subprocess.run(["git", "-C", repo, "show", f"{commit}:{path}"], capture_output=True, text=True)
+    return None if shown.returncode else shown.stdout
+
+
+def _clean_merge(repo: str, base: str, ours: str, theirs: str, path: str) -> str | None:
+    """The three-way merge of `path` (`git merge-file`) from `base` with `ours` and `theirs`, a missing file empty;
+    None when it conflicts or git fails."""
+    with tempfile.TemporaryDirectory() as folder:
+        files = []
+        for name, commit in (("ours", ours), ("base", base), ("theirs", theirs)):
+            (Path(folder) / name).write_text(_show(repo, commit, path) or "")
+            files.append(str(Path(folder) / name))
+        merged = subprocess.run(["git", "merge-file", "-p", *files], capture_output=True, text=True)
+    return None if merged.returncode else merged.stdout
+
+
+def _own_changed(context: dict, sha: str, paths: list[str]) -> list[str]:
+    """The errors for the ticket's own locked `paths` that the branch changed since its test-writer commit `sha`. A
+    file is no change when it is the clean three-way merge of the test-writer's version and the PR tip's, from their
+    merge base: a conflict merge takes in what landed and keeps the test-writer's tests."""
+    repo, branch, pr = context["repo"], context["branch"], context["pr"]
+    changed = _differ(repo, sha, branch, paths)
+    if changed is None:
+        return [f"the locked-file check failed: git cannot compare {sha[:7]} and {branch}"]
+    base = _merge_base(repo, sha, pr)
+    return [_breach(path, sha) for path in sorted(changed)
+            if (merged := _clean_merge(repo, base, sha, pr, path)) is None or _show(repo, branch, path) != merged]
 
 
 def landing_errors(repo: str, pr_tip: str, commit: str, paths: list[str]) -> list[str]:
@@ -179,16 +213,14 @@ def _merge_base(repo: str, commit: str, pr: str) -> str:
 
 def _breach_errors(context: dict) -> list[str]:
     """Only the test-writer changes a locked file: the ticket's own locked files are checked against its last
-    test-writer commit, every other ticket's against the merge base of the branch and the PR tip. An own file as the
-    PR tip has it counts as landed only when the PR side changed it since the branch point: the merge base of the
-    role's start and the PR tip, so a conflict merge cannot move it."""
+    test-writer commit (`_own_changed`), every other ticket's against the merge base of the branch and the PR tip."""
     if "own" not in context:
         return []
     (sha, own), pr = context["own"], context["pr"]
-    base, point = _merge_base(context["repo"], context["branch"], pr), _merge_base(context["repo"], context["start"], pr)
-    groups = ((sha, own, point), (base, [path for path in context["others"] if path not in own], ""))
-    return [error for baseline, paths, landed in groups if baseline and paths
-            for error in _changed_locked(context, baseline, paths, landed)]
+    others = [path for path in context["others"] if path not in own]
+    errors = _own_changed(context, sha, own) if sha and own else []
+    return errors + (_changed_locked(context, _merge_base(context["repo"], context["branch"], pr), others)
+                     if others else [])
 
 
 def _rebase_errors(context: dict) -> list[str]:
