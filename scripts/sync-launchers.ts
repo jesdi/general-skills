@@ -2,8 +2,9 @@
 // `--check` only reports skills whose copy is missing or differs, and exits 1.
 import { copyFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const shared = readFileSync(join(root, 'shared/launcher.sh'));
 const check = process.argv.includes('--check');
 
