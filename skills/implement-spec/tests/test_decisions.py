@@ -30,7 +30,8 @@ def doc(*questions, run="run-1"):
 
 
 def asked(kind="ticket-blocked", ticket="01", subject="the implementer: it reported BLOCKED", before=(), stop=1):
-    return driver_decisions.question(kind, ticket, subject, ["report.json", "ledger.md:3"], list(before), stop)
+    return driver_decisions.question(kind, ticket, subject, ["report.json", "ledger.md:3"], list(before), stop,
+                                     driver_decisions.Resume(""))
 
 
 # ---------------------------------------------------------------- the stop and its answer

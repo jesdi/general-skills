@@ -1,7 +1,8 @@
 """Human stops as bounded questions: the question kinds, decisions.json and what an answer does.
 
 A question in state.json `run.questions`; `answer` is None while it is open:
-    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, resume, answer,
+    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
+     resume: {phase[, tip][, round]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
      ruling: the ruling sentence, once answered}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
@@ -11,13 +12,30 @@ import json
 from typing import NamedTuple
 
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
+FINAL = "final"  # the end of run asks its questions, and has its record and its files, under this name
+
+
+def owner(ticket: str) -> str:
+    """Who stops: `Ticket NN` or the end of run."""
+    return "End of run" if ticket == FINAL else f"Ticket {ticket}"
+
+
+class Resume(NamedTuple):
+    """Where a `retry` or a `keep-test` takes a ticket, or the end of run, back to."""
+    phase: str
+    tip: str | None = None  # the tip it goes on from, for a role that commits
+    round: int | None = None  # the fix rounds done, for a fixer: its own round runs again
+
+    def fields(self) -> dict:
+        """The fields of the record; one that is None stays as it is."""
+        return {name: value for name, value in self._asdict().items() if value is not None}
 
 
 class Option(NamedTuple):
     description: str
     ruling: str
-    fields: dict  # what the ticket record gets when its stop is settled, texts formatted with the question; {} keeps
-    # the ticket BLOCKED
+    resumes: bool  # the record goes back to the `resume` of the question
+    fields: dict = {}  # what else the record gets when its stop is settled; no field at all keeps it BLOCKED
 
 
 class Kind(NamedTuple):
@@ -37,15 +55,15 @@ KINDS = {
         {"keep-test": Option(
             "The test stands as it is. The role that disputed it runs again and makes it green; a review finding that "
             "asks to correct it again is closed.",
-            "Ruling: {ticket} locked test stands (keep-test): {subject}.", {"phase": "{resume}"}),
+            "Ruling: {ticket} locked test stands (keep-test): {subject}.", True),
          "correct-test": Option(
             "The test-writer corrects the test once more, to the second reading, then the role that disputed it runs "
             "again (a fixer after the review of its round); after a review finding, the review runs again.",
-            "Ruling: {ticket} locked test is corrected to the second reading (correct-test): {subject}.",
+            "Ruling: {ticket} locked test is corrected to the second reading (correct-test): {subject}.", False,
             {"phase": "test-writer", "note": "correction"}),
          "edit-spec": Option(
             "Keep the ticket BLOCKED, so the spec can be edited to say which reading it means.",
-            "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", {})}),
+            "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", False)}),
     # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
     "ticket-blocked": Kind(
         "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding is open: {subject}",
@@ -56,10 +74,10 @@ KINDS = {
         {"retry": Option(
             "The role runs again on its first entry from the tip the ticket left, with its one rerun on the next "
             "entry; for an open final-review finding, one more fix batch and scoped review run.",
-            "Ruling: {ticket} runs again (retry): {subject}.", {"phase": "{resume}"}),
+            "Ruling: {ticket} runs again (retry): {subject}.", True),
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",
-            "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", {})}),
+            "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", False)}),
 }
 
 
@@ -80,17 +98,16 @@ def question_id(kind: str, ticket: str, asked: list[dict]) -> str:
 
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
-             resume: str = "") -> dict:
-    """A new open question. `resume` is the phase a `retry` or a `keep-test` takes the ticket back to."""
-    owner = "End of run" if ticket == "final" else f"Ticket {ticket}"
-    made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner}
+             resume: Resume) -> dict:
+    """A new open question."""
+    made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner(ticket)}
     return {"id": question_id(kind, ticket, asked), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
             "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
-            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume, "answer": None}
+            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume.fields(), "answer": None}
 
 
-def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str], resume: str = "") -> None:
+def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str], resume: Resume) -> None:
     """Count one stop in `run` and add one open question of `kind` per subject. No subject is no stop."""
     run["stops"] += bool(subjects)
     for subject in subjects:
@@ -124,20 +141,21 @@ def parked(questions: list[dict]) -> bool:
     return any(q["answer"] is None for q in questions)
 
 
-def _fields(q: dict) -> dict:
-    """The ticket fields of the answer to `q`, each text formatted with the question."""
-    fields = KINDS[q["kind"]].options[q["answer"]].fields
-    return {name: value.format(**q) if isinstance(value, str) else value for name, value in fields.items()}
+def _goes_on(q: dict) -> dict:
+    """The record fields of the answer to `q`: its `resume` whole, when the option resumes, and the option's own."""
+    option = KINDS[q["kind"]].options[q["answer"]]
+    return {**(q["resume"] if option.resumes else {}), **option.fields}
 
 
 def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
-    """The ticket fields from the answers of one stop; {} while one is open or one keeps the ticket BLOCKED."""
-    fields = [q["answer"] and _fields(q) for q in questions if (q["ticket"], q["stop"]) == (ticket, stop)]
+    """The record fields from the answers of one stop; {} while one is open or one keeps the record BLOCKED."""
+    fields = [q["answer"] and _goes_on(q) for q in questions if (q["ticket"], q["stop"]) == (ticket, stop)]
     return {name: value for one in fields for name, value in one.items()} if all(fields) else {}
 
 
 def apply(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, dict]]:
-    """Answer the open questions in `answers`. Returns (a ruling per answer, ticket -> fields that let it go on)."""
+    """Answer the open questions in `answers`. Returns (a ruling per answer, ticket or FINAL -> the fields that let its
+    record go on)."""
     rulings, stops = [], {}
     for q in questions:
         if q["answer"] is None and q["id"] in answers:

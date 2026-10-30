@@ -16,17 +16,19 @@ from pathlib import Path
 from typing import Callable, Iterator, NamedTuple, NoReturn, TypeVar
 
 import driver_agents
+import driver_decisions
 import driver_gate
 import driver_merge
 import driver_report
 import driver_review
 import driver_slots
 import driver_state
+from driver_decisions import FINAL, Resume
 from driver_names import Names
 from driver_slots import git
 
 OUT = Path(".agent/implement")
-FINAL = "final"  # the end of run has its reports and gate records under this name, as a ticket has under its number
+FINAL_RESUME = Resume("pending")  # a `retry` of the end of run: it goes on from where its state is
 _LEDGER = threading.Lock()
 _ASKS = threading.Lock()  # the lenses of the final review run at the same time
 STOPS = ("BLOCKED", "NEEDS_CONTEXT")
@@ -66,12 +68,12 @@ def ledger(sentence: str) -> int:
             return sum(1 for _ in file)
 
 
-def _owner(number: str) -> str:
-    return "End of run" if number == FINAL else f"Ticket {number}"
+_owner = driver_decisions.owner
 
 
-def _gate_record(state: dict, number: str) -> dict:
-    """The record of state.json that holds the green gates of `number`."""
+def record_of(state: dict, number: str) -> dict:
+    """The record of `number` in state.json: its ticket record, or `run.final` for the end of run. Each has its
+    `phase`, which an answer sets, and its `green_gates`."""
     return state["run"]["final"] if number == FINAL else state["tickets"][number]
 
 
@@ -99,12 +101,11 @@ class Call:
 
 
 class Ask(NamedTuple):
-    """The questions a ticket thread wants the operator to answer when its ticket blocks."""
+    """The questions a ticket thread, or the end of run, wants the operator to answer when it blocks."""
     kind: str
     subjects: list[str]  # one question per subject
     report: str  # the evidence
-    resume: str  # the phase a `retry` takes the ticket back to
-    fields: dict  # what the ticket record gets with the stop
+    resume: Resume  # the record gets its tip and round with the stop, and all of it with a `retry` or a `keep-test`
 
 
 @dataclass
@@ -125,12 +126,30 @@ class Run:
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
 
-    def ask(self, number: str, kind: str, subjects: list[str], report: str, resume: str = "", **fields) -> None:
+    def ask(self, number: str, kind: str, subjects: list[str], report: str, resume: Resume) -> None:
         """The questions of `number`'s stop. The end of run adds those of each lens that stopped to one stop."""
         with _ASKS:
             if earlier := self.asks.get(number):
                 subjects = earlier.subjects + subjects
-            self.asks[number] = Ask(kind, subjects, report, resume, fields)
+            self.asks[number] = Ask(kind, subjects, report, resume)
+
+    def block(self, number: str, line: int) -> None:
+        """Make the record of `number` BLOCKED and add the questions it asked for, in one write of state.json. The
+        ledger line `line` says why."""
+        ask = self.asks.pop(number, None)
+
+        def change(state: dict) -> None:
+            held = record_of(state, number)
+            if ask:
+                held.update(ask.resume.fields())
+                evidence = [ask.report, f"{OUT / 'ledger.md'}:{line}"]
+                driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence, ask.resume)
+            held["phase"] = "blocked"
+
+        self.state.update(change)
+        if ask and ask.subjects:
+            ledger(f"{_owner(number)}: {driver_decisions.decides(ask.kind, len(ask.subjects))} in "
+                   f"{OUT / 'decisions.json'}.")
 
     def agent(self, call: Call) -> dict:
         """Run one agent and return its accepted report."""
@@ -198,7 +217,7 @@ class Run:
         """`gate`, for a caller that acts on a red gate: returns its record, or "" when the gate is green. The fast gate
         checks the ticket's locked files, as the state holds them now."""
         state = self.state.read()
-        if commit in _gate_record(state, number)["green_gates"][tier]:
+        if commit in record_of(state, number)["green_gates"][tier]:
             return ""
         at = driver_slots.head(slot)
         if at != commit:
@@ -212,7 +231,7 @@ class Run:
         def count(state: dict) -> None:
             state["run"]["gates"][tier] += 1
             if green:
-                _gate_record(state, number)["green_gates"][tier].append(commit)
+                record_of(state, number)["green_gates"][tier].append(commit)
 
         self.state.update(count)
         if not green:
@@ -305,13 +324,10 @@ def _cli_failure(role: str, entry: str, code: int | None, report: Path, log: Pat
     return f"the {role} on {entry} exited {code} with no report: {driver_agents.last_words(log)}"
 
 
-def retry_point(role: str, tip: str, fix_round: int) -> tuple[str, dict]:
-    """(the phase that runs a ticket's `role` again, the ticket fields that go with it): a role that commits goes on
-    from `tip`, and the round of a fixer does not count."""
-    fields = {"tip": tip} if role in _COMMITS else {}
-    if role == "fixer":
-        fields["round"] = fix_round - 1
-    return _RETRY[role], fields
+def retry_point(role: str, tip: str, fix_round: int) -> Resume:
+    """Where a `retry` takes a ticket to run `role` again: a role that commits goes on from `tip`, and the round of a
+    fixer does not count."""
+    return Resume(_RETRY[role], tip if role in _COMMITS else None, fix_round - 1 if role == "fixer" else None)
 
 
 def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
@@ -320,8 +336,8 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
     (`call.retry`) leaves no work, so that role runs again from the agent's start. The end of run goes on from where
     its state is."""
     tip = call.values["start_sha"] if call.retry else driver_slots.head(call.slot)
-    resume, fields = ("", {}) if call.number == FINAL else retry_point(call.retry or call.role, tip, call.fix_round)
-    run.ask(call.number, "ticket-blocked", [f"the {call.role}: {error}"], str(report), resume, **fields)
+    resume = FINAL_RESUME if call.number == FINAL else retry_point(call.retry or call.role, tip, call.fix_round)
+    run.ask(call.number, "ticket-blocked", [f"the {call.role}: {error}"], str(report), resume)
 
 
 def _give_up(run: Run, call: Call, report: Path, error: str, failed: str, same: bool) -> NoReturn:

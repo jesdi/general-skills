@@ -40,7 +40,7 @@ def _ticket() -> dict:
 
 def _final() -> dict:
     """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
-    return {"skipped": "", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
+    return {"skipped": "", "phase": "pending", "recovery": None, "tidied": None, "onto": None, "base": None, "commits": {},
             "reviewed": None, "round": 0, "open": [], "must_fix": [], "lenses": {}, "batch": None, "green_gates": tiers(), "pushed": None, "body": None,
             "pr": None}
 
