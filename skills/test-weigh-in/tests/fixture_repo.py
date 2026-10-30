@@ -6,6 +6,7 @@ Snapshot interface the tests pin (the spec leaves the JSON keys open):
 Environment: TEST_WEIGH_IN_NOW=<ISO UTC> freezes the clock used to name snapshots;
 TEST_WEIGH_IN_CACHE_DIR holds the overlay.
 """
+import functools
 import json
 import os
 import shutil
@@ -37,10 +38,21 @@ def _pad(files, total):
         out.writelines(f"_PAD_{i} = {i}\n" for i in range(total - have))
 
 
+@functools.cache
+def uv():
+    """uv for the fixtures and the engine: TEST_WEIGH_IN_UV, then PATH, then the pinned uv that the skill's launcher downloads (CI has no uv on PATH)."""
+    found = os.environ.get("TEST_WEIGH_IN_UV") or shutil.which("uv")
+    if found:
+        return found
+    subprocess.run(["sh", str(HERE.parent / "run.sh"), "--help"], check=True, capture_output=True)
+    cache = os.environ.get("TEST_WEIGH_IN_CACHE_DIR") or Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "test-weigh-in"
+    return str(next(Path(cache).glob("uv/*/*/uv")))
+
+
 def _venv(repo, pytest_version):
     py = repo / ".venv" / "bin" / "python"
-    subprocess.run(["uv", "venv", "-q", "--python", "3.12", str(repo / ".venv")], check=True)
-    subprocess.run(["uv", "pip", "install", "-q", "--python", str(py), f"pytest=={pytest_version}"], check=True)
+    subprocess.run([uv(), "venv", "-q", "--python", "3.12", str(repo / ".venv")], check=True)
+    subprocess.run([uv(), "pip", "install", "-q", "--python", str(py), f"pytest=={pytest_version}"], check=True)
     site = next((repo / ".venv" / "lib").glob("python*/site-packages"))
     (site / "fakeclock.py").write_text(FAKECLOCK)
 
@@ -72,8 +84,8 @@ def site_files(repo):
 
 def weigh(repo, home, *flags, cache, now=None):
     env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "PYTHONPATH")}
-    env.update(HOME=str(home), TEST_WEIGH_IN_CACHE_DIR=str(cache))
-    env.setdefault("UV_CACHE_DIR", subprocess.run(["uv", "cache", "dir"], capture_output=True, text=True).stdout.strip())
+    env.update(HOME=str(home), TEST_WEIGH_IN_CACHE_DIR=str(cache), TEST_WEIGH_IN_UV=uv())
+    env.setdefault("UV_CACHE_DIR", subprocess.run([uv(), "cache", "dir"], capture_output=True, text=True).stdout.strip())
     if now:
         env["TEST_WEIGH_IN_NOW"] = now
     return subprocess.run([sys.executable, str(WEIGH), str(repo), *flags], env=env, capture_output=True, text=True)
