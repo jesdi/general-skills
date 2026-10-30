@@ -571,7 +571,7 @@ def test_a_run_of_a_driver_with_untiered_gates_resumes_with_its_greens_as_full_g
     code, ledger, out = walk(tmp_path, capsys, "exit 9\n", gate='[ "$(git rev-parse --abbrev-ref HEAD)" != ticket/feat%2Fx/01 ]')
     after = state_of(tmp_path)
     assert code == 0 and walked() == tip and not full.exists(), out  # the fast-forward ran no gate
-    assert after["run"]["schema"] == 3 and after["tickets"]["01"]["green_gates"] == {"fast": [], "full": [tip]}
+    assert after["run"]["schema"] == driver_state.SCHEMA and after["tickets"]["01"]["green_gates"] == {"fast": [], "full": [tip]}
     assert after["run"]["gates"] == {"fast": 0, "full": 5}  # the four of the older run and the end of run
 
 

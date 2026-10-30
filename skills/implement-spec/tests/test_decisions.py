@@ -120,17 +120,56 @@ def test_a_stop_with_uncommitted_work_keeps_its_slot_and_takes_the_answer(tmp_pa
     assert "feat: 01 rows" in rig.pr_subjects() and not git(rig.repo, "status", "--porcelain")
 
 
-# ---------------------------------------------------------------- legacy finding-question decisions
+# ---------------------------------------------------------------- the answers of one stop
 
-def test_one_answer_that_keeps_the_ticket_blocked_wins_over_an_accept():
-    one = asked("finding", subject="A")
-    two = asked("finding", subject="B", before=[one])
-    other = asked("finding", ticket="02", subject="C", before=[one, two], stop=2)
-    rulings, moved = driver_decisions.apply([one, two, other], {one["id"]: "accept", two["id"]: "redesign",
-                                                                other["id"]: "accept", "09-finding-1": "accept"})
-    assert moved == {"02": {"phase": "merge"}} and len(rulings) == 3
-    assert rulings[1] == "Ruling: 01 stays BLOCKED, the design changes first (redesign): B."
-    assert driver_decisions.apply([one, two, other], {one["id"]: "split"}) == ([], {}), "an answer is applied once"
+def test_one_answer_that_keeps_the_ticket_blocked_wins_over_a_retry():
+    one = asked(subject="A")
+    two = asked(subject="B", before=[one])
+    other = asked(ticket="02", subject="C", before=[one, two], stop=2)
+    rulings, moved = driver_decisions.apply([one, two, other], {one["id"]: "retry", two["id"]: "edit",
+                                                                other["id"]: "retry", "09-ticket-blocked-1": "retry"})
+    assert moved == {"02": {"phase": ""}} and len(rulings) == 3
+    assert rulings[1] == "Ruling: 01 stays BLOCKED for an edit of the spec or the ticket (edit): B."
+    assert driver_decisions.rulings([one, two, other]) == rulings
+    assert driver_decisions.apply([one, two, other], {one["id"]: "edit"}) == ([], {}), "an answer is applied once"
+
+
+# ---------------------------------------------------------------- a run of an older driver (schema 3)
+
+def as_schema_3(rig, **question):
+    """Make the run of `rig` one that a schema 3 driver left, its one question changed by `question`."""
+    path = rig.repo / ".agent/implement/state.json"
+    state = json.loads(path.read_text())
+    assert state["run"]["schema"] == 4, "a new run writes schema 4"
+    state["run"]["schema"] = 3
+    state["run"]["questions"][0].update(question)
+    path.write_text(json.dumps(state))
+    return state
+
+
+def test_an_older_run_with_an_open_question_of_a_removed_kind_exits_3_before_any_agent(tmp_path, capsys):
+    rig = stopped(tmp_path)
+    as_schema_3(rig, id="01-locked-test-1", kind="locked-test")
+    capsys.readouterr()
+    rig.run(steps(blocked(), blocked(), impl("01")))
+    out = capsys.readouterr().out
+    assert rig.code == 3 and len(rig.calls()) == 3, out
+    assert ("implement-spec: the open question 01-locked-test-1 is of the kind locked-test, which this driver no "
+            "longer has: answer it with the driver version that asked it, or start the run again") in out
+    assert rig.state()["run"]["schema"] == 3, "the run stays the older driver's"
+
+
+def test_an_older_run_keeps_the_ruling_of_an_answered_question_of_a_removed_kind_in_the_pr_body(tmp_path):
+    run = steps(blocked(), blocked(), impl("01"))
+    rig = Pushing(tmp_path, ONE).run(run, *UNATTENDED)
+    state = as_schema_3(rig, id="01-review-stopped-1", kind="review-stopped", answer="retry")
+    state["tickets"]["01"]["phase"] = "implement"  # what the older driver's `retry` did
+    (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
+    rig.run(run, *UNATTENDED)
+    assert rig.code == 0 and rig.state()["run"]["schema"] == 4, rig.ledger()
+    sentence = f"Ruling: 01 review-stopped (retry): the implementer: it reported BLOCKED: {STOP}."
+    assert f"## Rulings\n\n- {sentence}\n" in rig.prs()[0]["body"]
+    assert rig.state()["run"]["questions"][0]["ruling"] == sentence
 
 
 # ---------------------------------------------------------------- unattended
@@ -200,15 +239,17 @@ def test_only_an_implementer_or_a_fixer_blocked_on_the_contradiction_concern_dis
 
 def test_question_ids_count_per_ticket_and_kind_over_the_run_and_only_open_questions_are_published():
     one = asked()
-    two, other, found = asked(before=[one]), asked(ticket="02", before=[one]), asked("finding", before=[one])
+    two, other, found = asked(before=[one]), asked(ticket="02", before=[one]), asked("spec-ambiguous", before=[one])
     assert [q["id"] for q in (one, two, other, found)] == ["01-ticket-blocked-1", "01-ticket-blocked-2",
-                                                           "02-ticket-blocked-1", "01-finding-1"]
+                                                           "02-ticket-blocked-1", "01-spec-ambiguous-1"]
     both = doc(one, two)
     assert set(both["questions"][0]) == set(driver_decisions.PUBLIC) and len(both["questions"]) == 2
     one["answer"] = "retry"
     left = doc(one, two)
     assert [q["id"] for q in left["questions"]] == ["01-ticket-blocked-2"] and left["revision"] != both["revision"]
-    assert driver_decisions.parked([one, two]) and not driver_decisions.parked([one, found])
+    assert driver_decisions.parked([one, two]) and driver_decisions.parked([one, found])
+    found["answer"] = "keep-test"
+    assert not driver_decisions.parked([one, found])
     assert driver_decisions.text([], "answers.json", "page.html") == ""
     for name, kind in driver_decisions.KINDS.items():
         assert 2 <= len(kind.options) <= 4 and (kind.recommended in kind.options or name == "spec-ambiguous")
@@ -255,11 +296,11 @@ def test_a_file_that_is_not_a_json_object_gives_no_answer(one, content):
 
 def test_each_answer_is_checked_on_its_own_and_a_note_goes_with_its_question(one):
     found, ignored = answers(one, answers={Q1: "retry", f"{Q1}.note": "see ADR 3", "track": "standard",
-                                           "02-finding-1.note": "x"})
+                                           "02-spec-ambiguous-1.note": "x"})
     assert found == {Q1: "retry", f"{Q1}.note": "see ADR 3"}
     assert ignored == ["The answer for track in .agent/implement-answers.json is ignored: there is no open question track.",
-                       "The answer for 02-finding-1.note in .agent/implement-answers.json is ignored: there is no open "
-                       "question 02-finding-1."]
+                       "The answer for 02-spec-ambiguous-1.note in .agent/implement-answers.json is ignored: there is "
+                       "no open question 02-spec-ambiguous-1."]
     found, (ignored,) = answers(one, answers={Q1: ["retry"], f"{Q1}.note": 5})
     assert found == {} and ignored.endswith("the question offers retry, edit.")
 
@@ -410,10 +451,8 @@ def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path)
     assert entries(rig, "01", "fixer") == [SONNET, OPUS_5_5, SONNET]
 
 
-def test_the_removed_kinds_cannot_be_asked():
-    removed = {"review-stopped", "review-rejected", "implementer-stopped", "fixer-stopped", "merged-locked-file",
-               "locked-test", "locked-test-again", "final-finding"}
-    assert not removed & set(driver_decisions.KINDS) and "ticket-blocked" in driver_decisions.KINDS
+def test_only_two_kinds_exist():
+    assert list(driver_decisions.KINDS) == ["spec-ambiguous", "ticket-blocked"]
 
 
 # ---------------------------------------------------------------- a test-writer report; a question of a merged ticket

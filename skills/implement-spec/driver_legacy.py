@@ -3,7 +3,8 @@
 
 Every run of a newer driver holds `lock` (driver._hold), so a newer and an older driver never run in one repository
 at the same time. The driver calls `resume` once, after the locks and before any check reads a ref: a run with no
-`schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier.
+`schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier; a run
+before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops.
 ponytail: delete this module, tests/test_legacy.py and its one line in driver._hold and in driver._start_errors
 once no older driver is left.
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import IO
 
+import driver_decisions
 import driver_slots
 import driver_state
 from driver_names import Names
@@ -80,9 +82,28 @@ def lock(common_dir: Path) -> tuple[IO | None, str]:
                   "Wait until it ends, then run the driver again.")
 
 
-def _tiered(state: dict) -> None:
-    """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier."""
+def _removed(run: dict) -> list[str]:
+    """Schema 4: the open questions of a kind that this driver no longer has, each as an error."""
+    return [f"the open question {q['id']} is of the kind {q['kind']}, which this driver no longer has: answer it with "
+            "the driver version that asked it, or start the run again"
+            for q in run.get("questions", []) if q["answer"] is None and q["kind"] not in driver_decisions.KINDS]
+
+
+def _ruled(q: dict) -> str:
+    """Schema 4: the ruling sentence of an answered question of an older driver; for a removed kind, from its
+    answer."""
+    if q["kind"] in driver_decisions.KINDS:
+        return driver_decisions.ruling(q)
+    return f"Ruling: {q['ticket'] or 'end of run'} {q['kind']} ({q['answer']}): {q['subject']}."
+
+
+def _upgraded(state: dict) -> None:
+    """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier.
+    Schema 4: an answered question keeps its ruling sentence."""
     run = state["run"]
+    for q in run.get("questions", []):
+        if q["answer"] is not None:
+            q.setdefault("ruling", _ruled(q))
     for record in [run.get("final", {}), *state["tickets"].values()]:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
@@ -95,10 +116,13 @@ def resume(state: driver_state.State) -> list[str]:
     """Give each ref of a run that an older driver started its new name, then mark the run: the errors, or []."""
     if not state.path.exists() or (schema := state.read()["run"].get("schema", 1)) >= driver_state.SCHEMA:
         return []
+    run = state.read()["run"]
+    if errors := _removed(run):
+        return errors
     if schema < 2:  # the names of driver_names
-        run, names = state.read()["run"], Names(state.read()["run"]["pr_branch"])
+        names = Names(run["pr_branch"])
         moves = [_branch(entry, number, names, run["start"]) for number, entry in state.read()["tickets"].items()]
         if errors := [error for error in [*moves, _recovery(run, names)] if error]:
             return errors
-    state.update(_tiered)
+    state.update(_upgraded)
     return []

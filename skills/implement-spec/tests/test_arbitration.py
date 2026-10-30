@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-import driver_decisions
+from test_cli import ticket
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_review import ONE, STUCK, finding, fix, review
 from test_walk import COST, impl, plan, tw
@@ -15,6 +15,7 @@ SINGLE = "the spec quotes with '"
 CORRECTED = "def test_x():\n    assert '01' == '01'\n"
 AMBIGUOUS = "01-spec-ambiguous-1"
 OTHER = "tests/test_01b.py"
+SECOND = {"02-quote-fields.md": ticket("02", "Quote fields", touches="`demo/other.py: g`")}
 
 
 def disputes(*concerns, role="implementer"):
@@ -136,12 +137,22 @@ def test_a_dispute_with_uncommitted_work_is_rejected(tmp_path):
     assert "a dispute leaves no uncommitted change" in rig.led("Ticket 01: implementer ran on")[0]
 
 
-def test_arbitration_runs_count_as_reviewer_agents_in_the_summary(tmp_path):
-    rig = run(tmp_path, {"01/implementer": [disputes(), impl("01")],
-                         "01/reviewer": [ruling("code-wrong", "R3 says double quotes"), review("01")]})
-    summary = (rig.repo / ".agent/implement/summary.md").read_text()
-    assert "| agents, reviewer on anthropic/claude-opus-5@medium | 2 |" in summary, summary
-    assert "| fix rounds per ticket | 01: 0 |" in summary
+def test_the_summary_keeps_its_table_and_counts_an_arbitration_as_a_reviewer_agent(tmp_path):
+    """Ticket 01: a dispute, its arbitration, a fix round, then the landing; ticket 02 stops twice, so the end of
+    run, and its full gate, wait."""
+    stuck = {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["no column order"], "green": []}}
+    rig = run(tmp_path, {"01/implementer": [disputes(), impl("01")], "02/implementer": [stuck, stuck],
+                         "01/reviewer": [ruling("code-wrong", "R3 says double quotes"), review("01", [STUCK]),
+                                         review("01")],
+                         "01/fixer": [fix("01", 1)]}, files={**ONE, **SECOND})
+    assert rig.code == 2, rig.ledger()
+    rows = (rig.repo / ".agent/implement/summary.md").read_text().split("| Measure | Value |\n|---|---|\n")[1]
+    names = re.findall(r"^\| (.+?) \|", rows, re.M)
+    assert {f"wall time, {role}" for role in ("test-writer", "implementer", "reviewer", "fixer")} < set(names), rows
+    assert names[-3:] == ["fix rounds per ticket", "human stops", "cost"] and rows.endswith(" USD |\n"), rows
+    for row in ("| fast gates run | 2 |", "| full gates run | 1 |", "| agents, reviewer on anthropic/claude-opus-5@medium | 3 |",
+                "| fix rounds per ticket | 01: 1, 02: 0 |", "| human stops | 1 |"):
+        assert row in rows, rows
 
 
 # ---------------------------------------------------------------- a second dispute or correction: spec-ambiguous
@@ -274,8 +285,3 @@ def test_an_implementer_with_nothing_to_change_after_the_correction_is_accepted(
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
     fixed = rig.calls("01", "test-writer")[1]["sha"]
     assert fixed in [gate["commit"] for gate in rig.gates()] and rig.calls("01", "reviewer")[1]["head"] == fixed
-
-
-def test_the_removed_locked_test_kinds_cannot_be_asked():
-    assert not {"locked-test", "locked-test-again"} & set(driver_decisions.KINDS)
-    assert "spec-ambiguous" in driver_decisions.KINDS and driver_decisions.KINDS["spec-ambiguous"].recommended == ""

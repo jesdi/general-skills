@@ -1,7 +1,8 @@
 """Human stops as bounded questions: the question kinds, decisions.json and what an answer does.
 
 A question in state.json `run.questions`; `answer` is None while it is open:
-    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, resume, answer}
+    {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, resume, answer,
+     ruling: the ruling sentence, once answered}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
 
@@ -20,7 +21,6 @@ class Option(NamedTuple):
 
 
 class Kind(NamedTuple):
-    parks: bool  # an open question of this kind ends the run with exit 2
     title: str
     why: str
     recommended: str  # "" for a kind that recommends no option
@@ -28,23 +28,7 @@ class Kind(NamedTuple):
 
 
 KINDS = {
-    "finding": Kind(
-        False,
-        "Ticket {ticket}: a finding is open after fix round 4: {subject}",
-        "Four fix rounds did not close this finding, so ticket {ticket} is BLOCKED and each ticket that it blocks "
-        "waits.",
-        "split",
-        {"accept": Option(
-            "Close the finding as it is. The ticket merges when each of its open findings is accepted.",
-            "Ruling: {ticket} finding closed as it is (accept): {subject}.", {"phase": "merge"}),
-         "split": Option(
-            "Keep the ticket BLOCKED. The open part becomes a ticket of its own.",
-            "Ruling: {ticket} stays BLOCKED, the open part becomes a new ticket (split): {subject}.", {}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     "spec-ambiguous": Kind(
-        True,
         "Ticket {ticket}: the spec reads two ways on a locked test: {subject}",
         "This locked test was ruled on or corrected once in ticket {ticket}, and a second dispute or a second "
         "correction needs it again: the spec supports both readings. Ticket {ticket} is BLOCKED and each ticket that "
@@ -63,7 +47,6 @@ KINDS = {
             "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", {})}),
     # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
     "ticket-blocked": Kind(
-        True,
         "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding is open: {subject}",
         "An agent ran two times, the second time on the next entry of its model list, and stopped or was rejected "
         "both times; or the scoped review after the fix batch of the final review left a finding open. {owner} is "
@@ -124,11 +107,17 @@ def document(run: dict) -> dict:
 
 def rulings(questions: list[dict]) -> list[str]:
     """The ruling sentence of each answered question, without the note of the operator."""
-    return [KINDS[q["kind"]].options[q["answer"]].ruling.format(**q) for q in questions if q["answer"] is not None]
+    return [q["ruling"] for q in questions if q["answer"] is not None]
+
+
+def ruling(q: dict) -> str:
+    """The ruling sentence of the answer to `q`. An answered question keeps it, so a kind can go away."""
+    return KINDS[q["kind"]].options[q["answer"]].ruling.format(**q)
 
 
 def parked(questions: list[dict]) -> bool:
-    return any(q["answer"] is None and KINDS[q["kind"]].parks for q in questions)
+    """An open question ends the run with exit 2."""
+    return any(q["answer"] is None for q in questions)
 
 
 def _fields(q: dict) -> dict:
@@ -149,9 +138,9 @@ def apply(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, di
     for q in questions:
         if q["answer"] is None and q["id"] in answers:
             q["answer"] = answers[q["id"]]
+            q["ruling"] = ruling(q)
             note = answers.get(f"{q['id']}.note")
-            rulings.append(KINDS[q["kind"]].options[q["answer"]].ruling.format(**q)
-                           + f" Note of the operator: {note}" * bool(note))
+            rulings.append(q["ruling"] + f" Note of the operator: {note}" * bool(note))
             stops[q["ticket"]] = q["stop"]
     moved = {ticket: _settled(questions, ticket, stop) for ticket, stop in stops.items()}
     return rulings, {ticket: fields for ticket, fields in moved.items() if fields}
