@@ -208,7 +208,8 @@ def _stop() -> str:
 
 def _rebase_check(run: Run, stop: str, context: dict) -> driver_locked.Locked | None:
     """The locked-file check of the rebase conflict agent when it ends: every ticket's locked files as the recovery
-    point has them. The driver goes on with a rebase that the agent left open, so the check reads the rebased tip. A
+    point has them. The driver goes on with a rebase that the agent left open, so the check reads the rebased tip, and
+    the report is checked on that tip in place of its `commits`, which may name HEAD before the driver's commit. A
     rebase that git cannot go on with at `stop`, the stop the agent was given, rejects a done report with git's error;
     one that stopped again at a later conflict has no tip to check (None), and the driver aborts it."""
     if _rebase_is_open():
@@ -221,6 +222,7 @@ def _rebase_check(run: Run, stop: str, context: dict) -> driver_locked.Locked | 
             return None
         if _rebase_is_open():
             return None
+        context["commits"] = [head(".")]
     recovery = git(".", "rev-parse", run.names.recovery).stdout.strip()
     return driver_locked.for_end_of_run(run.state.read()["tickets"], recovery)
 
