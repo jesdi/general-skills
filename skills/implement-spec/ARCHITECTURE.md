@@ -19,7 +19,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
 | `driver_report.py` | Validation of one agent report against its schema, git and the agent's log |
 | `driver_review.py` | The locked-file check of a ticket's own tests, the routing of findings |
-| `driver_merge.py` | Merges by git plumbing, the locked-file check of a landing, the move of the PR ref |
+| `driver_merge.py` | Merges by git plumbing, the move of the PR ref |
 | `driver_gate.py` | One gate of a commit: the command, once more when a signal ended it, and its record |
 | `driver_slots.py` | The worktrees that tickets run in, and the `git` helper |
 | `driver_state.py` | `state.json` (the resume contract) and the kernel lock |
@@ -72,6 +72,10 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   its test-writer. The baseline is
   stateless, so a breach left on the tip by a rejected rerun is found again after a `retry`. A changed locked file
   rejects the report naming the file, so the rerun on the next entry and `ticket-blocked` apply as to any rejection.
+- At landing, under the merge lock and before the full gate, `driver._refuse_breach` compares the commit that
+  would land with the PR tip on every other ticket's locked files (but those the ticket lists as its own,
+  `driver_report.landing_errors`): a change, or a git error, blocks the ticket with one `ticket-blocked` question
+  and the PR branch does not move. Its `retry` resumes at `implement`, whose check then names the file.
 - The reviewer gets the diff of each locked file of another ticket that the ticket changed
   (`driver_review.changed_elsewhere`, `prompts/elsewhere.md`): only the test-writer can have made it, and the
   reviewer judges it against the spec. A review finding on such a file goes to a correction, since a fixer may not

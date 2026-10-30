@@ -31,6 +31,7 @@ import driver_gate
 import driver_graph
 import driver_legacy
 import driver_merge
+import driver_report
 import driver_review
 import driver_review_page
 import driver_slots
@@ -38,7 +39,7 @@ import driver_state
 import driver_summary
 import driver_tickets
 from driver_names import Names
-from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
+from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger, retry_point
 from driver_slots import git
 from driver_tickets import Ticket
 
@@ -190,6 +191,19 @@ def _red_landing(number: str, slot: str, run: Run, commit: str, record: str) -> 
     driver_fixloop.red_landing(run, number, slot, commit, record)
 
 
+def _refuse_breach(number: str, run: Run, landing: _Landing) -> None:
+    """The commit that would land leaves every other ticket's locked file as the PR tip has it, but those the ticket
+    lists as its own. A change blocks the ticket with one `ticket-blocked` question: its `retry` runs the implementer
+    again, whose locked-file check names the file until the ticket branch leaves it as the merge base has it."""
+    tickets = run.state.read()["tickets"]
+    paths = [path for path in driver_review.others(tickets, number) if path not in tickets[number]["locked"]]
+    if errors := driver_report.landing_errors(".", landing.pr_tip, landing.commit, paths):
+        error = "; ".join(errors)
+        resume, fields = retry_point("implementer", landing.ticket_tip, 0)
+        run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE), resume, **fields)
+        raise Blocked(error)
+
+
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> _Landing:
     """The commit to land, with the full gate green. Call it under the merge lock."""
     number = ticket.number
@@ -197,6 +211,7 @@ def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> 
     git(slot, "checkout", "-q", run.names.ticket(number))
     tip = run.state.ticket(number, phase="merge")["tip"]
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
+    _refuse_breach(number, run, landing)
     if landing.commit != landing.pr_tip:
         # The full gate runs on the commit that lands, a fast-forward as well as a merge commit: a fast green record
         # does not count. When the checkout fails, the slot is on another commit and the gate refuses to run.
