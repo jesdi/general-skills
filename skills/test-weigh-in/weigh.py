@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weigh_env import SetupError, build_overlay, check_versions, find_interpreter
+from weigh_coverage import branch_percent, overlaps, per_test, unique_coverage
 from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
 from weigh_rules import RulesError, load as load_rules
@@ -34,7 +35,8 @@ def main(argv=None):
         check_versions(python)
         overlay = build_overlay(python)
         run = plain_run(python, repo, overlay, args.pytest_args)
-        covered = coverage_run(python, repo, overlay, args.pytest_args)
+        eligible = {n for n, t in aggregate(run["cases"]).items() if t["outcome"] == "passed"}
+        cov_cases, report, value_report = coverage_run(python, repo, overlay, args.pytest_args, eligible)
     except SetupError as e:
         print(f"weigh.py: {e}", file=sys.stderr)
         return 1
@@ -47,9 +49,22 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
-    # a suite that is not green is a value-metric blank: coverage is left out and the pillar is partial
-    if covered is not None and all(t["outcome"] != "failed" for t in tests.values()):
-        values["branch_coverage"] = covered
+    # failing, erroring and skipped tests cost (runtime, lines, smells) but give no value: no coverage, overlap or uniqueness
+    covered = per_test(report, repo) if report else {}
+    cov_tests = aggregate(cov_cases)
+    for node, test in tests.items():
+        test["coverage"] = covered.get(node, {})
+        test["flaky"] = node in cov_tests and cov_tests[node]["outcome"] != test["outcome"]
+    # value metrics count only tests that passed in both runs
+    passing = {n: t["coverage"] for n, t in tests.items()
+               if t["outcome"] == "passed" and cov_tests.get(n, {}).get("outcome") == "passed"}
+    unique = unique_coverage(passing)
+    for node, test in tests.items():
+        test["unique_coverage"] = unique.get(node, 0)
+    if value_report and branch_percent(value_report) is not None:
+        values["branch_coverage"] = branch_percent(value_report)
+    if passing:
+        values["no_unique_coverage"] = 100 * sum(not u for u in unique.values()) / len(passing)
     metrics, pillars = score(rules, values)
     data = {
         "commit": commit,
@@ -62,6 +77,7 @@ def main(argv=None):
         "metrics": metrics,
         "pillars": pillars,
         "tests": tests,
+        "overlaps": overlaps(passing),
     }
     path = write_snapshot(home, data)
     dashboard = write_dashboard(home, data, rules)
