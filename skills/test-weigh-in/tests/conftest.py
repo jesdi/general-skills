@@ -5,6 +5,12 @@ import pytest
 from fixture_repo import build_repo, weigh
 
 
+@pytest.fixture(autouse=True)
+def no_browser(monkeypatch):
+    """The engine opens the dashboard unless --no-open: a no-op BROWSER keeps every test from opening a real tab."""
+    monkeypatch.setenv("BROWSER", "true")
+
+
 @pytest.fixture(scope="session")
 def cache(tmp_path_factory):
     return tmp_path_factory.mktemp("overlay-cache")

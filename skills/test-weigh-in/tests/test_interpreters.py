@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from fixture_repo import FAKECLOCK, build_repo, git, load, snapshots, weigh
+from fixture_repo import FAKECLOCK, build_repo, git, load, snapshots, uv, weigh
 
 KEY = "github.com/jesdi/demo"
 MARKER_CONFTEST = "def pytest_sessionstart(session):\n    open({marker!r}, 'a').close()\n"
@@ -11,8 +11,8 @@ MARKER_CONFTEST = "def pytest_sessionstart(session):\n    open({marker!r}, 'a').
 
 def make_venv(path, pytest_version, python="3.12"):
     """A venv at `path` holding pytest and the fake clock the default repo's pytest config asks for."""
-    subprocess.run(["uv", "venv", "-q", "--python", python, str(path)], check=True)
-    subprocess.run(["uv", "pip", "install", "-q", "--python", str(path / "bin" / "python"), f"pytest=={pytest_version}"], check=True)
+    subprocess.run([uv(), "venv", "-q", "--python", python, str(path)], check=True)
+    subprocess.run([uv(), "pip", "install", "-q", "--python", str(path / "bin" / "python"), f"pytest=={pytest_version}"], check=True)
     site = next((path / "lib").glob("python*/site-packages"))
     (site / "fakeclock.py").write_text(FAKECLOCK)
 
@@ -50,7 +50,7 @@ def test_uv_repo_without_venv_gets_one_from_its_lock(tmp_path, home, cache):
         '[tool.pytest.ini_options]\npythonpath = ["."]\nmarkers = ["e2e: slow end-to-end test"]\n'
     )
     (repo / "uv.lock").unlink()  # the template lock is a stub uv cannot parse
-    subprocess.run(["uv", "lock", "-q"], cwd=repo, check=True)
+    subprocess.run([uv(), "lock", "-q"], cwd=repo, check=True)
     commit_all(repo)
     lock = (repo / "uv.lock").read_bytes()
     result = weigh(repo, home, cache=cache)
