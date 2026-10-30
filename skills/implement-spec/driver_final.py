@@ -34,7 +34,7 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_tidy
-from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
+from driver_run import FINAL, OUT, Blocked, Call, Halted, Run, during, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
@@ -193,7 +193,7 @@ def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
     """Run the conflict agent on the open rebase; the driver goes on with the rebase after it, and its report is
     rejected while the rebased tip changes a locked file. Returns "" or why it blocked."""
     try:
-        run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
+        run.agent(Call("conflict", FINAL, ".", values, template="rebase-conflict", detached=True))
     except Blocked as blocked:
         return str(blocked)
     except Halted:
@@ -378,8 +378,8 @@ def _scoped(run: Run, values: dict[str, str], tip: str, done: int) -> tuple[list
     """The scoped review after the fix batch, one `final-reviewer`. Returns (its findings, each with the source
     `final-reviewer`; the titles of the must-fix findings it resolved)."""
     entries = driver_agents.other_provider_entries(run.models)
-    report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-        "final-reviewer", FINAL, ".", values, entry=entries[0], entries=entries, fix_round=done))
+    report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(Call(
+        "final-reviewer", FINAL, ".", values, entry=entries[0], entries=entries, fix_round=done)))
     return ([{**finding, "source": "final-reviewer"} for finding in report["findings"]],
             set(report.get("resolved_must_fix", [])))
 
@@ -425,8 +425,8 @@ def _run_lenses(run: Run, values: dict[str, dict[str, str]],
     def call(role: str) -> None:
         entries = driver_agents.lens_entries(run.models, role)
         try:
-            reports[role] = run.agent(role, FINAL, ".", values[role], entry=entries[0], entries=entries,
-                                      template="final-lens", alone=lambda: len(running) == 1)
+            reports[role] = run.agent(Call(role, FINAL, ".", values[role], entry=entries[0], entries=entries,
+                                           template="final-lens", alone=lambda: len(running) == 1))
         except Blocked as blocked:  # it stopped or was rejected two times
             errors[role] = f"the {role}: {blocked}"
         except Halted as failed:
@@ -494,9 +494,9 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str) -> dict:
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "findings_list": "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in final["open"])}
     try:
-        return run.agent("fixer", FINAL, ".", values, template="final-fixer", fix_round=final["round"],
-                         check={"owners": [ticket.number for ticket in tickets],
-                                "must_fix": [_title(finding) for finding in final["must_fix"]]})
+        return run.agent(Call("fixer", FINAL, ".", values, template="final-fixer", fix_round=final["round"],
+                              check={"owners": [ticket.number for ticket in tickets],
+                                     "must_fix": [_title(finding) for finding in final["must_fix"]]}))
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
     except Halted as halted:
@@ -562,7 +562,7 @@ def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:
     for round_ in range(2):
         with during("the PR body"):
             report = run.read_only(FINAL, ".", run.pr, tip,
-                                   lambda: run.agent("pr-writer", FINAL, ".", values, fix_round=round_))
+                                   lambda: run.agent(Call("pr-writer", FINAL, ".", values, fix_round=round_)))
         if not (errors := _risk_errors(risk, report["body"])):
             return report["body"]
         values["risk_errors"] = (f"Your previous body has an invalid merge-risk block. Fix it with the pr-risk "

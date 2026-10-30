@@ -39,7 +39,7 @@ import driver_state
 import driver_summary
 import driver_tickets
 from driver_names import Names
-from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger, retry_point
+from driver_run import FINAL, OUT, Blocked, Call, Halted, Run, during, ledger, retry_point
 from driver_slots import git
 from driver_tickets import Ticket
 
@@ -140,7 +140,7 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
                                                                  slot))
         check = _role_check(role, number, entry, run, values, slot)
         with during(f"the {role}"):
-            report = driver_dispute.agent(run, role, number, slot, values, notes=notes, check=check)
+            report = driver_dispute.agent(run, Call(role, number, slot, values, notes=notes, check=check))
         for item in report.get("not_addressed", []):
             ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
         facts = {"tip": driver_slots.head(slot)}
@@ -169,7 +169,7 @@ def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list
     values = {**_prompt_values(ticket, slot, run), "start_sha": tip, "pr_sha": run.tip(), "files": " ".join(files)}
     try:
         with during("the conflict agent"):
-            run.agent("conflict", number, slot, values)
+            run.agent(Call("conflict", number, slot, values))
     except (Blocked, Halted):
         driver_merge.abort(slot)  # closes the merge when the agent did not commit it
         raise
