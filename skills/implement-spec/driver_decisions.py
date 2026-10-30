@@ -39,7 +39,8 @@ KINDS = {
             "asks to correct it again is closed.",
             "Ruling: {ticket} locked test stands (keep-test): {subject}.", {"phase": "{resume}"}),
          "correct-test": Option(
-            "The test-writer corrects the test once more, to the second reading, then the implementer runs again.",
+            "The test-writer corrects the test once more, to the second reading, then the role that disputed it runs "
+            "again (a fixer after the review of its round); after a review finding, the review runs again.",
             "Ruling: {ticket} locked test is corrected to the second reading (correct-test): {subject}.",
             {"phase": "test-writer", "note": "correction"}),
          "edit-spec": Option(

@@ -62,11 +62,12 @@ def kept(questions: list[dict], number: str) -> set[str]:
             (number, "spec-ambiguous", "keep-test") for finding in json.loads(Path(q["evidence"][0]).read_text())}
 
 
-def correction(questions: list[dict], number: str) -> str:
-    """The findings file of the last `spec-ambiguous` question of `number` answered `correct-test`, or ""."""
-    answered = [q["evidence"][0] for q in questions if (q["ticket"], q["kind"], q["answer"]) ==
+def correction(questions: list[dict], number: str) -> dict:
+    """The last `spec-ambiguous` question of `number` answered `correct-test`, or {}: its evidence is the findings file
+    of the correction, its `resume` the phase after it."""
+    answered = [q for q in questions if (q["ticket"], q["kind"], q["answer"]) ==
                 (number, "spec-ambiguous", "correct-test")]
-    return answered[-1] if answered else ""
+    return answered[-1] if answered else {}
 
 
 def seconds(found: list[tuple[str, str, str]], record: dict) -> list[Reading]:
