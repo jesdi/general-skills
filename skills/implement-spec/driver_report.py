@@ -3,7 +3,8 @@
 context: repo (slot path), branch, start (HEAD when the role started), log, correction (a test-writer corrects locked
   tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), locked (the
   locked-file check, a driver_locked.Locked, or None), fix (the titles of the findings a fixer gets), red (the red gate
-  a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an arbitration rules on), rejected
+  a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an arbitration rules on), commits
+  (the commits the report is checked on in place of its own: the tip of a rebase the driver went on with), rejected
   (errors the driver found when the agent ended, for a done report)."""
 from __future__ import annotations
 
@@ -79,7 +80,7 @@ def _rejected_errors(report: dict, context: dict) -> list[str]:
 def _commit_errors(report: dict, context: dict) -> list[str]:
     """Every commit is new since the role started and on the branch; every locked path is in such a commit and is a
     file at the branch tip: a deleted file holds no test that a review could prove (issue #136)."""
-    repo, branch, commits = context["repo"], context["branch"], _shas(report)
+    repo, branch, commits = context["repo"], context["branch"], context.get("commits") or _shas(report)
     new = _git(repo, "rev-list", f"{context['start']}..{branch}")
     return [f"commit {sha[:7]} is not a new commit on {branch}"
             for sha in commits if not any(n.startswith(sha) for n in new)] + _locked_path_errors(report, context)
