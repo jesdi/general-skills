@@ -56,7 +56,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - The driver writes no prose of its own into a prompt: a prompt is a template with its pointers filled. The same
   holds for each title, question and ruling in `driver_decisions.py`.
 - The ledger is written only by the driver, and the driver reads no fact from it.
-- A check that git cannot do is a failed check, never a passed one (`locked_changes`, `_breach_errors`).
+- A check that git cannot do is a failed check, never a passed one (`_breach_errors`).
 
 ### Locked tests
 
@@ -66,14 +66,21 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - After the implementer, a fixer and the ticket conflict agent, the driver checks the locked files with a diff
   (`driver_report._breach_errors`, its context read when the agent ends by `Run.locked_check`): the ticket's own
   against its last test-writer commit, every other ticket's whose test-writer has run, merged or not, against the
-  merge base of the ticket branch and the PR tip. A file as the PR tip has it is no change. The baseline is
+  merge base of the ticket branch and the PR tip. Another ticket's file as the PR tip has it is no change; the
+  ticket's own only when the PR side changed it since the branch point (the merge base of the role's start and the
+  PR tip), so a conflict merge takes in what landed and an implementer cannot put back the file as it was before
+  its test-writer. The baseline is
   stateless, so a breach left on the tip by a rejected rerun is found again after a `retry`. A changed locked file
   rejects the report naming the file, so the rerun on the next entry and `ticket-blocked` apply as to any rejection.
 - The reviewer gets the diff of each locked file of another ticket that the ticket changed
   (`driver_review.changed_elsewhere`, `prompts/elsewhere.md`): only the test-writer can have made it, and the
   reviewer judges it against the spec. A review finding on such a file goes to a correction, since a fixer may not
   change it (issue #116).
-- The end of run and the rebase conflict agent keep their own locked-file findings (`driver_review.locked_changes`).
+- The final fixer and the rebase conflict agent get the same check over every ticket's locked files
+  (`Run._final_check`): against the tidied tip, or for the rebase that makes it, the recovery point. The rebase
+  conflict agent goes on with the rebase itself, so the check reads the rebased tip: a report that leaves the rebase
+  open with no conflict is rejected, and one that stops at a later conflict is checked by nobody, as the driver
+  aborts that rebase. The final review has no locked-file findings of the driver.
 
 ### The PR branch
 
@@ -132,18 +139,21 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   whether its lines of the one lens prompt `prompts/final-lens.md` inline that file, and whether it runs on another
   provider. Its lines are `prompts/lens-<source>.md`, with `prompts/lens-copy.md` as `{copy}`. The entry, the
   prompt values (`driver_final._lens_values`), the precondition errors and the source tags read it, and `TIMEOUTS` and
-  `READ_ONLY` take its roles. `driver_agents.lens_entry` takes the entries from `final-reviewer`, and
-  `other_provider_entry` puts a lens on another provider than the first implementer entry;
+  `READ_ONLY` take its roles. `driver_agents.lens_entries` takes the entries from `final-reviewer`, and
+  `other_provider_entries` keeps a lens, its rerun too, on another provider than the first implementer entry;
   `load_models` refuses a list with none. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
-  twice stops the round only after every lens has ended; an accepted lens report is kept in `run.final.lenses` with
+  twice stops the round only after every lens has ended, with one `final-ticket-blocked` question for each such lens
+  (`Run.ask` adds them to one stop); an accepted lens report is kept in `run.final.lenses` with
   its tip and reused for that tip only. `driver_final._merged` makes the (file, line, title) of a finding unique,
-  keeping the more severe one, then the earlier lens, with the driver last; must-fix matching keeps its own (file, title) key. The
+  keeping the more severe one, then the earlier lens; must-fix matching keeps its own (file, title) key. The
   findings of the scoped review get the source `final-reviewer`; a findings file of an older driver, with no
   `source`, is read only by the scoped review agent. The lens reports go to
   `run.final.lenses` only once `Run.read_only` returns, so a report of a slot that a lens changed is never kept.
-- The scoped review after the fix batch is one `final-reviewer` agent on `other_provider_entry`, never the three
-  lenses again; it is the last round (`driver_final.ROUNDS`).
+- The scoped review after the fix batch is one `final-reviewer` agent on `other_provider_entries`, never the three
+  lenses again. Each finding it leaves open asks one `final-ticket-blocked` question (`driver_final._settle_review`);
+  only a `retry` runs another fix batch and scoped review, and `edit` keeps the end of run BLOCKED
+  (`driver_final._parked`).
 - A red gate on the implementer's or a fixer's commit is a finding of the next round (`driver_fixloop._gate`), so
   it blocks after round 2. A red gate on a test-writer correction blocks.
 - The implementer and each fixer get the `--gate` command and run it before they report. The gate of the driver
@@ -161,12 +171,13 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its evidence file is the findings file a
   `correct-test` correction reads (`driver._role_check`), and its files are the ones `keep-test` closes for later
   reviews (`driver_dispute.kept`, `driver_fixloop._unkept`).
-- `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of a ticket agent
+- `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
   is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a
   `ticket-blocked` question (`_ask_blocked`); its `retry` sets the phase the question holds in `resume`, and the stop
-  of a fixer sets the round back by one, so the same round runs again after a review. The end of run keeps the
-  same-entry rerun, and its stops raise `driver_run.Stopped`, which carries the report. An agent that runs for another
+  of a fixer sets the round back by one, so the same round runs again after a review. The end of run asks the same
+  kind with the ticket `final` (`final-ticket-blocked-<n>`) and no `resume`: `driver_final.run` records it
+  (`_ask`), and on the next run goes on from its state once the last stop is answered `retry`. An agent that runs for another
   role (an arbitration, a dispute's correction, a review correction) passes that role as `retry`: its `retry` runs that
   role again from the commit the agent started on, so its own work is not kept.
 - A dispute (an implementer or a fixer that reports BLOCKED with `locked test contradicts spec: <file>::<test>:
@@ -186,5 +197,5 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - An open question of a merged ticket is dropped (`driver_decisions.drop_merged`), at the start of a run and after
   each landing, with a ledger line: a ticket the operator set to `merge` by hand leaves its stop behind.
 - An answers file counts only when it is bound to the revision of the current `decisions.json`.
-- Only a question whose kind parks gives exit 2. A third round of the final review is never started: its open
-  findings become questions.
+- Only a question whose kind parks gives exit 2. A third round of the final review starts only after a `retry` of
+  a `final-ticket-blocked` question of an open finding.

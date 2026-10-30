@@ -61,31 +61,21 @@ KINDS = {
          "edit-spec": Option(
             "Keep the ticket BLOCKED, so the spec can be edited to say which reading it means.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", {})}),
+    # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
     "ticket-blocked": Kind(
         True,
-        "Ticket {ticket}: an agent stopped or was rejected, and its rerun too: {subject}",
-        "The agent ran two times, the second time on the next entry of its model list, and stopped or was rejected "
-        "both times. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
+        "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding is open: {subject}",
+        "An agent ran two times, the second time on the next entry of its model list, and stopped or was rejected "
+        "both times; or the scoped review after the fix batch of the final review left a finding open. {owner} is "
+        "BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
         "retry",
         {"retry": Option(
             "The role runs again on its first entry from the tip the ticket left, with its one rerun on the next "
-            "entry.",
+            "entry; for an open final-review finding, one more fix batch and scoped review run.",
             "Ruling: {ticket} runs again (retry): {subject}.", {"phase": "{resume}"}),
          "edit": Option(
-            "Keep the ticket BLOCKED, so the spec or the ticket can be edited before more work on it.",
+            "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", {})}),
-    # A final-review question belongs to no ticket: its `ticket` is "".
-    "final-finding": Kind(
-        True,
-        "Final review: a finding is open after the second review round: {subject}",
-        "The final review ran its two rounds and this finding is open. Nothing is pushed while it is open.",
-        "fix",
-        {"fix": Option(
-            "Keep the finding open. The run ends with nothing pushed, and the finding is fixed before a push.",
-            "Ruling: final-review finding stays open and nothing is pushed (fix): {subject}.", {}),
-         "accept": Option(
-            "Close the finding as it is. The branch can be pushed when each open finding is accepted.",
-            "Ruling: final-review finding closed as it is (accept): {subject}.", {})}),
 }
 
 
@@ -101,11 +91,13 @@ def drop_merged(state: dict) -> list[dict]:
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
              resume: str = "") -> dict:
-    """A new open question, id `<NN>-<kind>-<n>` (`<kind>-<n>` with no ticket); n counts in `asked`, the whole run.
+    """A new open question, id `<NN>-<kind>-<n>` (`final-<kind>-<n>` for the end of run); n counts in `asked`, the
+    whole run.
     `resume` is the phase a `retry` or a `keep-test` takes the ticket back to."""
-    made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
+    owner = "End of run" if ticket == "final" else f"Ticket {ticket}"
+    made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
+    return {"id": f"{ticket}-{kind}-{number}", "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
             "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume, "answer": None}

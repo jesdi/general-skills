@@ -132,13 +132,6 @@ def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
 
 # ---------------------------------------------------------------- the locked files
 
-def test_a_locked_file_check_that_git_cannot_make_is_a_finding(tmp_path):
-    rig = Inside(tmp_path)
-    assert driver_review.locked_changes(str(rig.repo), None, []) == []
-    (found,) = driver_review.locked_changes(str(rig.repo), "0" * 40, ["tests/test_01.py"])
-    assert found["severity"] == "critical" and found["title"].startswith("locked file check failed: ")
-
-
 STALE = finding("STALE", kind="fixture", file="tests/test_01.py")
 AMBIGUOUS_1 = "01-spec-ambiguous-1"
 

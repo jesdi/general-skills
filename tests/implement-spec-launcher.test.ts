@@ -82,7 +82,6 @@ describe('implement-spec README.md', () => {
       'spec-ambiguous': ['keep-test', 'correct-test', 'edit-spec'],
       'ticket-blocked': ['retry', 'edit'],
       finding: ['accept', 'split', 'redesign'],
-      'final-finding': ['fix', 'accept'],
     };
     for (const [kind, options] of Object.entries(kinds)) {
       const row = section.split('\n').find((l) => l.includes(`\`${kind}\``));

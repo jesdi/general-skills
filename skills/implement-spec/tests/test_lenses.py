@@ -119,15 +119,11 @@ def test_the_lens_findings_merge_into_one_file_and_the_critical_and_important_on
     assert len(rig.final_calls("final-reviewer")) == 1, "one scoped review"
 
 
-def test_a_tie_keeps_the_earlier_lens_and_the_driver_findings_merge_too():
+def test_a_tie_keeps_the_earlier_lens():
     one = finding("same", file="a.py", line=1)
     merged = driver_final._merged([{**one, "source": "spec"}, {**one, "source": "structure"},
-                                   {**one, "line": 2, "source": "structure"}], [])
+                                   {**one, "line": 2, "source": "structure"}])
     assert [(f["line"], f["source"]) for f in merged] == [(1, "spec"), (2, "structure")]
-    # The driver comes last: a lens finding wins a tie with a locked-file finding.
-    locked = {**finding("locked test changed", "critical", file="t.py", line=1), "source": "driver"}
-    lens = {**locked, "source": "correctness"}
-    assert [f["source"] for f in driver_final._merged([lens], [locked])] == ["correctness"]
 
 
 def test_a_must_fix_finding_reaches_every_lens_and_the_fix_batch(tmp_path):
@@ -151,41 +147,56 @@ def test_a_must_fix_finding_reaches_every_lens_and_the_fix_batch(tmp_path):
 # ---------------------------------------------------------------- a lens that stops
 
 @pytest.mark.parametrize("bad", ["BLOCKED", "rejected"])
-def test_a_lens_that_stops_halts_the_round_after_the_others_and_a_rerun_of_the_tip_runs_only_that_lens(tmp_path, bad):
+def test_a_lens_that_stops_twice_halts_the_round_with_final_ticket_blocked_and_a_retry_runs_only_that_lens(tmp_path, bad):
     rig = rig_of(tmp_path)
     flag, atomic = finding("missing --dry-run flag", file="cli.py", line=40), finding("not atomic", file="ledger.py")
     broken = stopped() if bad == "BLOCKED" else {"report": {"status": "DONE"}}
     steps = plan(**{"final/final-spec": [final(flag)], "final/final-correctness": [final(atomic)],
-                    "final/final-structure": [broken] * (1 if bad == "BLOCKED" else 2) + [final(finding("LONG"))],
+                    "final/final-structure": [broken, broken, final(finding("LONG"))],
                     "final/fixer": [fixer(fn("02"), "fix all three")]})
     rig.run(steps)
-    assert rig.code == 1 and not rig.final_calls("fixer"), rig.out
+    assert rig.code == 2 and not rig.final_calls("fixer"), rig.out
+    first, second = rig.led("End of run: final-structure ran on")
+    assert OPUS in first and ASTRA in second, "the rerun is on the second final-reviewer entry"
     (line,) = rig.led("End of run: BLOCKED at the final review")
-    assert ("the final-structure reported BLOCKED: cannot read the spec" if bad == "BLOCKED" else
+    assert ("the final-structure: it reported BLOCKED: cannot read the spec" if bad == "BLOCKED" else
             "the final-structure: report: ") in line
+    (question,) = rig.state()["run"]["questions"]
+    assert question["id"] == "final-ticket-blocked-1" and "the final-structure: " in question["subject"]
     tip = rig.final()["tidied"]
     assert rig.final()["reviewed"] is None and set(rig.final()["lenses"]) == {"final-spec", "final-correctness"}
     assert all(rig.final()["lenses"][role]["tip"] == tip for role in ("final-spec", "final-correctness"))
 
-    rig.run(steps)
+    rig.run(steps, "--answer", "final-ticket-blocked-1=retry")
     assert rig.code == 0, rig.out
-    assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 3 if bad == "rejected" else 2]
+    assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 3]
     assert [(f["title"], f["source"]) for f in findings_file(rig)] == [
         ("missing --dry-run flag", "spec"), ("not atomic", "correctness"), ("LONG", "structure")]
     assert len(rig.final_calls("fixer")) == 1
 
 
+def test_a_correctness_lens_that_stops_once_runs_again_on_another_provider_and_the_round_goes_on(tmp_path):
+    """The final-reviewer list has one entry on another provider than the implementer's: the rerun stays on it."""
+    rig = rig_of(tmp_path)
+    rig.run(plan(**{"final/final-correctness": [stopped("NEEDS_CONTEXT"), final(finding("LONG", "minor"))]}))
+    assert rig.code == 0 and not rig.state()["run"]["questions"], rig.out
+    first, second = rig.led("End of run: final-correctness ran on")
+    assert "it reported NEEDS_CONTEXT: cannot read the spec" in first and second.endswith("report accepted.")
+    assert ASTRA in first and ASTRA in second and not rig.led("final-correctness ran on", OPUS)
+    assert "cannot read the spec" in rig.final_calls("final-correctness")[1]["prompt"]
+
+
 def test_a_kept_lens_report_is_not_reused_for_another_tip(tmp_path):
     rig = rig_of(tmp_path)
-    rig.run(plan(**{"final/final-structure": [stopped()]}))
-    assert rig.code == 1 and rig.final()["lenses"]
+    rig.run(plan(**{"final/final-structure": [stopped(), stopped()]}))
+    assert rig.code == 2 and rig.final()["lenses"]
     tip = rig.final()["tidied"]
     state = rig.state()
     for kept in state["run"]["final"]["lenses"].values():
         kept["tip"] = "0" * 40  # as if the lens had reviewed another tip
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
-    rig.run(plan())
-    assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 2], rig.out
+    rig.run(plan(), "--answer", "final-ticket-blocked-1=retry")
+    assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 3], rig.out
     assert rig.final()["reviewed"] == tip
 
 
@@ -198,9 +209,9 @@ def test_a_lens_that_changes_the_slot_on_both_attempts_leaves_no_kept_lens_repor
 
 def test_a_lens_that_changes_the_slot_makes_the_kept_lenses_run_again_too(tmp_path):
     rig = rig_of(tmp_path)
-    steps = plan(**{"final/final-structure": [stopped(), final(files={"left.txt": "x"})]})
+    steps = plan(**{"final/final-structure": [stopped(), stopped(), final(files={"left.txt": "x"})]})
     rig.run(steps)
-    assert rig.code == 1 and set(rig.final()["lenses"]) == {"final-spec", "final-correctness"}, rig.out
-    rig.run(steps)
+    assert rig.code == 2 and set(rig.final()["lenses"]) == {"final-spec", "final-correctness"}, rig.out
+    rig.run(steps, "--answer", "final-ticket-blocked-1=retry")
     # The structure lens alone first, then all three after it changed the slot.
-    assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 3], rig.out
+    assert rig.code == 0 and [len(rig.final_calls(role)) for role in LENSES] == [2, 2, 4], rig.out

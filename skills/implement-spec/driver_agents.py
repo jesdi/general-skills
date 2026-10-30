@@ -94,17 +94,21 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
         return {}, [f"--models {path}: {exc!r}"]
 
 
-def other_provider_entry(models: dict[str, list[str]]) -> str:
-    """The other-provider entry of the `final-reviewer` list, for the correctness lens and the scoped review: its first
-    entry on another provider than the implementer's first entry; "" when there is none."""
+def other_provider_entries(models: dict[str, list[str]]) -> list[str]:
+    """The entries of the `final-reviewer` list on another provider than the implementer's first entry: the correctness
+    lens and the scoped review run and rerun only on these."""
     own = split(models["implementer"][0])[0]
-    return next((entry for entry in models["final-reviewer"] if split(entry)[0] != own), "")
+    return [entry for entry in models["final-reviewer"] if split(entry)[0] != own]
 
 
-def lens_entry(models: dict[str, list[str]], role: str) -> str:
-    """The entry of a lens of the final review: the other-provider entry for a lens on another provider, else the
-    first `final-reviewer` entry."""
-    return other_provider_entry(models) if LENSES[role].other_provider else models["final-reviewer"][0]
+def other_provider_entry(models: dict[str, list[str]]) -> str:
+    """The other-provider entry of the `final-reviewer` list, its first one; "" when there is none."""
+    return next(iter(other_provider_entries(models)), "")
+
+
+def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:
+    """The entries a lens of the final review runs on, the first one first, its rerun on the next one."""
+    return other_provider_entries(models) if LENSES[role].other_provider else models["final-reviewer"]
 
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:
