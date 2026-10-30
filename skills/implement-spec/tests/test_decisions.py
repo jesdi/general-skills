@@ -412,7 +412,7 @@ def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path)
 
 def test_the_removed_kinds_cannot_be_asked():
     removed = {"review-stopped", "review-rejected", "implementer-stopped", "fixer-stopped", "merged-locked-file",
-               "locked-test", "locked-test-again"}
+               "locked-test", "locked-test-again", "final-finding"}
     assert not removed & set(driver_decisions.KINDS) and "ticket-blocked" in driver_decisions.KINDS
 
 

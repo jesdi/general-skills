@@ -443,7 +443,8 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
     def change(new: dict) -> None:
         new["run"]["questions"] = questions
         for number, fields in moved.items():
-            new["tickets"][number].update(fields)
+            if number in new["tickets"]:  # the end of run has no record: driver_final reads the answers of its stop
+                new["tickets"][number].update(fields)
 
     state.update(change)
     error = _publish_questions(run)

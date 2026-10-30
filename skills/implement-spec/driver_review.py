@@ -1,6 +1,6 @@
 """The driver's own part of a review: the locked files of the tickets and the routing of the findings.
 
-A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `driver`.
+A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `gate` for a red full gate.
 """
 from __future__ import annotations
 
@@ -8,21 +8,9 @@ import os
 import subprocess
 from pathlib import Path
 
-from driver_slots import git, head, names, on_branch
+from driver_slots import git, head, on_branch
 
 OPEN = ("critical", "important")  # the severities that start a fix round
-
-
-def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:
-    """One critical finding per locked file that differs from the test-writer's commit `sha`, or for a diff that
-    git cannot make."""
-    if not (sha and locked):
-        return []  # a refactor ticket has no test-writer
-    diff = git(slot, "diff", "--name-only", "-z", f"{sha}..HEAD", "--", *locked)
-    titles = ({path: f"locked file changed: {path}" for path in names(diff.stdout)} if diff.returncode == 0
-              else {locked[0]: f"locked file check failed: {diff.stderr.strip()}"})
-    return [{"severity": "critical", "file": path, "line": 1, "title": title, "kind": "code", "source": "driver",
-             "evidence": f"git diff {sha}..HEAD -- {path}"} for path, title in titles.items()]
 
 
 def others(tickets: dict, number: str) -> list[str]:

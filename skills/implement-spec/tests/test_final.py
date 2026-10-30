@@ -15,7 +15,7 @@ Interface choices (ticket 06):
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
 - the final fixer's `commits` hold `{"sha", "ticket"}` objects, and the driver renames each fixer commit to
   `fix(NN): <its subject>` before the gate and the scoped review run (no rewrite after a review).
-- triage after the second final-review round: question `final-finding-<n>`, options `fix` and `accept`.
+- a finding open after the scoped review: question `final-ticket-blocked-<n>`, options `retry` and `edit`.
 - local stop: stdout lines `Branch tip: <sha>`, `Reviewed tip: <sha>` and the rerun command, which has `--push`.
 - the PR body lists, per ticket, a line with the ticket number and its commit's first 7 hex, and every ruling line.
 - stage.json at a clean unattended end is `{"stage": "implement", "status": "done"}`.
@@ -36,7 +36,7 @@ import pytest
 
 from test_cli import SKILL, git, ticket
 from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
-from test_stops import UNATTENDED, decisions, stage
+from test_stops import UNATTENDED, stage
 from test_walk import fix, impl, plan
 
 SCOPED = HOOKED
@@ -328,12 +328,13 @@ def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
 
     rig.run(steps)
 
-    assert rig.code == 1, rig.output()
-    assert not rig.state()["run"]["questions"]
+    assert rig.code == 2, rig.output()
+    (question,) = rig.state()["run"]["questions"]
+    assert question["id"] == "final-ticket-blocked-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
     assert [item["title"] for item in rig.state()["run"]["final"]["open"]] == ["MERGED-QUOTING-REGRESSION"]
     assert not rig.pushes() and not rig.prs()
     rig.run(steps)
-    assert rig.code == 1 and len(rig.final_calls("fixer")) == 1
+    assert rig.code == 2 and len(rig.final_calls("fixer")) == 1
     assert not rig.pushes() and not rig.prs()
 
 
@@ -345,7 +346,7 @@ def test_final_fix_batch_rejects_an_unaddressed_must_fix(tmp_path):
 
     rig.run(steps)
 
-    assert rig.code == 1, rig.output()
+    assert rig.code == 2, rig.output()
     assert not rig.pushes() and not rig.prs()
     assert any("addressed_must_fix: missing MERGED-QUOTING-REGRESSION (demo/export.py:99)" in line for line in rig.ledger())
 
@@ -397,38 +398,6 @@ def test_a_fixer_commit_without_its_ticket_is_a_schema_violation(violation):
     assert len(violation.final_calls("fixer")) == 2
     reviewed = violation.final_calls("final-spec")[0]["head"]
     assert [r["subject"] for r in violation.commits(reviewed)] == ["fix(01): tidy the header"]
-
-
-# ---------------------------------------------------------------- the third round
-
-@pytest.fixture(scope="module")
-def third(tmp_path_factory):
-    rig = Final(tmp_path_factory.mktemp("third"), ONE)
-    steps = plan(**{"final/final-spec": [final(finding("STILL-OPEN"))],
-                    "final/final-reviewer": [final(finding("STILL-OPEN"))],
-                    "final/fixer": [fixer(fn("01"), "first try", ticket_of="01")]})
-    rig.run(steps)
-    parked = rig.snap()
-    questions = decisions(rig)["questions"] if parked.code == 2 else []
-    rig.run(steps, "--answer", "final-finding-1=accept")
-    return SimpleNamespace(rig=rig, parked=parked, questions=questions, answered=rig.snap())
-
-
-def test_findings_open_after_the_second_round_become_fix_or_accept_questions_and_no_third_round_starts(third):
-    rig = third.rig
-    assert third.parked.code == 2, third.parked.out
-    (q,) = third.questions
-    assert q["id"] == "final-finding-1" and {o["id"] for o in q["options"]} == {"fix", "accept"}
-    assert "STILL-OPEN" in q["title"] + q["why"] and "final-finding-1" in third.parked.out
-    assert len(rig.final_calls("final-spec")) == len(rig.final_calls("final-reviewer")) == 1
-    assert len(rig.final_calls("fixer")) == 1 and third.parked.pushes == 0
-
-
-def test_accepting_the_finding_ends_the_run_with_a_ruling_and_starts_no_more_agents(third):
-    rig = third.rig
-    assert third.answered.code == 0, rig.output()
-    assert rig.led("Ruling", "STILL-OPEN", "accept")
-    assert (third.answered.calls, third.answered.pushes) == (third.parked.calls, 0) and all(stop_lines(third.answered.out))
 
 
 # ---------------------------------------------------------------- the rebase

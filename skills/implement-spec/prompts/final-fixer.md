@@ -12,7 +12,7 @@ Must-fix findings carried from ticket reviews:
 
 Fix each finding in the list as one batch, in one commit or in several. List every must-fix item you addressed in `addressed_must_fix` exactly as shown in the must-fix list, including its file and line; an omitted item rejects the batch. Leave the minor findings of the findings file.
 Each commit belongs to one ticket: the ticket whose criterion or code the commit changes. A fix for two tickets is two commits.
-Never edit a locked file: each one stays as it is at {start_sha}, and a locked file that differs is a critical finding of the next review.
+Never edit a locked file: each one stays as it is at {start_sha}, and the driver rejects a report whose commits change one.
 Use targeted tests while you work.
 Before you report DONE or DONE_WITH_CONCERNS, make the fast gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} and IMPLEMENT_SPEC_LOCKED='{locked}' (the locked files above) in the environment, then fix, commit, and run it again until it passes. The driver runs its full gate on that commit, and a scoped review reads your commits.
 Commit your work on the checked-out PR branch and change no commit that is on it now. Do not dispatch subagents.
