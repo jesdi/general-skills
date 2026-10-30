@@ -24,6 +24,29 @@ def pytest_configure(config):
             setattr(config.option, dest, os.path.join(artifacts, dest))
 
 
+def _context(item, when):
+    """Under `coverage run`, record each phase's lines under "<nodeid>|<when>"; a plain run never imports coverage."""
+    cov = sys.modules.get("coverage")
+    current = cov and cov.Coverage.current()
+    if current:
+        current.switch_context(f"{item.nodeid}|{when}")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    _context(item, "setup")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_call(item):
+    _context(item, "call")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_teardown(item):
+    _context(item, "teardown")
+
+
 def pytest_runtest_logreport(report):
     case = _cases.setdefault(report.nodeid, {"outcome": "passed", "duration": 0.0})
     if report.when == "call":
