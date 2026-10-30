@@ -415,6 +415,15 @@ def test_an_unlisted_change_to_the_locked_file_of_an_unmerged_ticket_is_rejected
     assert UNLISTED in first and rig.calls("02", "test-writer")[0]["t1"] < rig.calls("01", "reviewer")[0]["t1"]
 
 
+def on_base(rig, path, text):
+    """Commit `path` on the PR branch before the run."""
+    (rig.repo / path).parent.mkdir(parents=True, exist_ok=True)
+    (rig.repo / path).write_text(text)
+    subprocess.run(["git", "-C", str(rig.repo), "add", path], check=True)
+    subprocess.run(["git", "-C", str(rig.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q",
+                    "-m", f"add {path}"], check=True)
+
+
 LEDGER_BASE = "".join(f"def test_{n}():\n    assert {n}\n\n\n" for n in range(6))
 LEDGER_01 = LEDGER_BASE.replace("assert 0", "assert 0 == 0")  # 01 changes the top of the file
 LEDGER_03 = LEDGER_BASE.replace("assert 5", "assert 5 == 5")  # 03 locks the bottom
@@ -424,11 +433,7 @@ def landed_late(tmp_path):
     """01's implementer changes tests/test_ledger.py before any ticket locks it; 03's test-writer then changes another
     part of it, lists it in `locked`, and 03 merges while 01 is in review: the merge of 01 is clean."""
     rig = Inside(tmp_path, {k: v for k, v in three().items() if not k.startswith("02")})
-    (rig.repo / "tests").mkdir()
-    (rig.repo / "tests/test_ledger.py").write_text(LEDGER_BASE)
-    subprocess.run(["git", "-C", str(rig.repo), "add", "tests"], check=True)
-    subprocess.run(["git", "-C", str(rig.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q",
-                    "-m", "ledger tests"], check=True)
+    on_base(rig, "tests/test_ledger.py", LEDGER_BASE)
     writer = tw("03")
     writer["files"]["tests/test_ledger.py"] = LEDGER_03
     writer["report"]["locked"] += ["tests/test_ledger.py"]
@@ -1086,10 +1091,12 @@ def test_a_conflict_is_resolved_once_in_the_ticket_slot_and_a_second_one_blocks(
     assert len(again.calls("01", "conflict")) == 1
 
 
-def conflict(tmp_path, resolve, then=None, models=None, **more):
+def conflict(tmp_path, resolve, then=None, models=None, base=None, **more):
     """01 and 03 both add demo/cli.py and 03 merges first (as test_review.conflicted); `resolve` is 01's conflict step,
-    `then` its rerun (`resolve` again by default), `more` other steps."""
+    `then` its rerun (`resolve` again by default), `base` files on the PR branch before the run, `more` other steps."""
     rig = Inside(tmp_path, {k: v for k, v in three().items() if not k.startswith("02")}, models=models)
+    for path, text in (base or {}).items():
+        on_base(rig, path, text)
     one = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", "demo/cli.py": test_review.cli("one")})
     rig.steps = plan(**{"01/test-writer": [{**tw("01"), "touch": ["s1"]}], "01/conflict": [resolve, then or resolve],
                         "03/implementer": [{**impl("03", "demo/cli.py", test_review.cli("three")), "wait": ["s1"]}],
@@ -1122,17 +1129,35 @@ def test_a_conflict_resolution_that_changes_a_locked_file_of_a_merged_ticket_is_
     assert on_pr(rig, "tests/test_03.py") == locked_03 and on_pr(rig, "demo/cli.py") == test_review.cli("resolved")
 
 
-def test_a_conflict_resolution_that_takes_in_another_ticket_s_listed_change_to_its_own_locked_file_is_accepted(tmp_path):
-    """03 extends 01's locked file, lists it and merges first: its version on the PR tip is what landed."""
-    extended = LOCKED_01 + "\n\ndef test_y():\n    assert 03 == 'y'\n"
-    writer = tw("03")
-    writer["files"]["tests/test_01.py"] = extended
+def shared_01(takes):
+    """tests/test_01.py is on the PR branch: 01's test-writer changes its top and locks it; 03's test-writer changes its
+    bottom, lists it and merges first. `takes` is the file 01's conflict agent leaves."""
+    own, writer = tw("01"), tw("03")
+    own["files"]["tests/test_01.py"] = LEDGER_01
+    writer["files"]["tests/test_01.py"] = LEDGER_03
     writer["report"]["locked"] += ["tests/test_01.py"]
-    takes = {"files": {"demo/cli.py": test_review.cli("resolved"), "tests/test_01.py": extended},
-             "commit": "merge: resolve cli", "report": RESOLVED}
-    rig = conflict(tmp_path, takes, **{"03/test-writer": [{**writer, "wait": ["s1"]}]})
+    resolve = {"files": {"demo/cli.py": test_review.cli("resolved"), "tests/test_01.py": takes},
+               "commit": "merge: resolve cli", "report": RESOLVED}
+    return resolve, {"01/test-writer": [{**own, "touch": ["s1"]}], "03/test-writer": [{**writer, "wait": ["s1"]}]}
+
+
+LEDGER_BOTH = LEDGER_01.replace("assert 5", "assert 5 == 5")  # the clean three-way merge of LEDGER_01 and LEDGER_03
+
+
+def test_a_conflict_resolution_that_takes_in_another_ticket_s_listed_change_to_its_own_locked_file_is_accepted(tmp_path):
+    """The clean three-way merge of 01's version and the PR tip's keeps both test-writers' tests."""
+    resolve, writers = shared_01(LEDGER_BOTH)
+    rig = conflict(tmp_path, resolve, base={"tests/test_01.py": LEDGER_BASE}, **writers)
     assert rig.code == 0 and not rig.led("locked file changed"), rig.ledger()
-    assert on_pr(rig, "tests/test_01.py") == extended
+    assert on_pr(rig, "tests/test_01.py") == LEDGER_BOTH
+
+
+def test_a_conflict_resolution_that_takes_the_pr_version_of_its_own_locked_file_is_rejected(tmp_path):
+    """The PR tip's version drops the change of 01's test-writer."""
+    resolve, writers = shared_01(LEDGER_03)
+    rig = conflict(tmp_path, resolve, base={"tests/test_01.py": LEDGER_BASE}, **writers)
+    assert rig.code == 2 and all(CHANGED_01 in line for line in attempts(rig, "01", "conflict")), rig.ledger()
+    assert on_pr(rig, "tests/test_01.py") == LEDGER_03
 
 
 def test_a_conflict_agent_that_gives_up_leaves_no_open_merge_in_the_slot(tmp_path):
