@@ -181,10 +181,10 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
   is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a
-  `ticket-blocked` question (`_ask_blocked`); its `retry` sets the phase the question holds in `resume`, and the stop
-  of a fixer sets the round back by one, so the same round runs again after a review. The end of run asks the same
-  kind with the ticket `final` (`final-ticket-blocked-<n>`) and no `resume`: `driver_final.run` records it
-  (`_ask`), and on the next run goes on from its state once the last stop is answered `retry`. An agent that runs for another
+  `ticket-blocked` question (`_ask_blocked`); its `retry` sets the `resume` the question holds (`retry_point`), and the
+  stop of a fixer sets the round back by one, so the same round runs again after a review. The end of run asks the
+  same kind with the ticket `final` (`final-ticket-blocked-<n>`), whose `resume` is the phase `pending` of `run.final`;
+  the end of run goes on from its state once that phase is `pending` again. An agent that runs for another
   role (an arbitration, a dispute's correction, a review correction) passes that role as `retry`: its `retry` runs that
   role again from the commit the agent started on, so its own work is not kept.
 - A dispute (an implementer or a fixer that reports BLOCKED with `locked test contradicts spec: <file>::<test>:
@@ -200,8 +200,12 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 
 ### Questions
 
-- A stop is a bounded question in `state.json`. Only `driver_decisions.stop` adds one. An answered question is
-  never open again.
+- A stop is a bounded question in `state.json`. Only `driver_decisions.stop` adds one, through `Run.block`, the one
+  path that blocks a ticket or the end of run: it makes the record (`driver_run.record_of`, a ticket's or `run.final`)
+  BLOCKED, gives it the tip and the round of the question's `Resume`, and adds the questions. An answer that goes on
+  sets the record's fields in one write: the whole `resume` for `retry` and `keep-test`, the option's own fields for
+  `correct-test`. The end of run is recorded BLOCKED only at a question; with none, the next run tries it again.
+  An answered question is never open again.
 - An open question of a merged ticket is dropped (`driver_decisions.drop_merged`), at the start of a run and after
   each landing, with a ledger line: a ticket the operator set to `merge` by hand leaves its stop behind.
 - An answers file counts only when it is bound to the revision of the current `decisions.json`.

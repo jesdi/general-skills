@@ -273,7 +273,7 @@ def test_a_fixture_correction_that_is_rejected_twice_asks_ticket_blocked_and_ret
     rig = Inside(tmp_path).run(steps)
     assert rig.code == 2 and list(asked(rig)) == ["01-ticket-blocked-1"], rig.ledger()
     assert rig.led("BLOCKED at the test-writer correction: report .agent/implement/01/test-writer-1.json is not")
-    assert rig.state()["run"]["questions"][0]["resume"] == "review"
+    assert rig.state()["run"]["questions"][0]["resume"]["phase"] == "review"
     rig.run(steps, "--answer", "01-ticket-blocked-1=retry")
     assert rig.code == 0 and len(rig.calls("01", "test-writer")) == 4, rig.ledger()
     assert [call["role"] for call in rig.calls("01")][-3:] == ["reviewer", "test-writer", "reviewer"]
@@ -450,7 +450,7 @@ def test_landing_refuses_a_change_to_a_file_another_ticket_locked_later(tmp_path
     assert rig.tip() == rig.sha("03", "implementer") and on_pr(rig, "tests/test_ledger.py") == LEDGER_03
     (question,) = rig.state()["run"]["questions"]
     assert question["kind"] == "ticket-blocked" and "tests/test_ledger.py" in question["subject"]
-    assert question["resume"] == "implement"
+    assert question["resume"]["phase"] == "implement"
 
 
 def test_a_retry_of_a_refused_landing_runs_the_implementer_and_lands_once_it_puts_the_file_back(tmp_path):

@@ -17,6 +17,7 @@ import driver_decisions
 import driver_report
 import driver_review
 import driver_slots
+from driver_decisions import Resume
 from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger, retry_point
 
@@ -55,7 +56,7 @@ def agent(run: Run, call: Call) -> dict:
         call = replace(call, values={**call.values, "start_sha": driver_slots.head(call.slot)})
 
 
-def ambiguous(run: Run, number: str, readings: list[Reading], resume: str, fields: dict) -> NoReturn:
+def ambiguous(run: Run, number: str, readings: list[Reading], resume: Resume) -> NoReturn:
     """Ask one `spec-ambiguous` question on `readings` and block the ticket. Its evidence is a findings file that a
     `correct-test` correction reads: one finding per locked file, to correct to the second reading. The file is named
     after the question: `spec-ambiguous-<n>.json` for `<NN>-spec-ambiguous-<n>`."""
@@ -66,7 +67,7 @@ def ambiguous(run: Run, number: str, readings: list[Reading], resume: str, field
     _ruling_findings(path, [(one.file, subject, f"correct the test to the second reading: {one.second}")
                             for one, subject in zip(readings, subjects)])
     subject = "; ".join(subjects)
-    run.ask(number, "spec-ambiguous", [subject], str(path), resume, **fields)
+    run.ask(number, "spec-ambiguous", [subject], str(path), resume)
     raise Blocked(f"the spec reads two ways on a locked test: {subject}")
 
 
@@ -78,7 +79,7 @@ def kept_files(questions: list[dict], number: str) -> set[str]:
 
 def correction(questions: list[dict], number: str) -> dict:
     """The last `spec-ambiguous` question of `number` answered `correct-test`, or {}: its evidence is the findings file
-    of the correction, its `resume` the phase after it."""
+    of the correction, the phase of its `resume` the phase after it."""
     answered = [q for q in questions if (q["ticket"], q["kind"], q["answer"]) ==
                 (number, "spec-ambiguous", "correct-test")]
     return answered[-1] if answered else {}
@@ -143,14 +144,14 @@ def _settle(run: Run, call: Call, disputed: list[Dispute]) -> None:
     entry = run.state.read()["tickets"][number]
     resume = retry_point(call.role, driver_slots.head(call.slot), call.fix_round)
     if again := second_readings(disputed, entry["disputes"]):
-        ambiguous(run, number, again, *resume)
+        ambiguous(run, number, again, resume)
     n = 1 + len(entry["disputes"])
     ruled = _arbitrate(run, call, disputed, n)
     wrong = {file: ruling for file, ruling in ruled.items() if ruling["ruling"] == "test-wrong"}
     if again := second_readings([Dispute(file, ruling["test"], ruling["reason"]) for file, ruling in wrong.items()],
                                 entry["corrected"]):
         run.state.update(lambda state: state["tickets"][number]["disputes"].update(ruled))  # the file is arbitrated
-        ambiguous(run, number, again, *resume)
+        ambiguous(run, number, again, resume)
     if wrong:
         _correct(run, call, wrong, n)
     run.state.update(lambda state: state["tickets"][number]["disputes"].update(ruled))
