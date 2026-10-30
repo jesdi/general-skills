@@ -11,6 +11,7 @@ once no older driver is left.
 from __future__ import annotations
 
 from pathlib import Path
+from types import MappingProxyType
 from typing import IO
 
 import driver_decisions
@@ -89,11 +90,54 @@ def _removed(run: dict) -> list[str]:
             for q in run.get("questions", []) if q["answer"] is None and q["kind"] not in driver_decisions.KINDS]
 
 
+_REDESIGN = "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}."
+# The ruling sentences of the removed kinds, as the older driver wrote them: kind -> option -> sentence.
+_RULINGS = MappingProxyType({
+    "locked-test": {
+        "overrule-test": "Ruling: {ticket} locked test overruled: the test-writer corrects {subject}, then the "
+                         "implementer runs again.",
+        "overrule-implementer": "Ruling: {ticket} locked test stands: the implementer is overruled on {subject} and "
+                                "runs again."},
+    "finding": {
+        "accept": "Ruling: {ticket} finding closed as it is (accept): {subject}.",
+        "split": "Ruling: {ticket} stays BLOCKED, the open part becomes a new ticket (split): {subject}.",
+        "redesign": _REDESIGN},
+    "locked-test-again": {
+        "correct-again": "Ruling: {ticket} locked-test finding goes back to the test-writer for one more correction "
+                         "(correct-again): {subject}.",
+        "accept": "Ruling: {ticket} locked-test finding closed as it is (accept): {subject}.",
+        "redesign": _REDESIGN},
+    "review-stopped": {
+        "retry": "Ruling: {ticket} review runs again (retry): {subject}.",
+        "accept": "Ruling: {ticket} review goes on past this stop (accept): {subject}.",
+        "redesign": _REDESIGN},
+    "review-rejected": {
+        "retry": "Ruling: {ticket} review runs again (retry): {subject}.",
+        "redesign": _REDESIGN},
+    "implementer-stopped": {
+        "retry": "Ruling: {ticket} implementer runs again (retry): {subject}.",
+        "accept-tip": "Ruling: {ticket} tip goes to the gate and the review as it is (accept-tip): {subject}.",
+        "redesign": _REDESIGN},
+    "fixer-stopped": {
+        "retry": "Ruling: {ticket} fix round runs again (retry): {subject}.",
+        "redesign": _REDESIGN},
+    "merged-locked-file": {
+        "restore": "Ruling: {ticket} lands with {subject} put back to the version of the PR branch (restore).",
+        "adopt": "Ruling: {ticket} locks {subject} and lands its change to it (adopt).",
+        "redesign": _REDESIGN},
+    "final-finding": {
+        "fix": "Ruling: final-review finding stays open and nothing is pushed (fix): {subject}.",
+        "accept": "Ruling: final-review finding closed as it is (accept): {subject}."},
+})
+
+
 def _ruled(q: dict) -> str:
-    """Schema 4: the ruling sentence of an answered question of an older driver; for a removed kind, from its
-    answer."""
+    """Schema 4: the ruling sentence of an answered question of an older driver; for a removed kind, the older
+    driver's sentence, or a generic one for a kind or an answer it did not have."""
     if q["kind"] in driver_decisions.KINDS:
         return driver_decisions.ruling(q)
+    if template := _RULINGS.get(q["kind"], {}).get(q["answer"]):
+        return template.format(**q)
     return f"Ruling: {q['ticket'] or 'end of run'} {q['kind']} ({q['answer']}): {q['subject']}."
 
 
