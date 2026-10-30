@@ -13,6 +13,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver.py` | The command line, the checks before the first agent, the walk of the ticket graph, one ticket from its phase to merged or blocked, the landing on the PR branch, the exit code |
 | `driver_run.py` | `Run` (what all ticket threads share), one agent with its one rerun, the gate call, the ledger, `Blocked` |
 | `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, test-writer correction, fix rounds |
+| `driver_dispute.py` | A disputed locked test: the arbitration, its correction, the once-per-file record, `spec-ambiguous` |
 | `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push |
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
@@ -27,8 +28,8 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them |
 | `driver_tidy.py`, `driver_summary.py` | The history with one commit per ticket; `summary.md` |
 
-`driver.py`, `driver_fixloop.py` and `driver_final.py` decide what comes next. The other modules do one thing
-and do not know about the run, except `driver_run.py`, which the three deciding modules share.
+`driver.py`, `driver_fixloop.py`, `driver_dispute.py` and `driver_final.py` decide what comes next. The other modules do one thing
+and do not know about the run, except `driver_run.py`, which the deciding modules share.
 
 ## Conventions
 
@@ -153,17 +154,27 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - No test-writer correction runs after round 2 (`driver_fixloop._act_on`): a red gate or an unmet criterion blocks
   the ticket. Other open findings go to the final must-fix list when the gate is green. A correction at the cap
   would add locked tests that no fix round could make green.
-- A correction that does not close its findings (the next review finds one again, or the driver rejects its
-  report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
-  `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the
-  extra corrections (`AGAIN`), and an `accept` stop closes the ticket's locked-test findings in `_act_on`.
-- `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a contradicted locked test) of a ticket agent
+- A locked file is arbitrated once and corrected once per ticket. The ticket record keeps them in `disputes` and
+  `corrected`, keyed by the file (the part of a test id before `::`, resolved against the ticket's `locked` by
+  `driver_report._locked_file`), so a renamed or parametrized test cannot dodge the rule. Only `driver_dispute` and
+  `driver_fixloop._correct` write them; no `Option.fields` does, so no answer resets them. A second dispute or a second
+  correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its evidence file is the findings file a
+  `correct-test` correction reads (`driver._role_check`), and its files are the ones `keep-test` closes for later
+  reviews (`driver_dispute.kept`, `driver_fixloop._unkept`).
+- `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of a ticket agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
   is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a
   `ticket-blocked` question (`_ask_blocked`); its `retry` sets the phase the question holds in `resume`, and the stop
   of a fixer sets the round back by one, so the same round runs again after a review. The end of run keeps the
-  same-entry rerun, and its stops raise `driver_run.Stopped`, which carries the report.
-- An implementer or a fixer that says a locked test contradicts the spec asks `locked-test` in `Run._ask_stop`.
+  same-entry rerun, and its stops raise `driver_run.Stopped`, which carries the report. An agent that runs for another
+  role (an arbitration, a dispute's correction, a review correction) passes that role as `retry`: its `retry` runs that
+  role again from the commit the agent started on, so its own work is not kept.
+- A dispute (an implementer or a fixer that reports BLOCKED with `locked test contradicts spec: <file>::<test>:
+  <reason>`) raises `driver_run.Disputed`. `driver_dispute.agent`, which runs the implementer and each ticket fixer,
+  catches it: the reviewer arbitrates with `prompts/arbitration.md` in `Run.read_only` (not a fix round), a test ruled
+  `test-wrong` gets one correction, and the role runs again from the tip in the same round, with the ticket's rulings
+  in `prompts/ruled.md`. `driver_report._dispute_errors` rejects a dispute that names no locked file of the ticket or
+  leaves uncommitted changes: the arbitration is read-only and the correction commits.
 - An implementer or a fixer with nothing to change reports DONE with no commit (`driver_report._unchanged_errors`):
   the branch did not move, the tree is clean, and a concern says why. The driver gates and reviews that tip as it
   would a new one.

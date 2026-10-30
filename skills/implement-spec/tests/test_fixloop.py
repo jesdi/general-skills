@@ -16,7 +16,6 @@ import driver_report
 import driver_run
 import driver_review
 import test_review
-from conftest import GIT
 from test_cli import three, ticket
 from test_final import RUNNER, final, fixer, fn
 from test_review import FABLE, ONE, OPUS, RISKY, STUCK, finding, fix, review
@@ -141,7 +140,7 @@ def test_a_locked_file_check_that_git_cannot_make_is_a_finding(tmp_path):
 
 
 STALE = finding("STALE", kind="fixture", file="tests/test_01.py")
-AGAIN_1 = "01-locked-test-again-1"
+AMBIGUOUS_1 = "01-spec-ambiguous-1"
 
 
 def corrections(n):
@@ -155,52 +154,25 @@ def asked(rig):
     return {q["id"]: [o["id"] for o in q["options"]] for q in rig.state()["run"]["questions"] if q["answer"] is None}
 
 
-def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_the_operator(tmp_path):
+def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_spec_ambiguous(tmp_path):
     # Issue #107: the ticket was BLOCKED with no question, so only an edit of state.json could resume it.
     steps = plan(**{"01/test-writer": [tw("01"), *corrections(2)],
-                    "01/reviewer": [review("01", [STALE])] * 3 + [review("01")]})
+                    "01/implementer": [impl("01"), impl("01", text="def fn_01():\n    return 'again'\n")],
+                    "01/reviewer": [review("01", [STALE])] * 2 + [review("01")]})
     rig = Inside(tmp_path).run(steps)
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
-    assert rig.led("BLOCKED at the review: a locked-test finding is open after the test-writer correction: STALE.")
-    assert asked(rig) == {AGAIN_1: ["correct-again", "accept", "redesign"]}
+    assert rig.led("BLOCKED at the review: the spec reads two ways on a locked test: tests/test_01.py: the first "
+                   "reading: STALE: STALE; the second reading: STALE: STALE.")
+    assert asked(rig) == {AMBIGUOUS_1: ["keep-test", "correct-test", "edit-spec"]}
     (question,) = rig.state()["run"]["questions"]
-    assert question["recommended"] == "correct-again" and question["evidence"][0] == ".agent/implement/01/findings-0.json"
-    rig.run(steps, "--answer", f"{AGAIN_1}=correct-again")
+    assert question["recommended"] == "" and question["evidence"][0] == ".agent/implement/01/spec-ambiguous-1.json"
+    rig.run(steps, "--answer", f"{AMBIGUOUS_1}=correct-test")
     assert rig.code == 0, rig.ledger()
     order = [call["role"] for call in rig.calls("01")]
-    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "reviewer", "test-writer",
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "test-writer", "implementer",
                      "reviewer"]
-    assert rig.led("Ruling: 01 locked-test finding goes back to the test-writer for one more correction")
+    assert rig.led("Ruling: 01 locked test is corrected to the second reading (correct-test)")
     assert rig.state()["tickets"]["01"]["phase"] == "merged"
-
-
-def test_an_accepted_locked_test_finding_lets_the_ticket_go_on_to_its_fix_rounds(tmp_path):
-    steps = plan(**{"01/test-writer": [tw("01"), *corrections(1)], "01/fixer": [fix("01", 1)],
-                    "01/reviewer": [review("01", [STALE]), review("01", [STALE]), review("01", [STALE, STUCK]),
-                                    review("01", [STALE])]})
-    rig = Inside(tmp_path).run(steps)
-    assert rig.code == 2 and list(asked(rig)) == [AGAIN_1], rig.ledger()
-    rig.run(steps, "--answer", f"{AGAIN_1}=accept")
-    assert rig.code == 0, rig.ledger()
-    order = [call["role"] for call in rig.calls("01")]
-    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "reviewer", "fixer",
-                     "reviewer"]
-    assert rig.state()["tickets"]["01"]["round"] == 1
-    assert rig.led("STALE", "closed as it is by the ruling")
-
-
-def test_the_extra_corrections_are_bounded_and_redesign_keeps_the_ticket_blocked(tmp_path):
-    steps = plan(**{"01/test-writer": [tw("01"), *corrections(3)], "01/reviewer": [review("01", [STALE])] * 6})
-    rig = Inside(tmp_path).run(steps)
-    for n in (1, 2):
-        assert asked(rig) == {f"01-locked-test-again-{n}": ["correct-again", "accept", "redesign"]}, rig.ledger()
-        rig.run(steps, "--answer", f"01-locked-test-again-{n}=correct-again")
-    # Two extra corrections did not close it: a third one is not offered.
-    assert asked(rig) == {"01-locked-test-again-3": ["accept", "redesign"]}, rig.ledger()
-    assert len(rig.calls("01", "test-writer")) == 4
-    rig.run(steps, "--answer", "01-locked-test-again-3=redesign")
-    assert rig.code == 1 and rig.state()["tickets"]["01"]["phase"] == "blocked" and asked(rig) == {}
-    assert rig.led("Ruling: 01 stays BLOCKED, the design changes first (redesign): STALE.")
 
 
 def test_an_open_finding_survives_the_fixture_correction_of_its_review_and_starts_the_fix_round(tmp_path):
@@ -301,53 +273,17 @@ def test_a_test_writer_that_lists_test_node_ids_in_locked_locks_their_files(tmp_
     assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py"]
 
 
-CONTRA = "locked test contradicts spec: tests/test_01.py::test_x"
-OVERRULED = {**tw("01"), "files": {"tests/test_01.py": "def test_x():\n    assert '01' == '01'\n"},
-             "commit": "test: 01 overruled"}
-AGAIN = impl("01", text="def fn_01():\n    return 'again'\n")
-
-
-def fixer_stops():
-    return {"report": {"status": "BLOCKED", "commits": [], "files": [], "concerns": [CONTRA], "green": [], "ticket": "01"}}
-
-
-def test_a_fixer_that_reports_a_wrong_locked_test_opens_the_locked_test_question(tmp_path):
-    steps = plan(**{"01/reviewer": [review("01", [STUCK]), review("01")], "01/fixer": [fixer_stops()],
-                    "01/test-writer": [tw("01"), OVERRULED], "01/implementer": [impl("01"), AGAIN]})
-    rig = Inside(tmp_path).run(steps)
-    assert rig.code == 2, rig.ledger()
-    (asked,) = rig.state()["run"]["questions"]
-    assert (asked["id"], asked["evidence"][0]) == ("01-locked-test-1", ".agent/implement/01/fixer-1.json")
-    rig.run(steps, "--answer", "01-locked-test-1=overrule-test")
-    assert rig.code == 0, rig.ledger()
-    order = [call["role"] for call in rig.calls("01")]
-    assert order == ["test-writer", "implementer", "reviewer", "fixer", "test-writer", "implementer", "reviewer"]
-    # The correction reads the concerns of the fixer that stopped, not those of the implementer.
-    assert "01/fixer-1.json" in rig.prompt("test-writer-0") and "implementer-0.json" not in rig.prompt("test-writer-0")
-
-
-def test_the_fix_rounds_count_from_0_after_an_overruled_test(tmp_path):
-    stuck = review("01", [STUCK])
-    steps = plan(**{"01/reviewer": [stuck, stuck, review("01")],
-                    "01/fixer": [fixer_stops(), fix("01", 1)],
-                    "01/test-writer": [tw("01"), OVERRULED], "01/implementer": [impl("01"), AGAIN]})
-    rig = Inside(tmp_path).run(steps)
-    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 1, rig.ledger()
-    rig.run(steps, "--answer", "01-locked-test-1=overrule-test")
-    # The corrected tests are a new contract: the first finding on them gets a fresh fix round.
-    assert rig.code == 0, rig.ledger()
-    assert rig.state()["tickets"]["01"]["round"] == 1 and not rig.led("after round 2")
-
-
-def test_a_fixture_correction_that_is_rejected_asks_the_operator(tmp_path):
+def test_a_fixture_correction_that_is_rejected_twice_asks_ticket_blocked_and_retry_reviews_again(tmp_path):
     # Issue #107: a correction the driver rejects (for one, a change to a file it does not list) was a dead end too.
     steps = plan(**{"01/test-writer": [tw("01"), {}, {}, *corrections(1)],
                     "01/reviewer": [review("01", [STALE])] * 2 + [review("01")]})
     rig = Inside(tmp_path).run(steps)
-    assert rig.code == 2 and list(asked(rig)) == [AGAIN_1], rig.ledger()
+    assert rig.code == 2 and list(asked(rig)) == ["01-ticket-blocked-1"], rig.ledger()
     assert rig.led("BLOCKED at the test-writer correction: report .agent/implement/01/test-writer-1.json is not")
-    rig.run(steps, "--answer", f"{AGAIN_1}=correct-again")
+    assert rig.state()["run"]["questions"][0]["resume"] == "review"
+    rig.run(steps, "--answer", "01-ticket-blocked-1=retry")
     assert rig.code == 0 and len(rig.calls("01", "test-writer")) == 4, rig.ledger()
+    assert [call["role"] for call in rig.calls("01")][-3:] == ["reviewer", "test-writer", "reviewer"]
 
 
 # ---------------------------------------------------------------- one locked-file rule

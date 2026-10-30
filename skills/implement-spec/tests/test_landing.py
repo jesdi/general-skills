@@ -27,7 +27,7 @@ from driver_names import Names
 
 from test_cli import RUN, git, models_file, snapshot, three, ticket
 from test_review import HOOKED, Review, cli
-from test_stops import blocked as contradicted
+from test_stops import blocked
 from test_walk import GATE, Rig, fix, impl, make_env, plan, tw
 
 T01, T03 = "tests/test_01.py", "tests/test_03.py"
@@ -238,7 +238,7 @@ def test_a_driver_on_another_pr_branch_in_another_worktree_runs_while_the_first_
 ENDS = {
     0: (plan(), {}, ()),
     1: (plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), {"red": ["ticket/feat%2Fcsv/01"]}, ()),
-    2: (plan(**{"01/implementer": [contradicted()]}), {}, ()),
+    2: (plan(**{"01/implementer": [blocked(), blocked()]}), {}, ()),
     3: (plan(), {}, ("--prepare", "false")),  # slot 2 cannot be made: the run has started and holds the lock
     130: (plan(**{"01/test-writer": [{**tw("01"), "wait": ["never"]}]}), {}, ()),
 }

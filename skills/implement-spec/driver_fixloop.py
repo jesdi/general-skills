@@ -9,7 +9,7 @@ import json
 import os
 from dataclasses import dataclass
 
-import driver_decisions
+import driver_dispute
 import driver_gate
 import driver_review
 import driver_slots
@@ -126,24 +126,29 @@ def _review(job: Job) -> list[dict]:
 
 
 def _correct(job: Job, findings: list[dict]) -> list[dict]:
-    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. Returns the
-    findings that it did not correct, as findings of kind code for the fixer (issue #111)."""
+    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. A file that
+    was corrected before in the ticket asks `spec-ambiguous` instead. A correction that is rejected twice asks
+    `ticket-blocked`, whose `retry` reviews the tip again. Returns the findings that it did not correct, as findings
+    of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
-    titles, evidence = [finding["title"] for finding in findings], str(OUT / number / f"findings-{job.round}.json")
-    if job.corrected:
-        run.ask(number, "locked-test-again", titles, evidence)
-        raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {'; '.join(titles)}")
-    with during("the test-writer correction"):
-        try:
-            report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
-                               fix_round=job.round + 1, check={"correction": True, "findings": titles})
-        except Blocked:
-            run.ask(number, "locked-test-again", titles, evidence)  # a rejected correction is one that did not close
-            raise
-    job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
+    found = [(finding["file"], entry["corrected"].get(finding["file"], {}).get("test", finding["file"]),
+              f"{finding['title']}: {finding['evidence']}") for finding in findings]
+    if again := driver_dispute.seconds(found, entry["corrected"]):
+        with during("the review"):
+            driver_dispute.ambiguous(run, number, again, "review", {})
+    with during("the test-writer correction"):
+        report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
+                           fix_round=job.round + 1, retry="reviewer",
+                           check={"correction": True, "findings": [finding["title"] for finding in findings]})
+    job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
-    return _uncorrected(job, findings, report.get("not_addressed", []))
+    code = _uncorrected(job, findings, report.get("not_addressed", []))
+    corrected = {finding["file"]: {"test": finding["file"], "requirement": "", "reason": reason}
+                 for (_, _, reason), finding in zip(found, findings) if finding["title"] not in
+                 [item["title"] for item in code]}
+    run.state.update(lambda state: state["tickets"][number]["corrected"].update(corrected))
+    return code
 
 
 def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> list[dict]:
@@ -188,28 +193,29 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
         record = driver_gate.record_path(OUT / number, driver_gate.FULL, landing)
         values.update(landing_sha=landing[:7], landing_record=os.path.relpath(record, job.slot))
         notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
+    baseline = run.state.read()["tickets"][number]["test_writer_sha"]
     with during(f"fix round {job.round}"):
-        run.agent("fixer", number, job.slot, values, entry=on, entries=run.models["implementer"], fix_round=job.round,
-                  notes=notes, check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
+        driver_dispute.agent(run, "fixer", number, job.slot, values, entry=on, entries=run.models["implementer"],
+                             fix_round=job.round, notes=notes,
+                             check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
     before, job.tip = job.tip, driver_slots.head(job.slot)
-    run.state.ticket(number, tip=job.tip, landing=None)
+    corrected = run.state.ticket(number, tip=job.tip, landing=None)["test_writer_sha"] != baseline
     # No review saw a red `before`, so the next review covers the fix before it too. No review has seen a test-writer
-    # correction either, so the review after a fix on a corrected tip is a full one.
+    # correction either (before the fix, or after a dispute of the fixer), so the review after it is a full one.
     if not job.red:
-        job.previous = "" if job.corrected else before
+        job.previous = "" if job.corrected or corrected else before
     job.corrected = False
 
 
-def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
-    """The findings for a correction: none once an `accept` ruling closed the ticket's locked-test findings, else
-    `to_correct`."""
+def _unkept(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
+    """The findings for a correction, but those on a file whose `spec-ambiguous` question was answered `keep-test`."""
     number = job.ticket.number
-    if not driver_decisions.corrections(state["run"]["questions"], number)[1]:
-        return to_correct
+    kept = driver_dispute.kept(state["run"]["questions"], number)
     for finding in to_correct:
-        ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
-               f"(accept), with no correction: {finding['title']}.")
-    return []
+        if finding["file"] in kept:
+            ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
+                   f"(keep-test), with no correction: {finding['title']}.")
+    return [finding for finding in to_correct if finding["file"] not in kept]
 
 
 def _save_must_fix(state: dict, number: str, findings: list[dict]) -> None:
@@ -241,7 +247,7 @@ def _routed(job: Job, found: list[dict]) -> tuple[list[dict], list[dict]]:
     locked = state["tickets"][job.ticket.number]["locked"]
     protected = [path for path in driver_review.others(state["tickets"], job.ticket.number) if path not in locked]
     to_correct, to_fix = driver_review.route(found, locked, protected)
-    to_correct = _unaccepted(job, state, to_correct)
+    to_correct = _unkept(job, state, to_correct)
     if job.round == ROUNDS:
         # No correction at the cap: no fix round could make its new locked tests green.
         return [], [finding for finding in found if finding in to_correct + to_fix]
