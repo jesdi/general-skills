@@ -162,8 +162,8 @@ def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_spec_am
     rig.run(steps, "--answer", f"{AMBIGUOUS_1}=correct-test")
     assert rig.code == 0, rig.ledger()
     order = [call["role"] for call in rig.calls("01")]
-    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "test-writer", "implementer",
-                     "reviewer"]
+    # The question came from a review: after the correction, the review runs again.
+    assert order == ["test-writer", "implementer", "reviewer", "test-writer", "reviewer", "test-writer", "reviewer"]
     assert rig.led("Ruling: 01 locked test is corrected to the second reading (correct-test)")
     assert rig.state()["tickets"]["01"]["phase"] == "merged"
 

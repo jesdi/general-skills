@@ -244,6 +244,20 @@ def test_correct_test_corrects_to_the_second_reading_then_the_implementer_runs_a
     assert set(rig.state()["tickets"]["01"]["disputes"]) == {"tests/test_01.py"}
 
 
+def test_correct_test_after_a_fixer_s_dispute_runs_the_fixer_of_that_round_again_after_the_correction(tmp_path):
+    stuck = review("01", [STUCK])
+    steps = plan(**{"01/fixer": [disputes(role="fixer"), disputes(role="fixer"), fix("01", 1)],
+                    "01/test-writer": [tw("01"), correction()],
+                    "01/reviewer": [stuck, ruling("code-wrong", "R3 says double quotes"), stuck, review("01")]})
+    rig = Inside(tmp_path, ONE).run(steps)
+    assert rig.code == 2 and [q["id"] for q in asked(rig)] == [AMBIGUOUS], rig.ledger()
+    rig.run(steps, "--answer", f"{AMBIGUOUS}=correct-test")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert roles(rig)[-4:] == ["test-writer", "reviewer", "fixer", "reviewer"]
+    assert len(rig.calls("01", "implementer")) == 1 and rig.state()["tickets"]["01"]["round"] == 1
+    assert "fixer-1.json" in rig.calls("01", "fixer")[2]["prompt"]
+
+
 def test_edit_spec_keeps_the_ticket_blocked_with_the_ruling_and_runs_no_agent(tmp_path):
     rig = ambiguous(tmp_path)
     seen, before = len(rig.calls("01")), rig.state()["tickets"]["01"]
