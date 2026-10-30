@@ -11,6 +11,7 @@ Resolve each conflict so that the behavior of both sides holds: the spec and the
 Run the targeted tests of the files you resolved. The driver runs the gate on the rebased tip.
 Stage the files you resolved, then go on with `git rebase --continue`. Do not abort the rebase and do not dispatch subagents.
 You resolve one stop only. When the rebase stops again at a later commit, leave that stop as it is and write your report.
+When the driver rejected an earlier attempt after the rebase went on, the rebase is done: fix what it names in the commit at HEAD with `git commit --amend`, and do not start the rebase again.
 In `commits`, give `git rev-parse HEAD` as it is when you are done. In `files`, give each file you resolved.
 
 Write one JSON report at {report} that matches this schema:
