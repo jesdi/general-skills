@@ -1,5 +1,6 @@
-"""A locked test that an implementer or a fixer disputes: the reviewer's arbitration, one correction of a test ruled
-wrong, and the `spec-ambiguous` question when a locked file is disputed or corrected a second time in its ticket.
+"""A locked test that an implementer or a fixer disputes: the reviewer's arbitration, the test-writer correction
+(after a ruling, a review finding or a `correct-test` answer), and the `spec-ambiguous` question when a locked file is
+disputed or corrected a second time in its ticket.
 
 A dispute is keyed by its locked file, the part of the test id before `::`, so a renamed or parametrized test of a
 ruled file is the same test. The ticket record keeps the ruling in `disputes` and the correction in `corrected`.
@@ -18,6 +19,13 @@ import driver_review
 import driver_slots
 from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger, retry_point
+
+class Corrected(NamedTuple):
+    """The reading a locked file is corrected to, which the ticket's `corrected` keeps: its one correction."""
+    test: str
+    requirement: str
+    reason: str
+
 
 class Reading(NamedTuple):
     """The two readings of a locked test that a `spec-ambiguous` question asks about."""
@@ -55,10 +63,8 @@ def ambiguous(run: Run, number: str, readings: list[Reading], resume: str, field
     path = OUT / number / f"{question.removeprefix(f'{number}-')}.json"  # the ticket's folder names the ticket
     subjects = [f"{one.test}{f', {one.requirement}' * bool(one.requirement)}: the first reading: {one.first}; the "
                 f"second reading: {one.second}" for one in readings]
-    findings = [{"severity": "critical", "file": one.file, "line": 0, "title": subject, "kind": "ruling",
-                 "evidence": f"correct the test to the second reading: {one.second}"}
-                for one, subject in zip(readings, subjects)]
-    path.write_text(json.dumps(findings, indent=1) + "\n")
+    _ruling_findings(path, [(one.file, subject, f"correct the test to the second reading: {one.second}")
+                            for one, subject in zip(readings, subjects)])
     subject = "; ".join(subjects)
     run.ask(number, "spec-ambiguous", [subject], str(path), resume, **fields)
     raise Blocked(f"the spec reads two ways on a locked test: {subject}")
@@ -85,10 +91,48 @@ def second_readings(found: list[Dispute], record: dict) -> list[Reading]:
             for one in found if one.file in record]
 
 
-def _record(entry: dict, ruled: dict[str, dict], wrong: dict[str, dict]) -> None:
-    entry["disputes"].update(ruled)
-    entry["corrected"].update({file: {name: ruling[name] for name in ("test", "requirement", "reason")}
-                               for file, ruling in wrong.items()})
+def _ruling_findings(path: Path, rulings: list[tuple[str, str, str]]) -> list[dict]:
+    """Write the findings file of a correction to rulings: a critical finding of kind `ruling` per (locked file,
+    title, evidence). Returns the findings."""
+    findings = [{"severity": "critical", "file": file, "line": 0, "title": title, "evidence": evidence, "kind": "ruling"}
+                for file, title, evidence in rulings]
+    path.write_text(json.dumps(findings, indent=1) + "\n")
+    return findings
+
+
+def correct(run: Run, call: Call, findings: list[dict], readings: dict[str, Corrected], fate: str) -> dict[str, str]:
+    """One test-writer correction of `findings`, outside the fix rounds. `call` is the test-writer's, its values point
+    at the findings file. Its commit becomes the baseline of the ticket's own locked files, and the `corrected` of the
+    ticket keeps the reading in `readings` of each file it corrected. A ledger line per finding says what it did,
+    with `fate` for one it did not correct. Returns {title: reason} of each finding it did not correct."""
+    number = call.number
+    report = run.agent(replace(call, notes=["correction"],
+                               check={"correction": True, "findings": [finding["title"] for finding in findings]}))
+    tip, reasons = driver_slots.head(call.slot), {item["finding"]: item["reason"] for item in report.get("not_addressed", [])}
+    kept = {finding["file"]: readings[finding["file"]]._asdict() for finding in findings
+            if finding["file"] in readings and finding["title"] not in reasons}
+
+    def record(state: dict) -> None:
+        entry = state["tickets"][number]
+        entry.update(tip=tip, **driver_review.written(entry, report["locked"], tip))
+        entry["corrected"].update(kept)
+
+    run.state.update(record)
+    for finding in findings:
+        title = finding["title"]
+        result = (f"The test-writer did not correct it: {reasons[title]}.{fate}" if title in reasons else
+                  f"The test-writer corrected it at {tip[:7]}.")
+        ledger(f"Ticket {number}: {finding['kind']} correction in {finding['file']}, outside the fix rounds: {title}: "
+               f"{finding['evidence']}. {result}")
+    return reasons
+
+
+def correct_as_answered(run: Run, call: Call, question: dict) -> None:
+    """The correction of a `spec-ambiguous` question answered `correct-test`, to the findings of its evidence file.
+    No answer changes `corrected`."""
+    path = question["evidence"][0]
+    values = {**call.values, "findings": os.path.relpath(path, call.slot)}
+    correct(run, replace(call, values=values), json.loads(Path(path).read_text()), {}, "")
 
 
 def _settle(run: Run, call: Call, disputed: list[Dispute]) -> None:
@@ -105,11 +149,11 @@ def _settle(run: Run, call: Call, disputed: list[Dispute]) -> None:
     wrong = {file: ruling for file, ruling in ruled.items() if ruling["ruling"] == "test-wrong"}
     if again := second_readings([Dispute(file, ruling["test"], ruling["reason"]) for file, ruling in wrong.items()],
                                 entry["corrected"]):
-        run.state.update(lambda state: _record(state["tickets"][number], ruled, {}))  # the file is arbitrated
+        run.state.update(lambda state: state["tickets"][number]["disputes"].update(ruled))  # the file is arbitrated
         ambiguous(run, number, again, *resume)
     if wrong:
         _correct(run, call, wrong, n)
-    run.state.update(lambda state: _record(state["tickets"][number], ruled, wrong))
+    run.state.update(lambda state: state["tickets"][number]["disputes"].update(ruled))
 
 
 def _arbitrate(run: Run, call: Call, disputed: list[Dispute], n: int) -> dict[str, dict]:
@@ -130,20 +174,13 @@ def _arbitrate(run: Run, call: Call, disputed: list[Dispute], n: int) -> dict[st
 
 
 def _correct(run: Run, call: Call, wrong: dict[str, dict], n: int) -> None:
-    """One test-writer correction of the tests ruled `test-wrong`, each ruling a finding of kind `ruling`."""
+    """The correction of the tests ruled `test-wrong`, each ruling a finding of kind `ruling` in `ruled-<n>.json`."""
     number, slot = call.number, call.slot
     path = OUT / number / f"ruled-{n}.json"
-    findings = [{"severity": "critical", "file": file, "line": 0, "title": f"{ruling['test']}, {ruling['requirement']}",
-                 "evidence": ruling["reason"], "kind": "ruling"} for file, ruling in wrong.items()]
-    path.write_text(json.dumps(findings, indent=1) + "\n")
-    asked = {**call.values, "start_sha": driver_slots.head(slot), "findings": os.path.relpath(path, slot)}
+    findings = _ruling_findings(path, [(file, f"{ruling['test']}, {ruling['requirement']}", ruling["reason"])
+                                       for file, ruling in wrong.items()])
+    values = {**call.values, "start_sha": driver_slots.head(slot), "findings": os.path.relpath(path, slot)}
+    readings = {file: Corrected(ruling["test"], ruling["requirement"], ruling["reason"]) for file, ruling in wrong.items()}
     with during("the test-writer correction"):
-        report = run.agent(Call("test-writer", number, slot, asked, notes=["correction"], name=f"correction-{n}",
-                                retry=call.role, fix_round=call.fix_round,
-                                check={"correction": True, "findings": [finding["title"] for finding in findings]}))
-    tip, entry = driver_slots.head(slot), run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=tip, **driver_review.written(entry, report["locked"], tip))
-    ledger(f"Ticket {number}: the test-writer corrected {', '.join(wrong)} at {tip[:7]} after the ruling, outside the "
-           "fix rounds.")
-    for item in report.get("not_addressed", []):
-        ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
+        correct(run, Call("test-writer", number, slot, values, name=f"correction-{n}", retry=call.role,
+                          fix_round=call.fix_round), findings, readings, "")

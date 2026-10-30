@@ -13,6 +13,7 @@ import driver_dispute
 import driver_gate
 import driver_review
 import driver_slots
+from driver_dispute import Corrected
 from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger
 from driver_tickets import Ticket
@@ -136,41 +137,29 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     `ticket-blocked`, whose `retry` reviews the tip again. Returns the findings that it did not correct, as findings
     of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
-    entry = run.state.read()["tickets"][number]
-    found = [Dispute(finding["file"], entry["corrected"].get(finding["file"], {}).get("test", finding["file"]),
+    corrected = run.state.read()["tickets"][number]["corrected"]
+    found = [Dispute(finding["file"], corrected.get(finding["file"], {}).get("test", finding["file"]),
                      f"{finding['title']}: {finding['evidence']}") for finding in findings]
-    if again := driver_dispute.second_readings(found, entry["corrected"]):
+    if again := driver_dispute.second_readings(found, corrected):
         with during("the review"):
             driver_dispute.ambiguous(run, number, again, "review", {})
+    call = Call("test-writer", number, job.slot, job.pointers(job.round), fix_round=job.round + 1, retry="reviewer")
     with during("the test-writer correction"):
-        report = run.agent(Call("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
-                                fix_round=job.round + 1, retry="reviewer",
-                                check={"correction": True, "findings": [finding["title"] for finding in findings]}))
+        reasons = driver_dispute.correct(run, call, findings, {one.file: Corrected(one.test, "", one.reason)
+                                                               for one in found},
+                                         " It goes to the fixer as a finding of kind code.")
     job.tip, job.previous = driver_slots.head(job.slot), ""
-    run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
-    code = _uncorrected(job, findings, report.get("not_addressed", []))
-    corrected = {finding["file"]: {"test": finding["file"], "requirement": "", "reason": one.reason}
-                 for one, finding in zip(found, findings) if finding["title"] not in
-                 [item["title"] for item in code]}
-    run.state.update(lambda state: state["tickets"][number]["corrected"].update(corrected))
-    return code
+    return _uncorrected(job, findings, reasons)
 
 
-def _uncorrected(job: Job, findings: list[dict], not_addressed: list[dict]) -> list[dict]:
-    """Log what the correction did with each finding. Returns each one it did not correct as a finding of kind
-    code, with its reason as the evidence: the test needs a production change first, so a fixer closes it."""
-    number = job.ticket.number
-    reasons = {item["finding"]: item["reason"] for item in not_addressed}
-    for finding in findings:
-        result = (f"The test-writer did not correct it: {reasons[finding['title']]}. It goes to the fixer as a finding "
-                  "of kind code." if finding["title"] in reasons else f"The test-writer corrected it at {job.tip[:7]}.")
-        ledger(f"Ticket {number}: {finding['kind']} correction in {finding['file']}, outside the fix rounds: "
-               f"{finding['title']}: {finding['evidence']}. {result}")
+def _uncorrected(job: Job, findings: list[dict], reasons: dict[str, str]) -> list[dict]:
+    """Each finding the correction did not correct, with its reason, as a finding of kind code, with the reason as
+    its evidence: the test needs a production change first, so a fixer closes it."""
     code = {finding["title"]: {**finding, "kind": "code", "evidence": f"the test-writer did not correct it: {reason}"}
             for finding in findings if (reason := reasons.get(finding["title"]))}
     if code:
         # The fixer reads the findings file of this review, so the finding is of kind code there too.
-        path = OUT / number / f"findings-{job.round}.json"
+        path = OUT / job.ticket.number / f"findings-{job.round}.json"
         written = [code.get(finding["title"], finding) if finding in findings else finding
                    for finding in json.loads(path.read_text())]
         path.write_text(json.dumps(written, indent=1) + "\n")

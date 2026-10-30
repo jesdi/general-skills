@@ -105,24 +105,19 @@ def _first_notes(number: str, slot_number: int, entry: dict, run: Run, roles: li
     return []
 
 
-def _role_check(role: str, number: str, entry: dict, run: Run, values: dict, slot: str) -> dict:
-    """The check of the report of `role`. A test-writer on a ticket that has locked tests is the correction after a
-    `correct-test` answer: it gets the findings of that question."""
-    question = driver_dispute.correction(run.state.read()["run"]["questions"], number)
-    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"] and question)}
-    if check["correction"]:
-        path = question["evidence"][0]
-        check["findings"] = [finding["title"] for finding in json.loads(Path(path).read_text())]
-        values["findings"] = os.path.relpath(path, slot)
-    return check
-
-
-def _after(role: str, number: str, run: Run, check: dict) -> str:
-    """The phase of the ticket when the report of `role` is accepted. After the correction of a `correct-test`
-    answer, it is the phase its question resumes: the implementer, or the review before the fixer of that round."""
-    if check["correction"]:
-        return driver_dispute.correction(run.state.read()["run"]["questions"], number)["resume"]
-    return AFTER.get(role, "review")
+def _run_role(run: Run, call: Call, entry: dict) -> tuple[str, dict]:
+    """Run `call`. Returns (the phase of the ticket after it, the fields its report gives the ticket record). A
+    test-writer on a ticket that has locked tests is the correction of a `correct-test` answer: the phase after it is
+    the one its question resumes, the implementer or the review before the fixer of that round."""
+    questions = run.state.read()["run"]["questions"]
+    if call.role == "test-writer" and entry["test_writer_sha"] and (question := driver_dispute.correction(questions,
+                                                                                                       call.number)):
+        driver_dispute.correct_as_answered(run, call, question)
+        return question["resume"], {}
+    report = driver_dispute.agent(run, call)
+    if call.role != "test-writer":
+        return AFTER.get(call.role, "review"), {}
+    return AFTER["test-writer"], driver_review.written(entry, report["locked"], driver_slots.head(call.slot))
 
 
 def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
@@ -138,20 +133,13 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         run.state.ticket(number, phase=DURING.get(role, "review"))
         values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, driver_gate.FAST, start),
                                                                  slot))
-        check = _role_check(role, number, entry, run, values, slot)
         with during(f"the {role}"):
-            report = driver_dispute.agent(run, Call(role, number, slot, values, notes=notes, check=check))
-        for item in report.get("not_addressed", []):
-            ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
-        facts = {"tip": driver_slots.head(slot)}
-        if role == "test-writer":
-            facts.update(driver_review.written(entry, report["locked"], facts["tip"]))
-            values["locked"] = " ".join(facts["locked"])
-        phase = _after(role, number, run, check)
-        run.state.ticket(number, phase=phase, note="", **facts)
+            phase, facts = _run_role(run, Call(role, number, slot, values, notes=notes), entry)
+        start, notes = driver_slots.head(slot), []
+        entry = run.state.ticket(number, phase=phase, note="", tip=start, **facts)
+        values["locked"] = " ".join(entry["locked"])
         if phase != AFTER.get(role, "review"):
             break  # the fixer that disputed runs again after the review
-        start, notes = facts["tip"], []
 
 
 # ---------------------------------------------------------------- one ticket: the landing on the PR branch
