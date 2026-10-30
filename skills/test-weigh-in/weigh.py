@@ -29,6 +29,7 @@ def main(argv=None):
         print(f"weigh.py: {e}", file=sys.stderr)
         return 2
     try:
+        home = home_dir(repo)
         python = find_interpreter(repo, args.python)
         check_versions(python)
         overlay = build_overlay(python)
@@ -62,8 +63,8 @@ def main(argv=None):
         "pillars": pillars,
         "tests": tests,
     }
-    path = write_snapshot(repo, data)
-    dashboard = write_dashboard(home_dir(repo), data, rules)
+    path = write_snapshot(home, data)
+    dashboard = write_dashboard(home, data, rules)
     print(summary(data, rules, path, dashboard))
     if not args.no_open:
         webbrowser.open(dashboard.as_uri())

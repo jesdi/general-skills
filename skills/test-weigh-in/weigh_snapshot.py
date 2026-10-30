@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from weigh_env import SetupError
+
 REMOTE = re.compile(r"^(?:[a-z+]+://)?(?:[^@/]+@)?([^:/]+)[:/](.+?)(?:\.git)?/?$")
 
 
@@ -14,8 +16,13 @@ def git(repo, *args):
 
 
 def repo_key(repo):
-    m = REMOTE.match(git(repo, "remote", "get-url", "origin"))
-    return f"{m[1]}/{m[2]}" if m else f"local/{repo.name}"
+    origin = git(repo, "remote", "get-url", "origin")
+    m = REMOTE.match(origin)
+    key = f"{m[1]}/{m[2]}" if m else f"local/{repo.name}"
+    # The key is a path under ~/.test-weigh-in: an origin like host:../../x must not climb out of it.
+    if any(part in ("", ".", "..") for part in key.split("/")):
+        raise SetupError(f"cannot store snapshots for origin {origin!r}: its path has an empty, . or .. segment")
+    return key
 
 
 def commit_state(repo):
@@ -26,8 +33,7 @@ def home_dir(repo):
     return Path.home() / ".test-weigh-in" / repo_key(repo)
 
 
-def write_snapshot(repo, data):
-    home = home_dir(repo)
+def write_snapshot(home, data):
     home.mkdir(parents=True, exist_ok=True)
     now = os.environ.get("TEST_WEIGH_IN_NOW")
     when = datetime.fromisoformat(now.replace("Z", "+00:00")) if now else datetime.now(timezone.utc)
