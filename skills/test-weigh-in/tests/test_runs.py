@@ -58,7 +58,7 @@ def test_cases_aggregate_into_tests_with_their_outcomes(tmp_path, home, cache):
     result = weigh(repo, home, "--pytest-args", "tests/test_mixed.py", cache=cache)
     assert result.returncode == 0, result.stdout + result.stderr
     (snap,) = snapshots(home, KEY)
-    tests = {node.split("::")[1]: t for node, t in load(snap)["tests"].items()}
+    tests = {node.split("::")[1]: {k: t[k] for k in ("outcome", "duration", "cases")} for node, t in load(snap)["tests"].items()}
     assert tests == {
         "test_parse": {"outcome": "failed", "duration": pytest.approx(3.375), "cases": 3},
         "test_skipped": {"outcome": "skipped", "duration": pytest.approx(2.25), "cases": 2},

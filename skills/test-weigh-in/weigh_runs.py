@@ -5,10 +5,13 @@ import shlex
 import subprocess
 import tempfile
 
+from weigh_coverage import contexts_regex
 from weigh_env import SetupError
 from weigh_snapshot import git
 
 PYTEST = ["-m", "pytest", "-p", "no:randomly", "-p", "no:cacheprovider", "-p", "weigh_pytest_plugin"]
+# Paths inside the repo that the coverage run leaves out.
+OMIT = (".venv/**", "venv/**", "tests/**", "test/**", "test_*.py", "*_test.py", "conftest.py")
 # pytest exit codes of a run that executed its tests: all passed, some failed.
 RAN = (0, 1)
 
@@ -57,23 +60,33 @@ def aggregate(cases):
     return result
 
 
-def coverage_run(python, repo, overlay, pytest_args):
-    """Branch coverage percent of the repo's own files over one pytest run under coverage; None when the run yields no data."""
+def coverage_run(python, repo, overlay, pytest_args, eligible):
+    """Pytest under branch coverage with a context per test phase: (cases, the coverage json report of the passing cases, the same of the eligible tests that also passed under coverage, each None when it has no data)."""
     with tempfile.TemporaryDirectory() as tmp:
         rc = os.path.join(tmp, "rc")
         open(rc, "w").close()
         data, report = os.path.join(tmp, "data"), os.path.join(tmp, "report.json")
-        cov = [str(python), "-m", "coverage"]
-        run, _ = _pytest(python, repo, overlay, pytest_args, tmp, env={"COVERAGE_RCFILE": rc},
-                         runner=["-m", "coverage", "run", "--branch", f"--data-file={data}", f"--source={repo}", "--omit=*/.venv/*,*/venv/*"])
-        if run.returncode not in RAN:
+        # test files are the cost being weighed, not the code under test; anchored in the repo, so a folder
+        # named tests above it excludes nothing
+        omit = ",".join(f"{repo}/**/{p}" for p in OMIT)
+        run, out = _pytest(python, repo, overlay, pytest_args, tmp, env={"COVERAGE_RCFILE": rc},
+                           runner=["-m", "coverage", "run", "--branch", f"--data-file={data}", f"--source={repo}", f"--omit={omit}"])
+        if run.returncode not in RAN or not os.path.exists(out):
             raise SetupError(f"pytest under coverage exited {run.returncode} without running the tests:\n" + run.stdout + run.stderr)
-        env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
-        proc = subprocess.run([*cov, "json", f"--data-file={data}", "-o", report, "-q"],
-                              cwd=repo, env=env, capture_output=True, text=True)
-        if proc.returncode or not os.path.exists(report):
-            return None
-        with open(report) as f:
-            totals = json.load(f)["totals"]
-        # Branch arcs only: percent_covered mixes statements in. No branches: the metric is not measured.
-        return 100 * totals["covered_branches"] / totals["num_branches"] if totals["num_branches"] else None
+        with open(out) as f:
+            cases = json.load(f)["cases"]
+        eligible = eligible & {n for n, t in aggregate(cases).items() if t["outcome"] == "passed"}
+        return (cases, *(_report(python, repo, overlay, rc, data, os.path.join(tmp, name), contexts_regex(cases, e))
+                         for name, e in (("report.json", None), ("eligible.json", eligible))))
+
+
+def _report(python, repo, overlay, rc, data, out, regex):
+    with open(rc, "w") as f:
+        f.write("[report]\ncontexts = " + regex + "\n")
+    env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
+    proc = subprocess.run([str(python), "-m", "coverage", "json", "--show-contexts", f"--data-file={data}", "-o", out, "-q"],
+                          cwd=repo, env=env, capture_output=True, text=True)
+    if proc.returncode or not os.path.exists(out):
+        return None
+    with open(out) as f:
+        return json.load(f)
