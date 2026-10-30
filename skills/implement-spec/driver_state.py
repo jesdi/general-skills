@@ -23,7 +23,8 @@ from typing import IO
 from driver_names import Names
 from driver_slots import ancestor, git, on_branch, path
 
-SCHEMA = 3  # the version of this contract; 2: the names of driver_names, 3: gate tiers. A run of an older driver has none.
+SCHEMA = 4  # the version of this contract; 2: the names of driver_names, 3: gate tiers, 4: the two question kinds and
+# the ruling kept on an answered question. A run of an older driver has none.
 PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge", "merged", "blocked")
 
 

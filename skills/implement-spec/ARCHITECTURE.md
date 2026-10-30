@@ -197,5 +197,8 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - An open question of a merged ticket is dropped (`driver_decisions.drop_merged`), at the start of a run and after
   each landing, with a ledger line: a ticket the operator set to `merge` by hand leaves its stop behind.
 - An answers file counts only when it is bound to the revision of the current `decisions.json`.
-- Only a question whose kind parks gives exit 2. A third round of the final review starts only after a `retry` of
+- An answered question keeps its ruling sentence in `ruling`, so the PR body never looks up the kind of an answered
+  question. `driver_legacy.resume` stops a run before schema 4 that has an open question of a removed kind (exit 3),
+  and gives each answered question of such a run its `ruling`.
+- An open question gives exit 2. A third round of the final review starts only after a `retry` of
   a `final-ticket-blocked` question of an open finding.
