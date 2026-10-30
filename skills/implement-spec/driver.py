@@ -108,12 +108,21 @@ def _first_notes(number: str, slot_number: int, entry: dict, run: Run, roles: li
 def _role_check(role: str, number: str, entry: dict, run: Run, values: dict, slot: str) -> dict:
     """The check of the report of `role`. A test-writer on a ticket that has locked tests is the correction after a
     `correct-test` answer: it gets the findings of that question."""
-    path = driver_dispute.correction(run.state.read()["run"]["questions"], number)
-    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"] and path)}
+    question = driver_dispute.correction(run.state.read()["run"]["questions"], number)
+    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"] and question)}
     if check["correction"]:
+        path = question["evidence"][0]
         check["findings"] = [finding["title"] for finding in json.loads(Path(path).read_text())]
         values["findings"] = os.path.relpath(path, slot)
     return check
+
+
+def _after(role: str, number: str, run: Run, check: dict) -> str:
+    """The phase of the ticket when the report of `role` is accepted. After the correction of a `correct-test`
+    answer, it is the phase its question resumes: the implementer, or the review before the fixer of that round."""
+    if check["correction"]:
+        return driver_dispute.correction(run.state.read()["run"]["questions"], number)["resume"]
+    return AFTER.get(role, "review")
 
 
 def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
@@ -138,7 +147,10 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         if role == "test-writer":
             facts.update(driver_review.written(entry, report["locked"], facts["tip"]))
             values["locked"] = " ".join(facts["locked"])
-        run.state.ticket(number, phase=AFTER.get(role, "review"), note="", **facts)
+        phase = _after(role, number, run, check)
+        run.state.ticket(number, phase=phase, note="", **facts)
+        if phase != AFTER.get(role, "review"):
+            break  # the fixer that disputed runs again after the review
         start, notes = facts["tip"], []
 
 
