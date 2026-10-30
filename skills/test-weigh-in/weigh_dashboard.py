@@ -12,8 +12,19 @@ def inventory_line(inv):
             f"{inv['test_lines']} test lines, {inv['source_lines']} source lines, {inv['runtime_seconds']:.1f} s")
 
 
+def _failing(tests):
+    return sum(t["outcome"] == "failed" for t in tests.values())
+
+
+def _flaky(tests):
+    return sum(t.get("flaky", False) for t in tests.values())
+
+
 def write_dashboard(home, data, rules):
+    failing = _failing(data["tests"])
     page = {
+        "banner": f"{failing} tests are failing" if failing > 1 else "1 test is failing" if failing else None,
+        "skipped": [n for n, t in data["tests"].items() if t["outcome"] == "skipped"],
         "inventory": inventory_line(data["inventory"]),
         "pillars": [
             {"key": k, "name": p["name"], **data["pillars"][k],
@@ -35,4 +46,9 @@ def summary(data, rules, snapshot, dashboard):
         s = data["pillars"][k]
         shown = "not measured" if s["score"] is None else str(display(s["score"]))
         lines.append(f"{p['name']}: {shown}" + (" (partial)" if s["partial"] else ""))
+    failing, flaky = _failing(data["tests"]), _flaky(data["tests"])
+    if failing:
+        lines.append(f"Warning: {failing} tests are failing" if failing > 1 else "Warning: 1 test is failing")
+    if flaky:
+        lines.append(f"Warning: {flaky} flaky tests" if flaky > 1 else "Warning: 1 flaky test")
     return "\n".join([*lines, f"Snapshot: {snapshot}", f"Dashboard: {dashboard}"])

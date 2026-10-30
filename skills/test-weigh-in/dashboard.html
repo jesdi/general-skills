@@ -6,11 +6,13 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222}
 .gauge{flex:1;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
 .gauge[aria-pressed=true]{border-color:#2563eb}
 .score{display:block;font-size:32px;font-weight:600}
+#banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px}
 .flag{display:block;color:#92400e}
 table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
 </style></head><body>
 <h1>test-weigh-in</h1>
 <p data-testid="inventory" id="inventory"></p>
+<p data-testid="banner" id="banner"></p>
 <div id="gauges"></div>
 <section data-testid="details" id="details"></section>
 <script>
@@ -21,6 +23,8 @@ const fmt = (n) => String(Math.round(n * 100) / 100);
 let selected = 0;
 function render() {
   document.getElementById('inventory').textContent = data.inventory;
+  const banner = document.getElementById('banner');
+  if (banner) { if (data.banner) banner.textContent = data.banner; else banner.remove(); }
   const gauges = document.getElementById('gauges'), details = document.getElementById('details');
   gauges.replaceChildren(); details.replaceChildren();
   data.pillars.forEach((p, i) => {
@@ -40,6 +44,10 @@ function render() {
     const r = el('tr', '', t);
     el('td', m.name, r); el('td', fmt(m.value), r); el('td', String(shown(m.score)), r);
   });
+  if (data.skipped.length) {
+    el('h3', 'Skipped tests', details);
+    data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
+  }
 }
 render();
 </script></body></html>
