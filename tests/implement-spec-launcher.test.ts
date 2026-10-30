@@ -81,26 +81,31 @@ describe('implement-spec README.md', () => {
     const kinds: Record<string, string[]> = {
       'spec-ambiguous': ['keep-test', 'correct-test', 'edit-spec'],
       'ticket-blocked': ['retry', 'edit'],
-      finding: ['accept', 'split', 'redesign'],
     };
+    const rows = section.split('\n').filter((l) => /^\| `[a-z-]+` \|/.test(l));
+    expect(rows.map((l) => l.split('`')[1])).toEqual(Object.keys(kinds));
     for (const [kind, options] of Object.entries(kinds)) {
-      const row = section.split('\n').find((l) => l.includes(`\`${kind}\``));
-      expect(row, kind).toBeDefined();
+      const row = rows.find((l) => l.startsWith(`| \`${kind}\``));
       for (const option of options) expect(row, `${kind}: ${option}`).toContain(`\`${option}\``);
     }
+    expect(section).toMatch(/`final-finding`.*`ticket-blocked` question of the end of run.*`final-ticket-blocked-<n>`/);
   });
 
-  it('lists the non-negotiable checks, each with a pointer to a file', () => {
-    const lines = readme().split('\n');
-    const pointer = /`[\w./-]*\.(py|md|sh|json)`|\]\([\w./-]+\)/;
-    const checks: Record<string, RegExp> = {
-      'locked test with a demonstrated red': /red/i,
-      'full gate per candidate': /gate/i,
-      'post-merge check': /post-merge|after (each|every) merge/i,
-    };
-    expect(readme()).toMatch(/non-negotiable/i);
-    for (const [name, word] of Object.entries(checks))
-      expect(lines.some((l) => word.test(l) && pointer.test(l)), name).toBe(true);
+  it('lists exactly the four non-negotiable checks, each with a pointer to a file', () => {
+    const text = readme();
+    const start = text.search(/^## The non-negotiable checks$/m);
+    expect(start, 'a "The non-negotiable checks" section').toBeGreaterThanOrEqual(0);
+    const rest = text.slice(start + 1);
+    const section = rest.slice(0, rest.search(/^## /m));
+    const rows = section.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Check |'));
+    const pointer = /`[\w./-]*\.(py|md|sh|json)`/;
+    const checks = [/red plus green/i, /changed only by the test-writer/i, /full gate at landing and at the end of run/i,
+      /ticket reviewer and the final correctness lens.*another provider/i];
+    expect(rows).toHaveLength(checks.length);
+    checks.forEach((check, index) => {
+      expect(rows[index], String(check)).toMatch(check);
+      expect(rows[index], String(check)).toMatch(pointer);
+    });
   });
 });
 
