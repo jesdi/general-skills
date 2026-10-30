@@ -29,9 +29,13 @@ class Job:
     values: dict[str, str]  # the pointers every prompt of the ticket gets
     round: int  # fix rounds started
     tip: str
+    writer: str | None  # the test-writer commit when the job started or its last fix round ended
     previous: str = ""  # the tip before the last fix; "" makes the next review a full one
-    corrected: bool = False  # the last step was a test-writer correction
     red: bool = False  # the gate of `tip` is red, so no review saw it
+
+    def corrected(self) -> bool:
+        """A test-writer correction ran since the job started or its last fix round ended: no review has seen it."""
+        return self.run.state.read()["tickets"][self.ticket.number]["test_writer_sha"] != self.writer
 
     def pointers(self, review: int) -> dict[str, str]:
         """The values of a prompt; `review` is the round whose findings the agent reads."""
@@ -142,7 +146,7 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
         report = run.agent(Call("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
                                 fix_round=job.round + 1, retry="reviewer",
                                 check={"correction": True, "findings": [finding["title"] for finding in findings]}))
-    job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
+    job.tip, job.previous = driver_slots.head(job.slot), ""
     run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
     code = _uncorrected(job, findings, report.get("not_addressed", []))
     corrected = {finding["file"]: {"test": finding["file"], "requirement": "", "reason": one.reason}
@@ -194,19 +198,18 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
         record = driver_gate.record_path(OUT / number, driver_gate.FULL, landing)
         values.update(landing_sha=landing[:7], landing_record=os.path.relpath(record, job.slot))
         notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
-    baseline = run.state.read()["tickets"][number]["test_writer_sha"]
     with during(f"fix round {job.round}"):
         driver_dispute.agent(run, Call("fixer", number, job.slot, values, entry=on, entries=run.models["implementer"],
                                        fix_round=job.round, notes=notes,
                                        check={"fix": [finding["title"] for finding in findings],
                                               "red": _red(job, landing)}))
     before, job.tip = job.tip, driver_slots.head(job.slot)
-    corrected = run.state.ticket(number, tip=job.tip, landing=None)["test_writer_sha"] != baseline
+    run.state.ticket(number, tip=job.tip, landing=None)
     # No review saw a red `before`, so the next review covers the fix before it too. No review has seen a test-writer
     # correction either (before the fix, or after a dispute of the fixer), so the review after it is a full one.
     if not job.red:
-        job.previous = "" if job.corrected or corrected else before
-    job.corrected = False
+        job.previous = "" if job.corrected() else before
+    job.writer = run.state.read()["tickets"][number]["test_writer_sha"]
 
 
 def _still_to_correct(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
@@ -305,7 +308,7 @@ def _gate(job: Job) -> list[dict]:
     run, number = job.run, job.ticket.number
     job.red = False
     with during("the gate"):
-        if job.round == ROUNDS or job.corrected:
+        if job.round == ROUNDS or job.corrected():
             run.gate(number, job.slot, job.tip, driver_gate.FAST)
             return []
         record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST)
@@ -321,7 +324,7 @@ def _gate(job: Job) -> list[dict]:
 def run(ticket: Ticket, slot: str, run: Run, values: dict[str, str]) -> None:
     """Gate, review and fix the ticket tip until a review leaves no finding open."""
     state = run.state.read()["tickets"][ticket.number]
-    job = Job(ticket, slot, run, values, state["round"], state["tip"])
+    job = Job(ticket, slot, run, values, state["round"], state["tip"], state["test_writer_sha"])
     if state["phase"] == "fix" and state["landing"]:
         # A red full gate at the landing started this round, and its fixer has not reported yet.
         job.round -= 1
