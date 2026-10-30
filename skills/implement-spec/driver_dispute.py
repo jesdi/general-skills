@@ -95,6 +95,7 @@ def _settle(run: Run, role: str, number: str, slot: str, values: dict[str, str],
     wrong = {file: ruling for file, ruling in ruled.items() if ruling["ruling"] == "test-wrong"}
     if again := seconds([(file, ruling["test"], ruling["reason"]) for file, ruling in wrong.items()],
                          entry["corrected"]):
+        run.state.update(lambda state: _record(state["tickets"][number], ruled, {}))  # the file is arbitrated
         ambiguous(run, number, again, *resume)
     if wrong:
         _correct(run, role, number, slot, values, wrong, n, fix_round)

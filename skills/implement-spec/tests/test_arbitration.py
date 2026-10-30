@@ -200,6 +200,19 @@ def test_a_test_ruled_wrong_that_a_review_corrected_before_asks_spec_ambiguous(t
     assert question["resume"] == "review" and rig.state()["tickets"]["01"]["round"] == 0
 
 
+def test_a_ruling_that_asks_spec_ambiguous_is_kept_so_a_dispute_after_keep_test_is_not_arbitrated_again(tmp_path):
+    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    steps = plan(**{"01/test-writer": [tw("01"), correction()],
+                    "01/reviewer": [review("01", [stale, STUCK]), ruling("test-wrong", "R3 says single quotes"),
+                                    review("01", [STUCK]), ruling("test-wrong", "R3 says single quotes")],
+                    "01/fixer": [disputes(role="fixer"), disputes(role="fixer")]})
+    rig = Inside(tmp_path, ONE).run(steps)
+    assert rig.state()["tickets"]["01"]["disputes"]["tests/test_01.py"]["ruling"] == "test-wrong", rig.ledger()
+    rig.run(steps, "--answer", f"{AMBIGUOUS}=keep-test")
+    assert rig.code == 2 and len(arbitrations(rig)) == 1, rig.ledger()
+    assert [q["id"] for q in asked(rig)] == ["01-spec-ambiguous-2"]
+
+
 # ---------------------------------------------------------------- the answers
 
 def test_keep_test_runs_the_implementer_again_and_keeps_the_record(tmp_path):
