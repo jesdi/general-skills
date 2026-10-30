@@ -2,7 +2,7 @@
 
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
-     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held, rejected,
+     "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note, held,
                      landing}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
@@ -32,7 +32,7 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "held": {}, "rejected": "", "landing": None}
+            "slot": None, "note": "", "held": {}, "landing": None}
 
 
 def _final() -> dict:
@@ -65,8 +65,6 @@ class State:
             for entry in tickets.values():  # a run of an older driver lacks the newer keys
                 for key, value in _ticket().items():
                     entry.setdefault(key, value)
-                if isinstance(entry["rejected"], dict):  # an older driver kept a role -> why record
-                    entry["rejected"] = entry["rejected"].get("reviewer", "")
         return self.update(change)
 
     def update(self, change) -> dict:

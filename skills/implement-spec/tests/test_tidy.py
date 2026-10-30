@@ -22,7 +22,7 @@ from test_final import FILES, FINAL_MODELS, RESOLVE, THREE, TITLES, final, fixer
 from test_fixloop import inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_review import FABLE, ONE, finding
 from test_stops import UNATTENDED, decisions, stage
-from test_walk import plan, tw
+from test_walk import fix, plan, tw
 
 
 class Inside(test_final.Final):
@@ -151,8 +151,8 @@ def test_a_base_branch_needs_an_origin(tmp_path):
 
 def test_the_final_review_does_not_start_while_a_ticket_is_not_merged_and_the_ledger_says_so_once(tmp_path):
     rig = Inside(tmp_path, THREE, gate={"red": ["ticket/feat%2Fcsv/01"]})
-    rig.run(plan())
-    rig.run(plan(), *UNATTENDED)
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}))
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), *UNATTENDED)
     assert rig.code == 1 and not rig.final_calls("final-spec") and not rig.recovery()
     assert rig.led("End-of-run work skipped") == ["End-of-run work skipped: these tickets are not merged: 01, 02."]
     assert "The end-of-run work (rebase, tidy, final review, push) did not run: these tickets are not merged: 01, 02." in rig.out

@@ -14,7 +14,7 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_slots
-from driver_run import OUT, Blocked, Run, Stopped, during, ledger
+from driver_run import OUT, Blocked, Run, during, ledger
 from driver_tickets import Ticket
 
 ROUNDS = 2
@@ -57,38 +57,14 @@ def _log_findings(number: str, findings: list[dict]) -> list[dict]:
 
 
 def _run_reviewer(job: Job) -> dict:
-    """Run the reviewer in the slot. Returns its report. A reviewer that stops (BLOCKED, NEEDS_CONTEXT) asks a
-    `review-stopped` question, unless an `accept` ruling on an earlier stop lets the review go on with its report. A
-    report that the driver rejects two times asks a `review-rejected` question; after `retry`, the first prompt says
-    why (issue #136)."""
+    """Run the reviewer in the slot. Returns its report."""
     number = job.ticket.number
     values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
-    state = job.run.state.read()
-    before = state["tickets"][number]["rejected"]  # why the driver rejected the reviewer before the ruling
-    evidence = str(OUT / number / f"reviewer-{job.round}.json")
     notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
-    notes += ["rejected"] * bool(before)
-    try:
-        return job.run.agent("reviewer", number, job.slot, {**values, "rejection": before}, fix_round=job.round,
-                             notes=notes)
-    except Stopped as stopped:
-        if _stop_accepted(state, number):
-            ledger(f"Ticket {number}: {stopped}; by the ruling (accept), the review goes on with its report.")
-            return stopped.report
-        job.run.ask(number, "review-stopped", [str(stopped)], evidence)
-        raise Blocked(f"the reviewer: {stopped}") from None
-    except Blocked as blocked:  # the driver rejected its report two times
-        job.run.ask(number, "review-rejected", [f"the reviewer: {blocked}"], evidence,
-                    rejected=str(blocked))
-        raise Blocked(f"the reviewer: {blocked}") from None
-
-
-def _stop_accepted(state: dict, number: str) -> bool:
-    """Whether an `accept` ruling on an earlier stop of the reviewer lets the review go on past a stop."""
-    accepted = driver_decisions.accepted(state["run"]["questions"], number, "review-stopped")
-    return any(subject.startswith("the reviewer ") for subject in accepted)
+    with during("the reviewer"):
+        return job.run.agent("reviewer", number, job.slot, values, fix_round=job.round, notes=notes)
 
 
 def _prior_open(job: Job) -> dict[tuple[str, str], str | None]:
@@ -141,8 +117,6 @@ def _review(job: Job) -> list[dict]:
     merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
     found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
     report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job))
-    if state["rejected"]:
-        run.state.ticket(number, rejected="")  # the rejection is answered: no later review repeats it
     reviewed, observations = _reviewer_results(job, report)
     found += _log_findings(number, reviewed)
     _store_observations(job, observations)
@@ -229,8 +203,8 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
         values.update(landing_sha=landing[:7], landing_record=os.path.relpath(record, job.slot))
         notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
     with during(f"fix round {job.round}"):
-        run.agent("fixer", number, job.slot, values, entry=on, fix_round=job.round, notes=notes,
-                  check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
+        run.agent("fixer", number, job.slot, values, entry=on, entries=run.models["implementer"], fix_round=job.round,
+                  notes=notes, check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
     before, job.tip = job.tip, driver_slots.head(job.slot)
     run.state.ticket(number, tip=job.tip, landing=None)
     # No review saw a red `before`, so the next review covers the fix before it too. No review has seen a test-writer

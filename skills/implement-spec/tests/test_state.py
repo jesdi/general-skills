@@ -42,21 +42,8 @@ def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
     assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["landing"] is None
     assert again["tickets"]["02"] == {
         "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": {"fast": [], "full": []}, "slot": None,
-        "note": "", "held": {}, "rejected": "", "landing": None}
+        "note": "", "held": {}, "landing": None}
 
-
-
-def test_start_reads_the_role_record_of_an_older_driver_as_the_reviewer_rejection(tmp_path):
-    state = driver_state.State(tmp_path / "state.json")
-    state.start("feat/x", ["01", "02"])
-
-    def older(record):  # an older driver kept why it rejected each role of the ticket review
-        record["tickets"]["01"]["rejected"] = {"reviewer": "no line", "correctness": "no mutation proof"}
-        record["tickets"]["02"]["rejected"] = {"correctness": "no mutation proof"}
-
-    state.update(older)
-    again = state.start("feat/x", ["01", "02"])
-    assert [again["tickets"][n]["rejected"] for n in ("01", "02")] == ["no line", ""]
 
 def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_path):
     repo()

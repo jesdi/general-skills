@@ -14,7 +14,7 @@ Interface choices (ticket 05):
   and a capped ticket with unmet criteria blocks without a finding question. Options for `locked-test` are
   `overrule-test` / `overrule-implementer` (recommended: overrule-implementer).
 - an implementer is BLOCKED with a `locked-test` stop only when a `concerns` entry starts with "locked test
-  contradicts spec:"; any other BLOCKED report is an `implementer-stopped` stop (issue #123).
+  contradicts spec:"; any other BLOCKED report reruns on the next entry, then asks `ticket-blocked` (test_decisions).
 - the answers file is `.agent/implement-answers.json` in the schema.md shape: `v`, `stage: "implement"`, `submitted`
   (`"changes"`), `revision`, `answers`. A rerun applies it only with `submitted` set and `revision` equal to the current
   decisions revision; otherwise a ledger line says "ignored" (and "revision" for a stale file, the option id for an
@@ -193,14 +193,6 @@ def test_answer_for_an_unknown_question_id_exits_3_naming_it_before_any_agent(tm
     assert "no-such-question" in rig.out + rig.err and len(rig.calls()) == seen
 
 
-def test_a_blocked_report_that_is_not_a_contradicted_locked_test_is_an_implementer_stop(tmp_path):
-    rig = Review(tmp_path)
-    rig.run(steps(blocked("cannot reach the database")))
-    assert rig.code == 2, rig.output()
-    assert [q["id"] for q in decisions(rig)["questions"]] == ["01-implementer-stopped-1"]
-    assert rig.state()["tickets"]["01"]["phase"] == "blocked"
-
-
 # ---------------------------------------------------------------- capped ticket
 
 def test_unmet_criteria_at_cap_block_without_a_finding_question(tmp_path):
@@ -238,6 +230,6 @@ def test_unattended_rerun_with_a_submitted_answers_file_at_the_current_revision_
 def test_unattended_blocked_ticket_ends_with_stage_json_blocked_naming_it_and_exit_1(tmp_path):
     from test_final import Final
     rig = Final(tmp_path, gate={"red": ["ticket/feat%2Fcsv/01"]})
-    rig.run(plan(), *UNATTENDED)
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}

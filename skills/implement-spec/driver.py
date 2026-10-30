@@ -350,7 +350,7 @@ def _block(number: str, run: Run, ledger_line: int) -> None:
         if ask:
             state["tickets"][number].update(ask.fields)
             evidence = [ask.report, f"{OUT / 'ledger.md'}:{ledger_line}"]
-            driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence)
+            driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence, ask.resume)
 
     run.state.update(change)
     if ask and ask.subjects:

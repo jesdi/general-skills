@@ -194,9 +194,9 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
 def test_a_violation_reruns_once_with_the_error_then_blocks(repo, tmp_path, capsys):
     repo()
     code, ledger = agents(tmp_path, capsys, f"STATUS=FINISHED\n{COMMIT}{IMPLEMENTER}{REPORT}")
-    assert code == 1 and len(ledger) == 3
+    assert code == 2 and len(ledger) == 4 and "question of kind ticket-blocked" in ledger[3]
     assert ledger[2].startswith("Ticket 01: BLOCKED at the implementer: status: 'FINISHED' is not one of")
-    assert "The driver rejected the earlier attempt: status: 'FINISHED'" in (
+    assert "The earlier attempt did not finish the role: status: 'FINISHED'" in (
         tmp_path / ".agent/implement/01/implementer-0.prompt.md").read_text()
 
 
@@ -207,7 +207,7 @@ def prompt_of(tmp_path, role="implementer"):
 def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path, capsys):
     repo()
     code, ledger = agents(tmp_path, capsys, "exit 0\n", "--only", "reviewer")
-    assert code == 1 and len(ledger) == 3
+    assert code == 2 and len(ledger) == 4
     assert ledger[2].startswith("Ticket 01: BLOCKED at the reviewer: report .agent/implement/01/reviewer-0.json is not")
 
 
@@ -219,12 +219,12 @@ def test_a_field_of_another_role_is_ignored(repo, tmp_path, capsys, extra):
 
 
 @pytest.mark.parametrize("status", ["BLOCKED", "NEEDS_CONTEXT"])
-def test_a_report_that_says_blocked_blocks_the_ticket_without_a_rerun(repo, tmp_path, capsys, status):
+def test_a_report_that_says_blocked_reruns_once_then_asks_ticket_blocked(repo, tmp_path, capsys, status):
     repo()
     body = f"""printf '{{"status": "{status}", "commits": [], "files": [], "concerns": ["test_x contradicts the spec"], "green": []}}' > "$report"\n"""
     code, ledger = agents(tmp_path, capsys, body)
-    assert code == 2 and len(ledger) == 3 and "question of kind implementer-stopped" in ledger[2]
-    assert ledger[1] == f"Ticket 01: BLOCKED at the implementer: the implementer reported {status}: test_x contradicts the spec."
+    assert code == 2 and len(ledger) == 4 and "question of kind ticket-blocked" in ledger[3]
+    assert ledger[2] == f"Ticket 01: BLOCKED at the implementer: it reported {status}: test_x contradicts the spec."
 
 
 def test_a_rerun_prompt_holds_only_template_lines_and_keeps_its_ending(repo, tmp_path, capsys):
@@ -367,8 +367,8 @@ REFACTOR = {"seam": "none — refactor"}
 FIXES = """[ $role != fixer ] || fields="$fields, \\"ticket\\": \\"$nn\\""\n"""
 # A fixer that cannot make the red gate green: the ticket blocks at fix round 1.
 GIVE_UP = """[ $role != fixer ] || { printf '{"status": "BLOCKED", "commits": [], "files": [], "concerns": ["the gate stays red"], "green": [], "ticket": "01"}' > "$report"; exit 0; }\n"""
-GAVE_UP = "Ticket 01: BLOCKED at fix round 1: the fixer reported BLOCKED: the gate stays red."
-ASKED = "Ticket 01: the operator decides on 1 question of kind fixer-stopped in .agent/implement/decisions.json."
+GAVE_UP = "Ticket 01: BLOCKED at fix round 1: it reported BLOCKED: the gate stays red."
+ASKED = "Ticket 01: the operator decides on 1 question of kind ticket-blocked in .agent/implement/decisions.json."
 
 
 def walk(tmp_path, capsys, body, *args, gate="true"):
@@ -441,7 +441,7 @@ def test_a_conflict_agent_that_does_not_resolve_blocks_the_ticket_and_keeps_its_
     two(repo)
     stuck = '[ $role != conflict ] || exit 0\n'
     code, ledger, out = walk(tmp_path, capsys, stuck + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
-    assert code == 1, out
+    assert code == 2 and "ticket-blocked" in out, out
     (line,) = [line for line in ledger if "BLOCKED" in line]
     number = line[7:9]
     assert f"BLOCKED at the merge: the conflict agent: report .agent/implement/{number}/conflict-0.json is not" in line
@@ -497,7 +497,7 @@ def test_a_merge_gate_red_after_round_2_blocks_the_ticket_and_the_pr_branch_does
 def test_a_tree_that_is_not_clean_is_a_red_gate_and_the_slot_keeps_the_work(repo, tmp_path, capsys):
     repo(t01=ticket("01", **REFACTOR))
     code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT + "echo left > junk.txt\n", gate="echo NEVER")
-    assert code == 2 and "from the gate at .agent/implement/01/gate-" in ledger[-4] and ledger[-2:] == [GAVE_UP, ASKED], out
+    assert code == 2 and "from the gate at .agent/implement/01/gate-" in ledger[-5] and ledger[-2:] == [GAVE_UP, ASKED], out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "status: not clean\n    ?? junk.txt\n" in record and "exit: not run" in record and "\nNEVER\n" not in record
     assert out_of("git", "symbolic-ref", "--short", "HEAD") == "ticket/feat%2Fx/01" and (tmp_path / "junk.txt").exists()
@@ -523,10 +523,12 @@ def test_a_touches_overlap_holds_the_second_ticket_and_the_ledger_says_why(repo,
 
 
 def blocked_then_edited(repo, tmp_path, capsys, **fields):
-    """A one-ticket run that a red gate blocks, then state.json edited as the resume tests need."""
+    """A one-ticket run that a red gate blocks, then state.json edited as the resume tests need. Its fixer writes no
+    valid report, so the ticket blocks with a question, which the edit drops."""
     repo(t01=ticket("01", **REFACTOR))
-    assert walk(tmp_path, capsys, WORK + REPORT, gate="false")[0] == 1
+    assert walk(tmp_path, capsys, WORK + REPORT, gate="false")[0] == 2
     state = state_of(tmp_path)
+    state["run"]["questions"] = []
     state["tickets"]["01"].update(fields)
     (tmp_path / ".agent/implement/state.json").write_text(json.dumps(state))
     return state["tickets"]["01"]
@@ -921,7 +923,7 @@ def test_a_merge_commit_the_slot_cannot_check_out_is_not_gated_and_does_not_land
 def test_a_gate_that_changes_the_tree_or_moves_head_is_red(repo, tmp_path, capsys, gate, after):
     repo(t01=ticket("01", **REFACTOR))
     code, ledger, out = walk(tmp_path, capsys, GIVE_UP + WORK + REPORT, gate=gate)
-    assert code == 2 and "from the gate at .agent/implement/01/gate-" in ledger[-4] and ledger[-2:] == [GAVE_UP, ASKED], out
+    assert code == 2 and "from the gate at .agent/implement/01/gate-" in ledger[-5] and ledger[-2:] == [GAVE_UP, ASKED], out
     record = next((tmp_path / ".agent/implement/01").glob("gate-*.log")).read_text()
     assert "\nexit: 0\n" in record and after in record
     assert state_of(tmp_path)["tickets"]["01"]["green_gates"] == {"fast": [], "full": []}

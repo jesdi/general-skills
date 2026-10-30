@@ -437,7 +437,10 @@ def single_blocked(tmp_path):
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}, gate={"all": True})
     rig.run({**plan(), "01/implementer": [impl("01"), impl("01", text="def fn_01():\n    return 'again'\n",
                                                            commit="feat: 01 again")]})
-    assert rig.code == 1, rig.output()
+    # The unscripted fixer writes no report, so the ticket blocks with a question; the resume tests drop it.
+    assert rig.code == 2, rig.output()
+    path = rig.repo / ".agent/implement/state.json"
+    path.write_text(json.dumps({**rig.state(), "run": {**rig.state()["run"], "questions": []}}))
     return rig
 
 

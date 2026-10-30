@@ -10,7 +10,7 @@ import driver_answers
 import driver_decisions
 import driver_review
 import driver_review_page
-from test_cli import git
+from test_cli import git, ticket
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
 from test_review import ONE, STUCK, finding, fix, review
@@ -359,9 +359,9 @@ def test_unattended_writes_the_stage_file_and_prints_no_question(tmp_path, capsy
 
 def test_unattended_names_the_blocked_tickets_and_needs_a_stage_path_to_write(tmp_path):
     rig = Pushing(tmp_path, ONE, gate={"red": ["ticket/feat%2Fcsv/01"]})
-    rig.run(plan(), "--unattended")
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), "--unattended")
     assert rig.code == 1 and not (rig.repo / ".agent/stage.json").exists()
-    rig.run(plan(), "--unattended", "--stage-json", ".agent/out/stage.json")
+    rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), "--unattended", "--stage-json", ".agent/out/stage.json")
     assert json.loads((rig.repo / ".agent/out/stage.json").read_text()) == {
         "stage": "implement", "status": "blocked", "blocked": ["01"]}
 
@@ -478,9 +478,8 @@ def test_no_open_question_or_no_file_reads_nothing_and_given_writes_only_valid_a
     assert driver_answers.read(doc()) == ({}, []), "with no open question the file is history"
 
 
-# ---------------------------------------------------------------- an implementer or a fixer with nothing to change, or that stops
+# ---------------------------------------------------------------- an implementer with nothing to change
 
-IMPLEMENTER_STOPPED, FIXER_STOPPED = "01-implementer-stopped-1", "01-fixer-stopped-1"
 NO_CHANGE = "the correction made the locked tests green: the start needs no change"
 
 
@@ -488,12 +487,6 @@ def unchanged():
     """An implementer step with no commit: the start commit already meets the ticket."""
     return {"report": {"status": "DONE_WITH_CONCERNS", "commits": [], "files": [], "concerns": [NO_CHANGE],
                        "green": ["1 passed"]}}
-
-
-def stops(role="implementer", status="NEEDS_CONTEXT"):
-    report = {"status": status, "commits": [], "files": [], "concerns": ["the ticket names no column order"],
-              "green": [], **({"ticket": "01"} if role == "fixer" else {})}
-    return {"report": report}
 
 
 def test_an_implementer_with_nothing_to_change_after_a_correction_is_accepted_and_its_start_is_gated(tmp_path):
@@ -509,79 +502,148 @@ def test_an_implementer_with_nothing_to_change_after_a_correction_is_accepted_an
     assert "list no commit" in rig.prompt("implementer-0")
 
 
-@pytest.mark.parametrize("status", ["NEEDS_CONTEXT", "BLOCKED"])
-def test_an_implementer_that_stops_asks_the_operator_and_retry_runs_it_again(tmp_path, status):
-    """Issue 123: a stop of the implementer that is not `locked test contradicts spec:` had no question."""
-    rig = Inside(tmp_path, ONE).run(steps(stops(status=status)))
-    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
-    (question,) = rig.state()["run"]["questions"]
-    assert (question["id"], question["recommended"]) == (IMPLEMENTER_STOPPED, "retry")
-    assert [o["id"] for o in question["options"]] == ["retry", "accept-tip", "redesign"]
-    assert question["evidence"][0] == ".agent/implement/01/implementer-0.json"
-    assert question["subject"] == f"the implementer reported {status}: the ticket names no column order"
-    rig.run(steps(stops(status=status), impl("01")), "--answer", f"{IMPLEMENTER_STOPPED}=retry")
-    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
-    assert len(rig.calls("01", "implementer")) == 2 and len(rig.calls("01", "test-writer")) == 1
-    assert rig.led(f"Ruling: 01 implementer runs again (retry): the implementer reported {status}")
+# ---------------------------------------------------------------- a stop or a rejection: the rerun, then ticket-blocked
 
-
-def test_accept_tip_gates_and_reviews_the_tip_the_stopped_implementer_left(tmp_path):
-    rig = Inside(tmp_path, ONE).run(steps(stops()))
-    assert rig.code == 2, rig.ledger()
-    rig.run(steps(stops()), "--answer", f"{IMPLEMENTER_STOPPED}=accept-tip")
-    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
-    tip = rig.sha("01", "test-writer")
-    assert len(rig.calls("01", "implementer")) == 1 and tip in [gate["commit"] for gate in rig.gates()]
-    assert rig.calls("01", "reviewer")[0]["head"] == tip
-
-
-def test_an_implementer_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
-    rig = Inside(tmp_path, ONE).run(steps(stops()))
-    rig.run(steps(stops()), "--answer", f"{IMPLEMENTER_STOPPED}=redesign")
-    assert rig.code == 1 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
-    assert len(rig.calls("01", "implementer")) == 1
-
-
-def test_a_fixer_that_stops_asks_the_operator_and_retry_runs_its_round_again(tmp_path):
-    """Issue 123: the round that stopped does not count, so the retry is that round again, after a review."""
-    steps = plan(**{"01/reviewer": [review("01", [STUCK]), review("01", [STUCK]), review("01")],
-                    "01/fixer": [stops("fixer"), fix("01", 1)]})
-    rig = Inside(tmp_path, ONE).run(steps)
-    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 0, rig.ledger()
-    (question,) = rig.state()["run"]["questions"]
-    assert (question["id"], question["recommended"]) == (FIXER_STOPPED, "retry")
-    assert [o["id"] for o in question["options"]] == ["retry", "redesign"]
-    assert question["evidence"][0] == ".agent/implement/01/fixer-1.json"
-    rig.run(steps, "--answer", f"{FIXER_STOPPED}=retry")
-    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
-    assert rig.state()["tickets"]["01"]["round"] == 1 and len(rig.calls("01", "fixer")) == 2
-    assert rig.led("Ruling: 01 fix round runs again (retry): the fixer reported NEEDS_CONTEXT")
-
-
-# ---------------------------------------------------------------- a review report rejected twice; a question of a merged ticket
-
-REJECTED = "01-review-rejected-1"
+SONNET, OPUS_5_5, ASTRA = "claude-sonnet-5-5@medium", "claude-opus-5-5@medium", "openai/gpt-6-astra@medium"
+TWO = {"implementer": [SONNET, OPUS_5_5], "reviewer": [ASTRA, OPUS_5_5]}
+TB1 = "01-ticket-blocked-1"
+NO_ACCESS = "no write access to fixtures/"
 NO_FINDINGS = "report: 'findings' is a required property"
+# 01 and 02 are independent, 03 waits on 01.
+TRIO = {"01-export-rows.md": ticket("01", "Export rows"),
+        "02-quote-fields.md": ticket("02", "Quote fields", touches="`demo/other.py: g`"),
+        "03-cli-flag.md": ticket("03", "CLI flag", "01", touches="`demo/cli.py: main`")}
 
 
-def test_a_review_report_rejected_twice_asks_the_operator_and_retry_resumes_it(tmp_path):
-    """Issue #136: a reviewer whose report the driver rejected two times was a dead end."""
-    # Both attempts give no `findings`; the third reviewer is the unscripted one, with a valid report.
+def stops(status="NEEDS_CONTEXT", concern="the ticket names no column order", role="implementer", **step):
+    report = {"status": status, "commits": [], "files": [], "concerns": [concern], "green": [],
+              **{"fixer": {"ticket": "01"}, "test-writer": {"locked": [], "red": []}}.get(role, {})}
+    return {"report": report, **step}
+
+
+def left_wip():
+    """The rerun's stop, with a commit: the tip the ticket leaves."""
+    step = stops("BLOCKED", NO_ACCESS, files={"demo/export.py": "wip = 1\n"}, commit="wip: 01")
+    step["report"].update(commits=["$SHA"], files=["demo/export.py"])
+    return step
+
+
+def entries(rig, nn, role):
+    return [agent["entry"] for agent in rig.state()["run"]["agents"] if (agent["ticket"], agent["role"]) == (nn, role)]
+
+
+def trio(tmp_path, *implementers):
+    """Run 1 of TRIO with 01's implementer steps; 02 writes its own file, so 01 merges after it with no conflict."""
+    rig = Inside(tmp_path, TRIO, models=TWO)
+    return rig, plan(**{"01/implementer": list(implementers), "02/implementer": [impl("02", "demo/other.py")]})
+
+
+def test_a_stopped_implementer_runs_again_on_its_second_entry_with_its_concern_and_asks_nothing(tmp_path):
+    rig = Inside(tmp_path, ONE, models=TWO).run(steps(stops(concern="which CSV dialect?"), impl("01")))
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert entries(rig, "01", "implementer") == [SONNET, OPUS_5_5]
+    assert "which CSV dialect?" in rig.calls("01", "implementer")[1]["prompt"]
+    assert not rig.state()["run"]["questions"] and rig.state()["run"]["stops"] == 0
+
+
+def test_a_rejected_review_report_runs_again_on_the_second_reviewer_entry_with_the_error(tmp_path):
     bad = review("01")
     del bad["report"]["findings"]
-    steps = plan(**{"01/reviewer": [bad, bad]})
-    rig = Inside(tmp_path, ONE).run(steps)
+    rig = Inside(tmp_path, ONE, models=TWO).run(plan(**{"01/reviewer": [bad]}))
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert entries(rig, "01", "reviewer") == [ASTRA, OPUS_5_5]
+    assert NO_FINDINGS in rig.calls("01", "reviewer")[1]["prompt"]
+
+
+def test_a_role_with_one_entry_that_stops_runs_again_on_that_entry(tmp_path):
+    rig = Inside(tmp_path, ONE).run(plan(**{"01/test-writer": [stops(role="test-writer"), tw("01")]}))
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    (one,) = set(entries(rig, "01", "test-writer"))
+    assert len(entries(rig, "01", "test-writer")) == 2 and one == "anthropic/claude-opus-5@medium"
+
+
+def test_a_second_stop_blocks_the_ticket_with_one_ticket_blocked_question(tmp_path):
+    rig = Inside(tmp_path, ONE, models=TWO).run(steps(stops(), stops("BLOCKED", NO_ACCESS)))
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
     (question,) = rig.state()["run"]["questions"]
-    assert (question["id"], question["recommended"]) == (REJECTED, "retry")
-    assert [o["id"] for o in question["options"]] == ["retry", "redesign"]
-    assert question["evidence"][0] == ".agent/implement/01/reviewer-0.json"
-    assert question["subject"] == f"the reviewer: {NO_FINDINGS}"
-    rig.run(steps, "--answer", f"{REJECTED}=retry")
+    assert (question["id"], question["kind"], question["recommended"]) == (TB1, "ticket-blocked", "retry")
+    assert [o["id"] for o in question["options"]] == ["retry", "edit"]
+    assert "implementer" in question["subject"] and NO_ACCESS in question["subject"]
+    assert question["evidence"][0] == ".agent/implement/01/implementer-0.json"
+    assert entries(rig, "01", "implementer") == [SONNET, OPUS_5_5]
+
+
+def test_a_ticket_blocked_question_holds_only_its_ticket_and_those_that_wait_on_it(tmp_path):
+    rig, run = trio(tmp_path, stops(), stops("BLOCKED", NO_ACCESS))
+    rig.run(run)
+    assert rig.code == 2, rig.ledger()
+    tickets = rig.state()["tickets"]
+    assert [q["id"] for q in rig.state()["run"]["questions"]] == [TB1]
+    assert (tickets["01"]["phase"], tickets["02"]["phase"], tickets["03"]["phase"]) == ("blocked", "merged", "pending")
+    assert "feat: 02 rows" in rig.pr_subjects() and not rig.calls("03")
+    assert rig.led("End-of-run work skipped") and not rig.calls("final", "final-reviewer")
+
+
+def test_retry_runs_the_role_on_its_first_entry_from_the_tip_it_left_and_resumes_only_its_ticket(tmp_path):
+    rig, run = trio(tmp_path, stops(), left_wip(), impl("01"))
+    rig.run(run)
+    wip, done_02 = rig.calls("01", "implementer")[1]["sha"], len(rig.calls("02"))
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["tip"] == wip, rig.ledger()
+    rig.run(run, "--answer", f"{TB1}=retry")
+    assert rig.code == 0 and {e["phase"] for e in rig.state()["tickets"].values()} == {"merged"}, rig.ledger()
+    assert rig.led(f"Ruling: 01 runs again (retry): the implementer")
+    resumed = rig.calls("01", "implementer")[2]
+    assert entries(rig, "01", "implementer") == [SONNET, OPUS_5_5, SONNET] and resumed["head"] == wip
+    assert len(rig.calls("02")) == done_02
+    assert rig.calls("03")[0]["t0"] > resumed["t1"] and "feat: 01 rows" in rig.calls("03")[0]["pr_log"]
+
+
+def test_edit_keeps_the_ticket_blocked_with_the_ruling_and_runs_no_agent_of_it(tmp_path):
+    rig = Inside(tmp_path, ONE, models=TWO).run(steps(stops(), stops("BLOCKED", NO_ACCESS)))
+    seen = len(rig.calls("01"))
+    rig.run(steps(stops(), stops("BLOCKED", NO_ACCESS), impl("01")), "--answer", f"{TB1}=edit")
+    assert rig.code == 1 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert rig.led("Ruling: 01 stays BLOCKED", "(edit)") and len(rig.calls("01")) == seen
+
+
+def test_two_blocked_tickets_put_both_questions_in_decisions_and_on_the_one_page(tmp_path):
+    rig, run = trio(tmp_path, stops(), stops())
+    run["02/implementer"] = [stops(), stops()]
+    rig.run(run)
+    assert rig.code == 2, rig.ledger()
+    ids = ["01-ticket-blocked-1", "02-ticket-blocked-1"]
+    assert sorted(q["id"] for q in decisions(rig)["questions"]) == ids
+    html = (rig.repo / PAGE).read_text()
+    assert all(f'data-q="{qid}"' in html for qid in ids)
+
+
+def test_a_fixer_that_stops_twice_blocks_and_retry_runs_its_round_again_after_a_review(tmp_path):
+    """The round that stopped does not count: `retry` reviews the tip the fixer left, then a fixer runs that round."""
+    run = plan(**{"01/reviewer": [review("01", [STUCK]), review("01", [STUCK]), review("01")],
+                  "01/fixer": [stops(role="fixer"), stops(role="fixer"), fix("01", 1)]})
+    rig = Inside(tmp_path, ONE).run(run)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["round"] == 0, rig.ledger()
+    (question,) = rig.state()["run"]["questions"]
+    assert (question["id"], question["evidence"][0]) == (TB1, ".agent/implement/01/fixer-1.json")
+    rig.run(run, "--answer", f"{TB1}=retry")
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
-    assert len(rig.calls("01", "reviewer")) == 3
-    assert rig.led(f"Ruling: 01 review runs again (retry): the reviewer: {NO_FINDINGS}")
-    assert NO_FINDINGS in rig.calls("01", "reviewer")[2]["prompt"]
+    assert rig.state()["tickets"]["01"]["round"] == 1 and len(rig.calls("01", "fixer")) == 3
+
+
+def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path):
+    run = plan(**{"01/reviewer": [review("01", [STUCK])] * 2 + [review("01")],
+                  "01/fixer": [fix("01", 1), stops(role="fixer"), fix("01", 2)]})
+    rig = Inside(tmp_path, ONE, models=TWO).run(run)
+    assert rig.code == 0, rig.ledger()
+    assert entries(rig, "01", "fixer") == [SONNET, OPUS_5_5, SONNET]
+
+
+def test_the_removed_kinds_cannot_be_asked():
+    removed = {"review-stopped", "review-rejected", "implementer-stopped", "fixer-stopped"}
+    assert not removed & set(driver_decisions.KINDS) and "ticket-blocked" in driver_decisions.KINDS
+
+
+# ---------------------------------------------------------------- a test-writer report; a question of a merged ticket
 
 
 def test_a_test_writer_report_that_locks_a_file_it_deleted_is_rejected(tmp_path):
@@ -597,17 +659,17 @@ def test_a_test_writer_report_that_locks_a_file_it_deleted_is_rejected(tmp_path)
 
 def test_a_question_of_a_ticket_that_merged_is_dropped_and_does_not_park_the_run(tmp_path, capsys):
     """Issue #136: the operator set a stopped ticket to `merge` by hand; its question stayed open, with exit 2."""
-    rig = Inside(tmp_path, ONE).run(steps(stops()))
+    rig = Inside(tmp_path, ONE).run(steps(stops(), stops()))
     assert rig.code == 2, rig.ledger()
     capsys.readouterr()
     path = rig.repo / ".agent/implement/state.json"
     state = json.loads(path.read_text())
     state["tickets"]["01"]["phase"] = "merge"
     path.write_text(json.dumps(state))
-    rig.run(steps(stops()))
+    rig.run(steps(stops(), stops()))
     assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
-    assert decisions(rig)["questions"] == [] and IMPLEMENTER_STOPPED not in capsys.readouterr().out
-    assert rig.led(f"Ticket 01: the question {IMPLEMENTER_STOPPED} is dropped: the ticket merged.")
+    assert decisions(rig)["questions"] == [] and TB1 not in capsys.readouterr().out
+    assert rig.led(f"Ticket 01: the question {TB1} is dropped: the ticket merged.")
 
 
 def test_dropping_the_questions_of_merged_tickets_keeps_the_answered_ones_and_those_of_other_tickets():
