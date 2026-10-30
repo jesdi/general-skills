@@ -415,6 +415,48 @@ def test_an_unlisted_change_to_the_locked_file_of_an_unmerged_ticket_is_rejected
     assert UNLISTED in first and rig.calls("02", "test-writer")[0]["t1"] < rig.calls("01", "reviewer")[0]["t1"]
 
 
+LEDGER_BASE = "".join(f"def test_{n}():\n    assert {n}\n\n\n" for n in range(6))
+LEDGER_01 = LEDGER_BASE.replace("assert 0", "assert 0 == 0")  # 01 changes the top of the file
+LEDGER_03 = LEDGER_BASE.replace("assert 5", "assert 5 == 5")  # 03 locks the bottom
+
+
+def landed_late(tmp_path):
+    """01's implementer changes tests/test_ledger.py before any ticket locks it; 03's test-writer then changes another
+    part of it, lists it in `locked`, and 03 merges while 01 is in review: the merge of 01 is clean."""
+    rig = Inside(tmp_path, {k: v for k, v in three().items() if not k.startswith("02")})
+    (rig.repo / "tests").mkdir()
+    (rig.repo / "tests/test_ledger.py").write_text(LEDGER_BASE)
+    subprocess.run(["git", "-C", str(rig.repo), "add", "tests"], check=True)
+    subprocess.run(["git", "-C", str(rig.repo), "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q",
+                    "-m", "ledger tests"], check=True)
+    writer = tw("03")
+    writer["files"]["tests/test_ledger.py"] = LEDGER_03
+    writer["report"]["locked"] += ["tests/test_ledger.py"]
+    rig.steps = plan(**{"01/implementer": [impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n",
+                                                            "tests/test_ledger.py": LEDGER_01})],
+                        "01/reviewer": [{"touch": ["r1"], "wait_pr_moves": True}],
+                        "03/test-writer": [{**writer, "wait": ["r1"]}]})
+    return rig.run(rig.steps)
+
+
+def test_landing_refuses_a_change_to_a_file_another_ticket_locked_later(tmp_path):
+    rig = landed_late(tmp_path)
+    assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
+    assert rig.tip() == rig.sha("03", "implementer") and on_pr(rig, "tests/test_ledger.py") == LEDGER_03
+    (question,) = rig.state()["run"]["questions"]
+    assert question["kind"] == "ticket-blocked" and "tests/test_ledger.py" in question["subject"]
+    assert question["resume"] == "implement"
+
+
+def test_a_retry_of_a_refused_landing_runs_the_implementer_and_lands_once_it_puts_the_file_back(tmp_path):
+    rig = landed_late(tmp_path)
+    back = impl("01", files={"tests/test_ledger.py": LEDGER_BASE}, commit="fix: 01 ledger back")
+    rig.steps["01/implementer"].append(back)
+    rig.run(rig.steps, "--answer", "01-ticket-blocked-1=retry")
+    assert rig.code == 0 and rig.state()["tickets"]["01"]["phase"] == "merged", rig.ledger()
+    assert on_pr(rig, "tests/test_ledger.py") == LEDGER_03
+
+
 def test_a_correction_runs_with_no_restore_commit_and_no_gate_before_it(tmp_path):
     stale = finding("STALE", kind="fixture", file="tests/test_01.py")
     correction = {**tw("01"), "files": {"tests/test_01.py": "# corrected\n"}, "commit": "test: 01 fixture fix"}

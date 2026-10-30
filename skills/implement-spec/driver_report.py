@@ -162,6 +162,16 @@ def _changed_locked(context: dict, baseline: str, paths: list[str], base: str = 
             f"{baseline[:7]}" for path in sorted(changed - as_landed)]
 
 
+def landing_errors(repo: str, pr_tip: str, commit: str, paths: list[str]) -> list[str]:
+    """The `paths` (the locked files of other tickets) that `commit`, about to land, changes from the PR tip: the PR
+    tip holds what their test-writers locked."""
+    changed = _differ(repo, pr_tip, commit, paths) if paths else set()
+    if changed is None:
+        return [f"the locked-file check failed: git cannot compare {pr_tip[:7]} and {commit[:7]}"]
+    return [f"locked file changed: {path}: the commit that would land changes a locked file of another ticket, so make "
+            "it as the PR tip has it" for path in sorted(changed)]
+
+
 def _merge_base(repo: str, commit: str, pr: str) -> str:
     """The merge base of `commit` and the PR tip; the PR tip when git finds none."""
     return (_git(repo, "merge-base", commit, pr) or [pr])[0]
