@@ -73,15 +73,18 @@ def drop_merged(state: dict) -> list[dict]:
     return dropped
 
 
+def question_id(kind: str, ticket: str, asked: list[dict]) -> str:
+    """The id of the next question of `kind` for `ticket`: `<NN>-<kind>-<n>` (`final-<kind>-<n>` for the end of run);
+    n counts in `asked`, the whole run."""
+    return f"{ticket}-{kind}-{1 + sum((q['ticket'], q['kind']) == (ticket, kind) for q in asked)}"
+
+
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
              resume: str = "") -> dict:
-    """A new open question, id `<NN>-<kind>-<n>` (`final-<kind>-<n>` for the end of run); n counts in `asked`, the
-    whole run.
-    `resume` is the phase a `retry` or a `keep-test` takes the ticket back to."""
+    """A new open question. `resume` is the phase a `retry` or a `keep-test` takes the ticket back to."""
     owner = "End of run" if ticket == "final" else f"Ticket {ticket}"
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner}
-    number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    return {"id": f"{ticket}-{kind}-{number}", "title": made.title.format(**values), "why": made.why.format(**values),
+    return {"id": question_id(kind, ticket, asked), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
             "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume, "answer": None}
