@@ -11,6 +11,8 @@ HERE = Path(__file__).resolve().parent
 PLUGIN = "weigh_pytest_plugin.py"
 MIN_PYTHON = (3, 10)
 MIN_PYTEST = (7, 0)
+# the wrapper's cached uv; a direct `python3 weigh.py` uses the one on PATH
+UV = os.environ.get("TEST_WEIGH_IN_UV") or "uv"
 
 
 class SetupError(Exception):
@@ -22,7 +24,7 @@ def find_interpreter(repo, explicit=None):
     if explicit:
         return Path(explicit).absolute()  # not resolve(): a venv's python is a symlink to the base one
     if (repo / "uv.lock").is_file() and not (repo / ".venv").exists():
-        proc = subprocess.run(["uv", "sync", "--frozen", "-q"], cwd=repo, capture_output=True, text=True)
+        proc = subprocess.run([UV, "sync", "--frozen", "-q"], cwd=repo, capture_output=True, text=True)
         if proc.returncode:
             raise SetupError("uv sync failed:\n" + proc.stdout + proc.stderr)
     for rel in (".venv/bin/python", "venv/bin/python"):
@@ -58,7 +60,7 @@ def build_overlay(python):
         root.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(dir=root))
         shutil.copy(HERE / PLUGIN, tmp)
-        proc = subprocess.run(["uv", "pip", "install", "-q", "--no-deps", "--python", str(python), "--target", str(tmp), "coverage"],
+        proc = subprocess.run([UV, "pip", "install", "-q", "--no-deps", "--python", str(python), "--target", str(tmp), "coverage"],
                               capture_output=True, text=True)
         if proc.returncode:
             shutil.rmtree(tmp)
