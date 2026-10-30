@@ -89,24 +89,6 @@ KINDS = {
          "edit": Option(
             "Keep the ticket BLOCKED, so the spec or the ticket can be edited before more work on it.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", {})}),
-    "merged-locked-file": Kind(
-        True,
-        "Ticket {ticket}: the landing would change the locked file of a merged ticket: {subject}",
-        "The landing check found that ticket {ticket} changes this locked file of a merged ticket, so the PR branch "
-        "did not move. Ticket {ticket} is BLOCKED and each ticket that it blocks waits.",
-        "restore",
-        {"restore": Option(
-            "The driver puts the file back to the version of the PR branch in a commit of its own on the ticket "
-            "branch, then the landing runs again with its gate. A red gate takes the commit back and asks again.",
-            "Ruling: {ticket} lands with {subject} put back to the version of the PR branch (restore).",
-            {"phase": "merge"}),
-         "adopt": Option(
-            "The ticket locks the file, so its change lands: the merged ticket's tests in it become the ticket's own. "
-            "The landing runs again with its gate. A red gate asks again.",
-            "Ruling: {ticket} locks {subject} and lands its change to it (adopt).", {"phase": "merge"}),
-         "redesign": Option(
-            "Keep the ticket BLOCKED. The design changes before more work on it.",
-            "Ruling: {ticket} stays BLOCKED, the design changes first (redesign): {subject}.", {})}),
     # A final-review question belongs to no ticket: its `ticket` is "".
     "final-finding": Kind(
         True,
@@ -135,11 +117,6 @@ def corrections(questions: list[dict], ticket: str) -> tuple[int, bool]:
     return sum("correct-again" in answers for answers in stops.values()), {"accept"} in stops.values()
 
 
-def ruled(questions: list[dict], ticket: str, kind: str) -> dict[str, str]:
-    """subject -> the last answer to the questions of `kind` on `ticket`."""
-    return {q["subject"]: q["answer"] for q in questions if (q["ticket"], q["kind"]) == (ticket, kind) and q["answer"]}
-
-
 def drop_merged(state: dict) -> list[dict]:
     """Remove the open questions of each merged ticket from `state`: the stop that asked them is over (issue #136).
     Returns them."""
@@ -159,23 +136,11 @@ def contradicted(role: str, report: dict) -> str:
                                    if concern.startswith(CONTRADICTS))))
 
 
-def _untried(ticket: str, subject: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
-    """The options of a `merged-locked-file` question. The file is asked again only when an answer turned the merge
-    gate red: that answer is not offered again."""
-    kind = "merged-locked-file"
-    tried = {q["answer"] for q in asked if (q["ticket"], q["kind"], q["subject"]) == (ticket, kind, subject)}
-    options = {name: option for name, option in KINDS[kind].options.items() if name == "redesign" or name not in tried}
-    recommended = KINDS[kind].recommended
-    return options, recommended if recommended in options else next(iter(options))
-
-
-def _offered(kind: str, ticket: str, subject: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
+def _offered(kind: str, ticket: str, asked: list[dict]) -> tuple[dict[str, Option], str]:
     """(the options of a new question, the recommended one), after what `asked` already tried."""
     options = KINDS[kind].options
     if kind == "locked-test-again" and corrections(asked, ticket)[0] >= AGAIN:
         return {name: options[name] for name in ("accept", "redesign")}, "accept"
-    if kind == "merged-locked-file":
-        return _untried(ticket, subject, asked)
     return options, KINDS[kind].recommended
 
 
@@ -185,7 +150,7 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
     `resume` is the phase a `retry` takes the ticket back to."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject}
     number = 1 + sum((q["ticket"], q["kind"]) == (ticket, kind) for q in asked)
-    options, recommended = _offered(kind, ticket, subject, asked)
+    options, recommended = _offered(kind, ticket, asked)
     return {"id": f"{ticket}-{kind}-{number}".lstrip("-"), "title": made.title.format(**values), "why": made.why.format(**values),
             "evidence": evidence, "recommended": recommended,
             "options": [{"id": name, "description": option.description} for name, option in options.items()],

@@ -8,12 +8,11 @@ import pytest
 
 import driver_answers
 import driver_decisions
-import driver_review
 import driver_review_page
 from test_cli import git, ticket
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
-from test_review import ONE, STUCK, finding, fix, review
+from test_review import ONE, STUCK, fix, review
 from test_stops import CONTRA, NEW_TEST, Q1, UNATTENDED, blocked, correction, decisions, stage, steps, write_answers
 from test_walk import COST, impl, plan, tw
 
@@ -164,57 +163,9 @@ def two_locked():
     return step
 
 
-def restored(path):
-    return f"Ticket 01: {path} was not the locked version at the correction: the driver restored it in a commit"
-
-
-TWO_TESTS = "def test_x():\n    assert 01 == 'x'\n\n\ndef test_y():\n    assert 1 == 'y'\n"
-ONLY_X = TWO_TESTS.split("\n\n\n")[0] + "\n"
-# The edit of an agent: the one line of test_x, in place, in the file as the tree has it.
-EDIT = "--- a/tests/test_01.py\n+++ b/tests/test_01.py\n@@ -2 +2 @@\n-    assert 01 == 'x'\n+    assert '01' == '01'\n"
-
-
-@pytest.mark.parametrize("committed", [True, False])
-def test_the_correction_starts_from_the_locked_version_of_a_file_the_implementer_changed(tmp_path, capsys, committed):
-    writer = {**tw("01"), "files": {"tests/test_01.py": TWO_TESTS}}
-    deletes = {**(partial() if committed else blocked()), "files": {"tests/test_01.py": ONLY_X}}
-    rig = Inside(tmp_path, ONE)
-    (rig.rig / "edit.patch").write_text(EDIT)
-    edits = {**correction(), "files": {}, "git": [["apply", "--unidiff-zero", str(rig.rig / "edit.patch")]]}
-    scenario = plan(**{"01/test-writer": [writer, edits], "01/implementer": [deletes, impl("01")]})
-    rig.run(scenario)
-    assert rig.code == 2, rig.ledger()
-    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
-    assert rig.code == 0, rig.ledger()
-    assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == TWO_TESTS.replace("01 == 'x'", "'01' == '01'")
-    assert len(rig.led(restored("tests/test_01.py"))) == 1 and not rig.led("locked file changed")
-    assert rig.state()["tickets"]["01"]["held"] == {}
-
-
-def test_a_locked_file_the_correction_changes_without_listing_it_is_still_a_finding(tmp_path, capsys):
-    gutted = partial()
-    gutted["files"] = {**gutted["files"], OTHER: "# gutted\n"}
-    # The driver restored the other file before the correction; the correction guts it again and commits it unlisted.
-    guts = {**correction(), "files": {"tests/test_01.py": NEW_TEST, OTHER: "# gutted again\n"}}
-    restore = fix("01", 1, files={"demo/export.py": "x = 1\n", OTHER: OTHER_TEST})
-    scenario = plan(**{"01/test-writer": [two_locked(), guts], "01/implementer": [gutted, impl("01")],
-                       "01/fixer": [restore]})
-    rig = Inside(tmp_path, ONE).run(scenario)
-    first = rig.calls("01", "test-writer")[0]["sha"]
-    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
-    assert rig.code == 0, rig.ledger()
-    assert rig.led(restored(OTHER)) and not rig.led(restored("tests/test_01.py"))
-    (line,) = rig.led(f"locked file changed: {OTHER}")
-    assert "critical" in line and len(rig.calls("01", "fixer")) == 1
-    entry = rig.state()["tickets"]["01"]
-    assert entry["held"] == {OTHER: first} and entry["test_writer_sha"] == rig.calls("01", "test-writer")[1]["sha"]
-    assert git(rig.repo, "show", f"feat/csv:{OTHER}") == OTHER_TEST and git(rig.repo, "show", "feat/csv:tests/test_01.py") == NEW_TEST
-
-
 def test_a_correction_that_commits_more_than_the_files_it_lists_is_rejected(tmp_path, capsys):
-    dirty = {**blocked(), "files": {"demo/export.py": "half = 1\n", OTHER: "# gutted\n"}}
-    # The correction commits with `git add -A`, so the implementer's work in the tree goes into its commit. The
-    # locked file it gutted is back at the locked version before the correction, so only the other file is a fault.
+    dirty = {**blocked(), "files": {"demo/export.py": "half = 1\n"}}
+    # The correction commits with `git add -A`, so the implementer's work in the tree goes into its commit.
     scenario = plan(**{"01/test-writer": [two_locked(), correction(), correction()], "01/implementer": [dirty, impl("01")]})
     rig = Inside(tmp_path, ONE).run(scenario)
     rig.run(scenario, "--answer", f"{Q1}=overrule-test")
@@ -226,10 +177,9 @@ def test_a_correction_that_commits_more_than_the_files_it_lists_is_rejected(tmp_
     asked_again = rig.state()["run"]["questions"][-1]
     assert again["id"] == "01-locked-test-2" and asked_again["subject"] == "tests/test_01.py::test_x"
     assert asked_again["evidence"][0] == ".agent/implement/01/implementer-0.json"
-    assert rig.led(restored(OTHER)) and git(rig.repo, "show", f"ticket/feat%2Fcsv/01:{OTHER}") == OTHER_TEST
     assert len(rig.calls("01", "test-writer")) == 3 and len(rig.calls("01", "implementer")) == 1, "one rerun, no implementer"
     assert "its commits also change demo/export.py" in rig.prompt("test-writer-0")
-    assert "feat: 01 rows" not in rig.pr_subjects() and rig.state()["tickets"]["01"]["held"] == {}
+    assert "feat: 01 rows" not in rig.pr_subjects()
 
 
 MUTATION = "FAILED tests/test_01.py::test_x - AssertionError: fn_01 deleted"
@@ -274,62 +224,8 @@ def test_a_correction_of_its_own_file_leaves_the_work_in_the_tree_to_the_impleme
     assert git(rig.repo, "show", "--name-only", "--format=", fixed).split() == ["tests/test_01.py"]
     assert git(rig.repo, "show", "feat/csv:demo/export.py") == "half = 1\n", "the implementer committed its own work"
     entry = rig.state()["tickets"]["01"]
-    assert entry["held"] == {} and entry["locked"] == ["tests/test_01.py", OTHER] and not rig.led("locked file changed")
+    assert entry["locked"] == ["tests/test_01.py", OTHER] and not rig.led("locked file changed")
     assert git(rig.repo, "show", f"feat/csv:{OTHER}") == OTHER_TEST
-
-
-STRONGER = "def test_x():\n    assert '01' == '01'  # stronger\n"
-
-
-@pytest.mark.parametrize("cheat", [False, True])
-def test_a_second_correction_of_a_locked_file_is_its_new_reference(tmp_path, capsys, cheat):
-    # Issue #75: the review correction (#70) changes tests/test_01.py and first lists only the other file. Before
-    # the fix it was accepted, `held` kept the overrule commit as the reference, and each review after a fix that
-    # did not touch the file found "locked file changed". A correction now lists each file it changes.
-    vacuous = finding("VACUOUS", "critical", kind="test", file="tests/test_01.py")
-    files = {"tests/test_01.py": STRONGER.replace("stronger", "draft"), OTHER: OTHER_TEST + "# stronger\n"}
-    unlisted = {**correction(), "files": files, "commit": "test: 01 stronger"}
-    unlisted["report"] = {**unlisted["report"], "locked": [OTHER], "files": [OTHER]}
-    # The rerun lists both files: the commit of the rejected attempt is in its commits too.
-    listed = {**unlisted, "files": {"tests/test_01.py": STRONGER}}
-    listed["report"] = {**unlisted["report"], "locked": ["tests/test_01.py", OTHER]}
-    gutted = fix("01", 1, files={"demo/export.py": "x = 1\n", "tests/test_01.py": "# gutted\n"})
-    fixes = [gutted, fix("01", 2, files={"demo/export.py": "x = 2\n", "tests/test_01.py": STRONGER})] if cheat else [
-        fix("01", 1)]
-    scenario = plan(**{"01/test-writer": [two_locked(), correction(), unlisted, listed],
-                       "01/implementer": [blocked(), impl("01")], "01/fixer": fixes,
-                       "01/reviewer": [review("01", [vacuous]), review("01", [finding("STUCK")])] + [review("01")] * 3})
-    rig = Inside(tmp_path, ONE).run(scenario)
-    rig.run(scenario, "--answer", f"{Q1}=overrule-test")
-    assert rig.code == 0, rig.ledger()
-    assert rig.led("BLOCKED", "correction") == [] and rig.led("its commits also change tests/test_01.py")
-    entry = rig.state()["tickets"]["01"]
-    assert entry["held"] == {} and entry["test_writer_sha"] == rig.calls("01", "test-writer")[3]["sha"]
-    assert len(rig.led("locked file changed: tests/test_01.py")) == cheat, "only a fixer's change is a finding"
-    assert git(rig.repo, "show", "feat/csv:tests/test_01.py") == STRONGER
-
-
-def test_a_locked_file_keeps_its_old_reference_until_a_test_writer_lists_it(repo, tmp_path):
-    def commit(name, text):
-        (tmp_path / name).write_text(text)
-        return git(tmp_path, "add", "-A") + git(tmp_path, "commit", "-q", "-m", name) + git(tmp_path, "rev-parse", "HEAD").strip()
-
-    repo()
-    commit("a.py", "1\n"), commit("c.py", "1\n")
-    old = commit("b.py", "1\n")
-    commit("b.py", "the implementer changed it\n")
-    tip = commit("a.py", "the correction\n")
-    first = driver_review.written(".", {"test_writer_sha": None, "locked": [], "held": {}}, ["a.py", "b.py", "c.py"], old)
-    assert first == {"test_writer_sha": old, "locked": ["a.py", "b.py", "c.py"], "held": {}}
-    after = driver_review.written(".", first, ["a.py"], tip)
-    assert after == {"test_writer_sha": tip, "locked": ["a.py", "b.py", "c.py"], "held": {"b.py": old}}
-    (finding,) = driver_review.locked_findings(".", after)
-    assert (finding["title"], finding["evidence"]) == ("locked file changed: b.py", f"git diff {old}..HEAD -- b.py")
-    assert driver_review.written(".", after, ["b.py"], tip)["held"] == {}, "the test-writer corrected it: a new reference"
-    # A diff that git cannot make holds each other file, and then the check of the review fails in the open.
-    lost = driver_review.written(".", {**first, "test_writer_sha": "0" * 40}, ["a.py"], tip)
-    assert lost["held"] == {"b.py": "0" * 40, "c.py": "0" * 40}
-    assert [f["title"].split(":")[0] for f in driver_review.locked_findings(".", lost)] == ["locked file check failed"]
 
 
 # ---------------------------------------------------------------- legacy finding-question decisions
@@ -639,7 +535,7 @@ def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path)
 
 
 def test_the_removed_kinds_cannot_be_asked():
-    removed = {"review-stopped", "review-rejected", "implementer-stopped", "fixer-stopped"}
+    removed = {"review-stopped", "review-rejected", "implementer-stopped", "fixer-stopped", "merged-locked-file"}
     assert not removed & set(driver_decisions.KINDS) and "ticket-blocked" in driver_decisions.KINDS
 
 

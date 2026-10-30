@@ -55,36 +55,24 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
 - The driver writes no prose of its own into a prompt: a prompt is a template with its pointers filled. The same
   holds for each title, question and ruling in `driver_decisions.py`.
 - The ledger is written only by the driver, and the driver reads no fact from it.
-- A check that git cannot do is a failed check, never a passed one (`locked_changes`, `refused`, `written`).
+- A check that git cannot do is a failed check, never a passed one (`locked_changes`, `_breach_errors`).
 
 ### Locked tests
 
-- The commit of the test-writer is the reference of the ticket's locked files. Before each review, a locked file
-  that differs from its reference is a critical finding (`driver_review.locked_findings`).
-- A correction of the test-writer is a new reference. For that reason the driver first puts each locked file back
-  to its locked version and commits that (`Run.restore_locked_files`), and a correction may change only the files it
-  lists, after `overrule-test` and in the fix loop. Its commit becomes the reference of each file it lists. A locked
-  file that it does not list and that differs from the old reference keeps the old reference in the ticket's `held`,
-  so a change of the implementer stays a finding (`driver_review.written`).
-- The restore is a commit, not a tree change: an agent commits only its own files, and a gate refuses a tree that
-  is not clean, so a restore left in the tree would turn the next gate red and use a fix round. The correction's
-  prompt names the restored files (`prompts/restored.md`): this is the one path for a change of an earlier ticket's
-  locked test that a later ticket's interface needs.
-- The driver, not the correction, decides whether a restored file fails with the ticket's code: in the fix loop it
-  gates the restore commit, whose parent has a green gate. A red gate goes to the correction as evidence
-  (`prompts/restored-red.md`), and a DONE correction must then list a restored file. An agent's judgement of
-  "this test does not fail" missed a red file and led to a refused merge (issue #90). After `overrule-test` the
-  parent has no green gate, so a red gate proves nothing there: the next review catches the file instead.
-- The locked files of merged tickets are checked before each review (`driver_review.merged_changes`): a change is a
-  `fixture` finding, so it goes to a correction, where the restore and its gate decide. They are checked again when
-  a ticket lands (`driver_merge.refused`): the tree that lands must have each of them as the PR tip has it. A
-  ticket's test-writer may change one only when it lists it. So a review finding on such a file goes to a correction
-  too: a fixer's change there is put back, and the ticket would loop until BLOCKED (issue #116).
-- A refused landing asks a `merged-locked-file` question. `driver._rulings` applies its answers at the next landing:
-  `restore` is a commit of the driver (`Run.restore_merged_files`), and `adopt` adds the file to the ticket's
-  `locked` only when the ticket lands. A red merge gate after a ruling takes the restore commit back and asks again
-  (`driver._red_landing`); `driver_decisions.question` leaves out the option that was tried.
-- A conflict resolution, of a merge or of the rebase, may not change a locked file.
+- Only the test-writer changes a locked file, and it lists each one it changes in `locked`, of its own ticket or of
+  another (`driver_report._others_errors`, `_correction_errors`). A correction may change only the files it lists.
+  Its commit becomes the baseline of the ticket's own locked files (`driver_review.written`).
+- After the implementer, a fixer and the ticket conflict agent, the driver checks the locked files with a diff
+  (`driver_report._breach_errors`, its context read when the agent ends by `Run.locked_check`): the ticket's own
+  against its last test-writer commit, every other ticket's whose test-writer has run, merged or not, against the
+  merge base of the ticket branch and the PR tip. A file as the PR tip has it is no change. The baseline is
+  stateless, so a breach left on the tip by a rejected rerun is found again after a `retry`. A changed locked file
+  rejects the report naming the file, so the rerun on the next entry and `ticket-blocked` apply as to any rejection.
+- The reviewer gets the diff of each locked file of another ticket that the ticket changed
+  (`driver_review.changed_elsewhere`, `prompts/elsewhere.md`): only the test-writer can have made it, and the
+  reviewer judges it against the spec. A review finding on such a file goes to a correction, since a fixer may not
+  change it (issue #116).
+- The end of run and the rebase conflict agent keep their own locked-file findings (`driver_review.locked_changes`).
 
 ### The PR branch
 
