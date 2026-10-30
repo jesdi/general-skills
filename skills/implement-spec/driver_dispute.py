@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple, NoReturn
 
+import driver_decisions
 import driver_report
 import driver_review
 import driver_slots
@@ -48,10 +49,10 @@ def agent(run: Run, call: Call) -> dict:
 
 def ambiguous(run: Run, number: str, readings: list[Reading], resume: str, fields: dict) -> NoReturn:
     """Ask one `spec-ambiguous` question on `readings` and block the ticket. Its evidence is a findings file that a
-    `correct-test` correction reads: one finding per locked file, to correct to the second reading."""
-    asked = run.state.read()["run"]["questions"]
-    n = 1 + sum((q["ticket"], q["kind"]) == (number, "spec-ambiguous") for q in asked)
-    path = OUT / number / f"spec-ambiguous-{n}.json"
+    `correct-test` correction reads: one finding per locked file, to correct to the second reading. The file is named
+    after the question: `spec-ambiguous-<n>.json` for `<NN>-spec-ambiguous-<n>`."""
+    question = driver_decisions.question_id("spec-ambiguous", number, run.state.read()["run"]["questions"])
+    path = OUT / number / f"{question.removeprefix(f'{number}-')}.json"  # the ticket's folder names the ticket
     subjects = [f"{one.test}{f', {one.requirement}' * bool(one.requirement)}: the first reading: {one.first}; the "
                 f"second reading: {one.second}" for one in readings]
     findings = [{"severity": "critical", "file": one.file, "line": 0, "title": subject, "kind": "ruling",
