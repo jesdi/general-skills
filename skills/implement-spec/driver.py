@@ -30,9 +30,8 @@ import driver_fixloop
 import driver_gate
 import driver_graph
 import driver_legacy
+import driver_locked
 import driver_merge
-import driver_report
-import driver_review
 import driver_review_page
 import driver_run
 import driver_slots
@@ -118,7 +117,7 @@ def _run_role(run: Run, call: Call, entry: dict) -> tuple[str, dict]:
     report = driver_dispute.agent(run, call)
     if call.role != "test-writer":
         return AFTER.get(call.role, "review"), {}
-    return AFTER["test-writer"], driver_review.written(entry, report["locked"], driver_slots.head(call.slot))
+    return AFTER["test-writer"], driver_locked.written(entry, report["locked"], driver_slots.head(call.slot))
 
 
 def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
@@ -194,11 +193,10 @@ def _red_landing(number: str, slot: str, run: Run, commit: str, record: str) -> 
 
 def _refuse_breach(number: str, run: Run, landing: _Landing) -> None:
     """The commit that would land leaves every other ticket's locked file as the PR tip has it, but those the ticket
-    lists as its own. A change blocks the ticket with one `ticket-blocked` question: its `retry` runs the implementer
+    lists as its own (driver_locked.landing_errors). A change blocks the ticket with one `ticket-blocked` question: its
+    `retry` runs the implementer
     again, whose locked-file check names the file until the ticket branch leaves it as the merge base has it."""
-    tickets = run.state.read()["tickets"]
-    paths = [path for path in driver_review.others(tickets, number) if path not in tickets[number]["locked"]]
-    if errors := driver_report.landing_errors(".", landing.pr_tip, landing.commit, paths):
+    if errors := driver_locked.landing_errors(run.state.read()["tickets"], number, landing.pr_tip, landing.commit):
         error = "; ".join(errors)
         run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE),
                 retry_point("implementer", landing.ticket_tip, 0))

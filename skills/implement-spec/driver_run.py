@@ -18,7 +18,7 @@ from typing import Callable, Iterator, NamedTuple, NoReturn, TypeVar
 import driver_agents
 import driver_decisions
 import driver_gate
-import driver_merge
+import driver_locked
 import driver_report
 import driver_review
 import driver_slots
@@ -33,7 +33,6 @@ _LEDGER = threading.Lock()
 _ASKS = threading.Lock()  # the lenses of the final review run at the same time
 STOPS = ("BLOCKED", "NEEDS_CONTEXT")
 _COMMITS = ("test-writer", "implementer", "fixer")  # the ticket agents whose commits are the ticket's work
-_CHECKED = ("implementer", "fixer", "conflict")  # the ticket agents whose commits may not change a locked file
 # The phase that runs a ticket agent again: the fixer's round runs again after a review of the tip it left.
 _RETRY = {"test-writer": "test-writer", "implementer": "implement", "reviewer": "review", "fixer": "review",
           "conflict": "merge"}
@@ -98,6 +97,8 @@ class Call:
     retry: str = ""
     # A BLOCKED report that disputes a locked test is accepted, not a stop: `driver_dispute.agent` settles it.
     may_dispute: bool = False
+    # Reads the locked-file check of its report when the agent ends; by default that of a ticket agent.
+    locked: Callable[[], driver_locked.Locked | None] | None = None
 
 
 class Ask(NamedTuple):
@@ -154,41 +155,18 @@ class Run:
     def agent(self, call: Call) -> dict:
         """Run one agent and return its accepted report."""
         if call.role == "test-writer":
-            others = driver_review.others(self.state.read()["tickets"], call.number)
+            others = driver_locked.others(self.state.read()["tickets"], call.number)
             call = replace(call, values={**call.values, "protected": " ".join(others) or "none"})
         report = _attempts(self, call)
         if call.role == "test-writer":
             report["locked"] = driver_report.locked_files(report["locked"])  # as validate read it
         return report
 
-    def locked_check(self, role: str, number: str) -> dict:
-        """The context of the locked-file checks of a report, read when the agent ends: the locked files of every other
-        ticket whose test-writer has run, and for a ticket role that may not change a locked file, its own."""
-        if number == FINAL:
-            return self._final_check(role)
-        if role not in ("test-writer", *_CHECKED):
-            return {}
-        tickets = self.state.read()["tickets"]
-        check = {"others": driver_review.others(tickets, number), "pr": f"refs/heads/{self.pr}"}
-        if role in _CHECKED:
-            check["own"] = (tickets[number]["test_writer_sha"], tickets[number]["locked"])
-        return check
-
-    def _final_check(self, role: str) -> dict:
-        """The final fixer and the rebase conflict agent change no locked file of any ticket: each stays as the tidied
-        tip has it, or for the rebase that makes that tip, the recovery point. The driver goes on with a rebase that
-        the agent left open, so the check reads the rebased tip; one that stopped again at a later conflict has no
-        tip to check, and the driver aborts it."""
-        if role not in ("fixer", "conflict"):
-            return {}
-        if role == "conflict" and driver_merge.rebase_is_open():
-            driver_merge.go_on()
-            if driver_merge.rebase_is_open():
-                return {}
-        baseline = (self.state.read()["run"]["final"]["tidied"] if role == "fixer" else
-                    git(".", "rev-parse", self.names.recovery).stdout.strip())
-        locked = driver_review.others(self.state.read()["tickets"], FINAL)
-        return {"own": (baseline, locked), "others": [], "pr": baseline}
+    def locked(self, call: Call) -> driver_locked.Locked | None:
+        """The locked-file check of the report of `call`, read when the agent ends."""
+        if call.locked:
+            return call.locked()
+        return driver_locked.for_ticket(self.state.read()["tickets"], call.role, call.number, f"refs/heads/{self.pr}")
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""
@@ -401,7 +379,7 @@ def _attempts(run: Run, call: Call) -> dict:
         code = driver_agents.launch(argv, prompt, log, minutes * 60, slot)
         seconds = time.monotonic() - start
         driver_agents.settle_report(report)
-        context.update(run.locked_check(role, number))
+        context["locked"] = run.locked(call)
         error, rerun_lines, same = _rejection(call, code, minutes, report, context)
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:
