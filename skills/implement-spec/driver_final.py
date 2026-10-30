@@ -1,6 +1,7 @@
 """The end of a run, when every ticket is merged and every slot is idle: tidy the PR branch into one commit per
 ticket, rebase it onto the fetched base tip, gate it, run the final review, let one fix batch land as `fix(NN)`
-commits with a scoped review, then stop before the push, or push and open the PR.
+commits with a scoped review, then stop before the push, or push and open the PR. A finding the scoped review leaves
+open asks `final-ticket-blocked-<n>`: only a `retry` runs another batch and scoped review.
 
 `run.final` of state.json is the resume contract (`driver_state._final` makes it with every key):
     skipped    why the end-of-run work did not start
@@ -33,13 +34,11 @@ import driver_gate
 import driver_merge
 import driver_review
 import driver_tidy
-from driver_run import FINAL, OUT, Blocked, Halted, Run, Stopped, during, ledger
+from driver_run import FINAL, OUT, Blocked, Halted, Run, during, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
 
-KIND = "final-finding"
-ROUNDS = 2  # the full review and the scoped one after the fix batch
 # The final review runs through the review-diff skill, which must sit next to this one: `_installed` looks nowhere else.
 REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
 SEVERITIES = ("critical", "important", "minor")
@@ -137,10 +136,6 @@ def _title(finding: dict) -> str:
     return f"{finding['title']} ({finding['file']}:{finding['line']})"
 
 
-def _locked_files(run: Run) -> list[str]:
-    return sorted({path for entry in run.state.read()["tickets"].values() for path in entry["locked"]})
-
-
 def _last(commits: dict[str, str]) -> str:
     return list(commits.values())[-1]
 
@@ -194,17 +189,9 @@ def _keep_published_history(run: Run, tip: str, base: str, onto: str) -> None:
            f"because a published history is not rewritten. The gate and the final review run on {tip[:7]}.")
 
 
-def _rebase_is_open() -> bool:
-    return any(Path(git(".", "rev-parse", "--git-path", name).stdout.strip()).exists()
-               for name in ("rebase-merge", "rebase-apply"))
-
-
-def _files_in_conflict() -> list[str]:
-    return git(".", "diff", "--name-only", "--diff-filter=U").stdout.split()
-
-
-def _run_rebase_conflict_agent(run: Run, env: dict, values: dict) -> str:
-    """Run the conflict agent on the open rebase and continue the rebase it resolved. Returns "" or why it blocked."""
+def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
+    """Run the conflict agent on the open rebase; its report is rejected while it changes a locked file or leaves the
+    rebase open with no conflict. Returns "" or why it blocked."""
     try:
         run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
     except Blocked as blocked:
@@ -212,26 +199,21 @@ def _run_rebase_conflict_agent(run: Run, env: dict, values: dict) -> str:
     except Halted:
         git(".", "rebase", "--abort")
         raise
-    if _rebase_is_open():  # the agent resolved the files and did not go on
-        subprocess.run(["git", "-c", "core.editor=true", "rebase", "--continue"], capture_output=True, env=env)
     return ""
 
 
-def _resolve_rebase_conflict(run: Run, env: dict, base: str, onto: str) -> None:
-    """Run the conflict agent, once, on the rebase that is open in slot 1, then gate the rebased tip. No rebase is
-    open afterwards, also when this raises."""
-    files = _files_in_conflict()
+def _resolve_rebase_conflict(run: Run, base: str, onto: str) -> None:
+    """Run the conflict agent, with its one rerun, on the rebase that is open in slot 1, then gate the rebased tip.
+    No rebase is open afterwards, also when this raises."""
+    files = driver_merge.files_in_conflict()
     values = {**_prompt_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
-    error = _run_rebase_conflict_agent(run, env, values)
-    if _rebase_is_open():
-        again = _files_in_conflict()
+    error = _run_rebase_conflict_agent(run, values)
+    if driver_merge.rebase_is_open():
+        again = driver_merge.files_in_conflict()
         git(".", "rebase", "--abort")
         raise Blocked(f"the conflict agent: {error}" if error else
                       f"the rebase onto {base} conflicts a second time, in {', '.join(again)}")
-    # The resolution may not change a locked test: each one is as the recovery point has it.
-    before = git(".", "rev-parse", run.names.recovery).stdout.strip()
-    changed = driver_review.locked_changes(".", before, _locked_files(run))
-    if error := error or "; ".join(finding["title"] for finding in changed):
+    if error:
         raise Blocked(f"the conflict agent: {error}")
     ledger(f"Rebase: the conflict agent resolved the conflict with {base} in {', '.join(files)} at {head('.')[:7]}.")
     with during("the gate after the rebase"):
@@ -243,8 +225,8 @@ def _rebase(run: Run, tip: str, base: str, onto: str) -> None:
     env = {**os.environ, **driver_merge.identity(tip)}
     git(".", "checkout", "-q", "--detach", tip)
     done = subprocess.run(["git", "-c", "core.editor=true", "rebase", onto], capture_output=True, text=True, env=env)
-    if _rebase_is_open():
-        _resolve_rebase_conflict(run, env, base, onto)
+    if driver_merge.rebase_is_open():
+        _resolve_rebase_conflict(run, base, onto)
     elif done.returncode:
         raise Blocked(f"git rebase: {done.stderr.strip()}")
 
@@ -346,25 +328,10 @@ def _carried_findings() -> str:
 
 def _check_review_is_due(run: Run, final: dict, tip: str) -> None:
     """Only a tip the driver made gets a review: the tidied tip, then the tip of the validated fix batch."""
-    if final["round"] >= ROUNDS:
-        raise Blocked(f"the two review rounds are done and the tip {tip[:7]} of {run.pr} is not the reviewed tip "
-                      f"{final['reviewed'][:7]}")
     made = final["batch"] or final["tidied"]
     if tip != made:
         raise Blocked(f"the tip {tip[:7]} of {run.pr} is not a tip the driver made: only {made[:7]} gets a review, "
                       f"so the run goes on when {run.pr} is at {made[:7]} again")
-
-
-def _record_review(state: dict, tip: str, to_fix: list[dict], evidence: list[str]) -> None:
-    """The first review starts the batch; unresolved must-fix items cannot become accept questions."""
-    record, final = state["run"], state["run"]["final"]
-    first_round = final["round"] == 0
-    final.update(reviewed=tip, round=final["round"] + 1,
-                 open=to_fix if first_round else [finding for finding in to_fix if finding.get("must_fix")])
-    if not first_round:
-        other = [finding for finding in to_fix if not finding.get("must_fix")]
-        if other:
-            driver_decisions.stop(record, KIND, "", [_title(finding) for finding in other], evidence)
 
 
 def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict]) -> None:
@@ -377,26 +344,16 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
         ledger(f"Final review round {done + 1}: {finding['severity']} finding of kind {finding['kind']} from "
                f"{finding['source']} at {finding['file']}:{finding['line']}: {finding['title']}.")
     to_fix = [finding for finding in found if finding["severity"] in driver_review.OPEN]
-    # The report of the scoped review; the evidence of the full review is its merged findings.
-    evidence = [str(file)] + ([str(folder / f"final-reviewer-{done}.json")] if done else [])
-    run.state.update(lambda state: _record_review(state, tip, to_fix, evidence))
+    run.state.update(lambda state: state["run"]["final"].update(reviewed=tip, round=done + 1, open=to_fix))
     ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
            f"{len(to_fix)} critical or important finding{'s are' if len(to_fix) != 1 else ' is'} open.")
     if to_fix and done:
-        _log_open_after_batch(to_fix)
-
-
-def _log_open_after_batch(to_fix: list[dict]) -> None:
-    """The ledger lines of the findings `to_fix` that the scoped review left open: questions, and must-fix items that
-    block the run."""
-    questions = len([finding for finding in to_fix if not finding.get("must_fix")])
-    if questions:
-        ledger(f"End of run: {driver_decisions.decides(KIND, questions)} in {OUT / 'decisions.json'}: a third "
-               "review round is never started.")
-    required = len(to_fix) - questions
-    if required:
-        ledger(f"End of run: {required} required must-fix finding{'s remain' if required != 1 else ' remains'} "
-               "open after the final fix batch; the run is blocked.")
+        # Another batch is the operator's call: one `final-ticket-blocked` question per finding.
+        titles = [_title(finding) for finding in to_fix]
+        run.ask(FINAL, "ticket-blocked", [f"a finding open after the scoped review: {title}" for title in titles],
+                str(file))
+        raise Blocked(f"the scoped review leaves {len(titles)} finding{'s' * (len(titles) > 1)} open: "
+                      + "; ".join(titles))
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
@@ -410,21 +367,19 @@ def _review(run: Run, final: dict, tip: str) -> None:
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
               "findings": str(folder / f"findings-{done - 1}.json")}
-    # A locked file that differs from the tidied tip is a critical finding. The driver made that tip, and since
-    # the tickets' own checks only the conflict agent of the rebase ran, which has the same check.
-    found = driver_review.locked_changes(".", final["tidied"], _locked_files(run))
     with during("the final review"):
         # The full review resolves no must-fix finding: only the scoped review verifies a fix.
         reviewed, resolved = _scoped(run, values, tip, done) if done else (_lenses(run, values, tip), set())
     carried = [finding for finding in final["must_fix"] if _title(finding) not in resolved]
-    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(reviewed, found), carried))
+    _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(reviewed), carried))
 
 
 def _scoped(run: Run, values: dict[str, str], tip: str, done: int) -> tuple[list[dict], set[str]]:
     """The scoped review after the fix batch, one `final-reviewer`. Returns (its findings, each with the source
     `final-reviewer`; the titles of the must-fix findings it resolved)."""
+    entries = driver_agents.other_provider_entries(run.models)
     report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(
-        "final-reviewer", FINAL, ".", values, entry=driver_agents.other_provider_entry(run.models), fix_round=done))
+        "final-reviewer", FINAL, ".", values, entry=entries[0], entries=entries, fix_round=done))
     return ([{**finding, "source": "final-reviewer"} for finding in report["findings"]],
             set(report.get("resolved_must_fix", [])))
 
@@ -465,14 +420,14 @@ def _run_lenses(run: Run, values: dict[str, dict[str, str]],
     each lens that stopped or whose report was rejected twice stops the round)."""
     due = [role for role in driver_agents.LENSES if role not in kept]
     running, reports, errors, halted = list(due), dict(kept), {}, []
+    run.asks.pop(FINAL, None)  # a pass that a lens changed the slot in asks nothing
 
     def call(role: str) -> None:
+        entries = driver_agents.lens_entries(run.models, role)
         try:
-            reports[role] = run.agent(role, FINAL, ".", values[role], entry=driver_agents.lens_entry(run.models, role),
+            reports[role] = run.agent(role, FINAL, ".", values[role], entry=entries[0], entries=entries,
                                       template="final-lens", alone=lambda: len(running) == 1)
-        except Stopped as stopped:
-            errors[role] = str(stopped)
-        except Blocked as blocked:  # the driver rejected its report two times
+        except Blocked as blocked:  # it stopped or was rejected two times
             errors[role] = f"the {role}: {blocked}"
         except Halted as failed:
             halted.append(failed)
@@ -486,11 +441,11 @@ def _run_lenses(run: Run, values: dict[str, dict[str, str]],
     return reports, [errors[role] for role in driver_agents.LENSES if role in errors]
 
 
-def _merged(reviewed: list[dict], driver: list[dict]) -> list[dict]:
-    """The `reviewed` findings, then the `driver` ones, with each (file, line, title) once: the more severe finding
-    stays, a tie keeps the earlier one, so the driver's loses a tie with a reviewer's."""
+def _merged(reviewed: list[dict]) -> list[dict]:
+    """The `reviewed` findings with each (file, line, title) once: the more severe finding stays, a tie keeps the
+    earlier one."""
     kept: dict[tuple, dict] = {}
-    for finding in reviewed + driver:
+    for finding in reviewed:
         key = (finding["file"], finding["line"], finding["title"])
         if key not in kept or SEVERITIES.index(finding["severity"]) < SEVERITIES.index(kept[key]["severity"]):
             kept[key] = finding
@@ -535,7 +490,7 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str) -> dict:
     """Run the fixer on the PR branch in slot 1 and return its report. A rejected batch is undone."""
     folder = OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
-              "locked": " ".join(_locked_files(run)),
+              "locked": " ".join(driver_review.others(run.state.read()["tickets"], FINAL)),
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "findings_list": "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in final["open"])}
     try:
@@ -575,10 +530,7 @@ def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
             with during("the gate"):
                 run.gate(FINAL, ".", tip, driver_gate.FULL)
             _review(run, final, tip)
-        elif final["open"]:
-            if final["round"] >= ROUNDS:
-                raise Blocked("the final review still has unresolved must-fix findings: " +
-                              "; ".join(_title(finding) for finding in final["open"]))
+        elif final["open"]:  # after the full review, or after a `retry` of a finding the scoped review left open
             _fix_batch(run, tickets, final, tip)
         else:
             return
@@ -696,14 +648,7 @@ def again(argv: list[str]) -> str:
 
 def _close(run: Run, tickets: list[Ticket]) -> list[str]:
     """The tip is reviewed and its gate is green: push when the run may. Returns the lines for the operator."""
-    record = run.state.read()["run"]
-    answers = [question["answer"] for question in record["questions"] if question["kind"] == KIND]
-    if None in answers:
-        return []  # parked: the driver prints the questions
-    if kept := answers.count("fix"):
-        raise Blocked(f"the operator keeps {kept} finding{'s' if kept > 1 else ''} of the final review open (fix): "
-                      "nothing is pushed")
-    final = record["final"]
+    final = run.state.read()["run"]["final"]
     if run.args.push or run.args.unattended:
         return _push(run, final, tickets)
     if final["base"]:
@@ -731,9 +676,31 @@ def run(run: Run, tickets: list[Ticket]) -> tuple[bool, list[str]]:
             ledger(f"End-of-run work skipped: {reason}.")
         return False, []
     try:
+        if _parked(state):
+            return False, []  # the driver prints the questions
         _rewrite_once(run, tickets)
         _review_until_reviewed(run, tickets)
         return False, _close(run, tickets)
     except Blocked as blocked:
-        ledger(f"End of run: BLOCKED at {blocked}.")
+        _ask(run, ledger(f"End of run: BLOCKED at {blocked}."))
         return True, [f"End of run: BLOCKED at {blocked}"]
+
+
+def _parked(state: dict) -> bool:
+    """True while a question of the last stop of the end of run is open. Raises Blocked when the operator answered
+    `edit`: nothing runs and nothing is pushed until the run starts again."""
+    asked = [question for question in state["run"]["questions"] if question["ticket"] == FINAL]
+    last = max((question["stop"] for question in asked), default=0)
+    answers = [question["answer"] for question in asked if question["stop"] == last]
+    if "edit" in answers:
+        raise Blocked("the operator keeps the end of run BLOCKED for an edit (edit): nothing is pushed")
+    return None in answers
+
+
+def _ask(run: Run, line: int) -> None:
+    """The `final-ticket-blocked` questions of the stop that the ledger line `line` names, when it has any."""
+    ask = run.asks.pop(FINAL, None)
+    if ask:
+        evidence = [ask.report, f"{OUT / 'ledger.md'}:{line}"]
+        run.state.update(lambda state: driver_decisions.stop(state["run"], ask.kind, FINAL, ask.subjects, evidence))
+        ledger(f"End of run: {driver_decisions.decides(ask.kind, len(ask.subjects))} in {OUT / 'decisions.json'}.")

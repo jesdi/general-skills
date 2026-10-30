@@ -5,7 +5,7 @@ context: repo (slot path), branch, start (HEAD when the role started), log, corr
   files of every other ticket whose test-writer has run), own (the test-writer commit of the ticket and its locked
   files, for a role that may not change a locked file), pr (the PR branch ref), fix (the titles of the findings a fixer
   gets), red (the red gate a fix must make green, as `the <tier> gate is red on <sha7>`), disputed (the test ids an
-  arbitration rules on)."""
+  arbitration rules on), rebase_open (the rebase conflict agent left the rebase open with no conflict)."""
 from __future__ import annotations
 
 import json
@@ -181,6 +181,12 @@ def _breach_errors(context: dict) -> list[str]:
             for error in _changed_locked(context, baseline, paths, landed)]
 
 
+def _rebase_errors(context: dict) -> list[str]:
+    """The rebase conflict agent goes on with the rebase it resolved."""
+    return ["the rebase is still open and has no conflict: go on with `git rebase --continue`, then report"
+            ] if context.get("rebase_open") else []
+
+
 def _red_errors(report: dict, context: dict) -> list[str]:
     """Every red line that a test-writer or a correction claims is in the agent's log."""
     lines = [(r["test"], r["line"]) for r in report.get("red", [])]
@@ -255,4 +261,4 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
             + _others_errors(role, report, context) + _breach_errors(context) + _red_errors(report, context)
-            + _dispute_errors(role, report, context) + _ruling_errors(report, context))
+            + _dispute_errors(role, report, context) + _ruling_errors(report, context) + _rebase_errors(context))
