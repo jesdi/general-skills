@@ -604,6 +604,16 @@ def test_a_rebase_resolution_the_agent_never_staged_is_rejected_with_the_git_err
     assert git(rig.repo, "show", "feat/csv:demo/export.py") == "x = 1\n"
 
 
+def test_a_staged_resolution_reported_at_the_stop_is_checked_on_the_tip_the_driver_rebased(tmp_path):
+    rig = Inside(tmp_path, ONE)
+    rig.move_base({"demo/export.py": "def export_csv():\n    return 'base'\n"})
+    staged = {"files": {"demo/export.py": "x = 1\n"}, "git_end": [["add", "-A"]], "report": RESOLVE["report"]}
+    rig.run(plan(**{"final/conflict": [staged]}), *UNATTENDED)
+    assert rig.code == 0, rig.out + "\n".join(rig.ledger())
+    (only,) = rig.led("End of run: conflict ran on")
+    assert only.endswith("report accepted.") and git(rig.repo, "show", "feat/csv:demo/export.py") == "x = 1\n"
+
+
 def test_a_rebase_with_no_commit_to_replay_puts_each_ticket_on_the_fetched_base(tmp_path, monkeypatch):
     rig = Inside(tmp_path, ONE)
     rig.move_base({"docs.md": "base docs\n"})
