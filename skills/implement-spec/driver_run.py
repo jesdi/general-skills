@@ -147,17 +147,19 @@ class Run:
 
     def _final_check(self, role: str) -> dict:
         """The final fixer and the rebase conflict agent change no locked file of any ticket: each stays as the tidied
-        tip has it, or for the rebase that makes that tip, the recovery point. A rebase that stopped again at a later
-        conflict has no tip to check yet; one left open with no conflict is a rejection."""
+        tip has it, or for the rebase that makes that tip, the recovery point. The driver goes on with a rebase that
+        the agent left open, so the check reads the rebased tip; one that stopped again at a later conflict has no
+        tip to check, and the driver aborts it."""
         if role not in ("fixer", "conflict"):
             return {}
         if role == "conflict" and driver_merge.rebase_is_open():
-            return {"rebase_open": not driver_merge.files_in_conflict()}
+            driver_merge.go_on()
+            if driver_merge.rebase_is_open():
+                return {}
         baseline = (self.state.read()["run"]["final"]["tidied"] if role == "fixer" else
                     git(".", "rev-parse", self.names.recovery).stdout.strip())
         locked = driver_review.others(self.state.read()["tickets"], FINAL)
-        # The context of the rerun is that of the first attempt with this on top.
-        return {"own": (baseline, locked), "others": [], "pr": baseline, "rebase_open": False}
+        return {"own": (baseline, locked), "others": [], "pr": baseline}
 
     def read_only(self, number: str, slot: str, branch: str, tip: str, review: Callable[[], T]) -> T:
         """Run `review` (read-only agents) and return its result. A review that changes the slot runs once more."""

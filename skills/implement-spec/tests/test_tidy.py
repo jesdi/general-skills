@@ -570,7 +570,8 @@ def weak(nn="01"):
 def test_a_rebase_resolution_that_changes_a_locked_test_is_rejected_and_the_conflict_agent_runs_again(tmp_path):
     rig = Inside(tmp_path, ONE)
     rig.move_base({"demo/export.py": "def export_csv():\n    return 'base'\n"})
-    weakens = {**RESOLVE, "files": {"demo/export.py": "x = 1\n", **weak()}}
+    # The agent does not go on with the rebase: the driver does, then checks the rebased tip.
+    weakens = {"commit": "resolve conflict", "files": {"demo/export.py": "x = 1\n", **weak()}, "report": RESOLVE["report"]}
     puts_back = {"files": tw("01")["files"], "git_end": [["commit", "-q", "-a", "--amend", "--no-edit"]],
                  "report": RESOLVE["report"]}
     rig.run(plan(**{"final/conflict": [weakens, puts_back]}), *UNATTENDED)
@@ -581,14 +582,14 @@ def test_a_rebase_resolution_that_changes_a_locked_test_is_rejected_and_the_conf
     assert git(rig.repo, "show", "feat/csv:demo/export.py") == "x = 1\n"
 
 
-def test_a_rebase_left_open_with_no_conflict_is_rejected_until_the_agent_goes_on(tmp_path):
+def test_a_rebase_the_agent_left_open_with_no_conflict_is_continued_by_the_driver(tmp_path):
     rig = Inside(tmp_path, ONE)
     rig.move_base({"demo/export.py": "def export_csv():\n    return 'base'\n"})
-    staged = {"files": {"demo/export.py": "x = 1\n"}, "git_end": [["add", "-A"]], "report": RESOLVE["report"]}
-    rig.run(plan(**{"final/conflict": [staged, {**RESOLVE, "files": {"demo/export.py": "x = 1\n"}}]}), *UNATTENDED)
+    committed = {"commit": "resolve conflict", "files": {"demo/export.py": "x = 1\n"}, "report": RESOLVE["report"]}
+    rig.run(plan(**{"final/conflict": [committed]}), *UNATTENDED)
     assert rig.code == 0, rig.out
-    first, second = rig.led("End of run: conflict ran on")
-    assert "the rebase is still open" in first and second.endswith("report accepted.")
+    (only,) = rig.led("End of run: conflict ran on")
+    assert only.endswith("report accepted.") and git(rig.repo, "show", "feat/csv:demo/export.py") == "x = 1\n"
 
 
 def test_a_rebase_with_no_commit_to_replay_puts_each_ticket_on_the_fetched_base(tmp_path, monkeypatch):

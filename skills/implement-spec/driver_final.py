@@ -190,8 +190,8 @@ def _keep_published_history(run: Run, tip: str, base: str, onto: str) -> None:
 
 
 def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
-    """Run the conflict agent on the open rebase; its report is rejected while it changes a locked file or leaves the
-    rebase open with no conflict. Returns "" or why it blocked."""
+    """Run the conflict agent on the open rebase; the driver goes on with the rebase after it, and its report is
+    rejected while the rebased tip changes a locked file. Returns "" or why it blocked."""
     try:
         run.agent("conflict", FINAL, ".", values, template="rebase-conflict", detached=True)
     except Blocked as blocked:
