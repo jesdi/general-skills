@@ -169,16 +169,13 @@ and do not know about the run, except `driver_run.py`, which the three deciding 
   report) asks a `locked-test-again` question. `correct-again` and `accept` send the ticket back to `review`, and
   `driver_decisions.corrections` reads the answers from `state.json`: the count of `correct-again` stops bounds the
   extra corrections (`AGAIN`), and an `accept` stop closes the ticket's locked-test findings in `_act_on`.
-- A reviewer that reports BLOCKED or NEEDS_CONTEXT raises `driver_run.Stopped`, which carries the report.
-  `driver_fixloop._run_reviewer` turns it into a `review-stopped` question, or, after an `accept` ruling on the
-  reviewer (`driver_decisions.accepted`), uses the report as it is.
-- A reviewer whose report the driver rejects two times asks a `review-rejected` question. The stop records the
-  rejection in the ticket's `rejected` (why, as a string); after `retry`, the reviewer's first prompt carries it
-  (`prompts/rejected.md`), and the next review that ends clears it. `driver_state.State.start` reads the role -> why
-  record of an older driver as its reviewer entry, "" when it has none; a ruling of a removed role is never read.
-- An implementer or a fixer that reports BLOCKED or NEEDS_CONTEXT asks a question in `Run._ask_stop`: `locked-test`
-  for a contradicted locked test, else `implementer-stopped` or `fixer-stopped`. The stop of a fixer sets the round
-  back by one, so its `retry` (gate and review the tip, then a fixer) runs the same round again.
+- `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a contradicted locked test) of a ticket agent
+  as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
+  is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a
+  `ticket-blocked` question (`_ask_blocked`); its `retry` sets the phase the question holds in `resume`, and the stop
+  of a fixer sets the round back by one, so the same round runs again after a review. The end of run keeps the
+  same-entry rerun, and its stops raise `driver_run.Stopped`, which carries the report.
+- An implementer or a fixer that says a locked test contradicts the spec asks `locked-test` in `Run._ask_stop`.
 - An implementer or a fixer with nothing to change reports DONE with no commit (`driver_report._unchanged_errors`):
   the branch did not move, the tree is clean, and a concern says why. The driver gates and reviews that tip as it
   would a new one.

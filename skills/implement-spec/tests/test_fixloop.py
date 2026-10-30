@@ -62,9 +62,10 @@ def under(tmp_path, name):
     return tmp_path / name
 
 
-def blocked(rig, nn="01"):
+def blocked(rig, nn="01", code=1):
+    """The one BLOCKED line of the ticket; `code` 2: a rerun that was rejected too asked `ticket-blocked`."""
     (line,) = rig.led(nn, "BLOCKED")
-    assert rig.code == 1 and rig.state()["tickets"][nn]["phase"] == "blocked"
+    assert rig.code == code and rig.state()["tickets"][nn]["phase"] == "blocked"
     return line
 
 
@@ -420,9 +421,9 @@ def test_the_test_writer_of_a_later_ticket_may_extend_the_locked_file_of_a_merge
     unlisted = Inside(under(tmp_path, "unlisted"), three()).run(plan(**{"02/test-writer": [extends(more, False)] * 2}))
     error = ("tests/test_01.py is a locked file of a merged ticket, and `locked` does not list it: list it in "
              "`locked`, or leave the file as it was")
-    assert blocked(unlisted, "02") == f"Ticket 02: BLOCKED at the test-writer: {error}."
+    assert blocked(unlisted, "02", 2) == f"Ticket 02: BLOCKED at the test-writer: {error}."
     first, second = unlisted.calls("02", "test-writer")
-    assert f"The driver rejected the earlier attempt: {error}" in second["prompt"]
+    assert f"The earlier attempt did not finish the role: {error}" in second["prompt"]
     assert not unlisted.calls("02", "implementer") and on_pr(unlisted, "tests/test_01.py") == LOCKED_01
 
 
@@ -584,9 +585,9 @@ def test_a_locked_path_with_whitespace_is_rejected_once_and_then_blocks(tmp_path
     rig = Inside(tmp_path).run(plan(**{"01/test-writer": [spaced, spaced]}))
     error = ("locked path 'tests/test 01.py' contains whitespace: the fast gate gets the locked paths separated by "
              "spaces, so rename the file")
-    assert blocked(rig) == f"Ticket 01: BLOCKED at the test-writer: {error}."
+    assert blocked(rig, code=2) == f"Ticket 01: BLOCKED at the test-writer: {error}."
     first, second = rig.calls("01", "test-writer")
-    assert f"The driver rejected the earlier attempt: {error}" in second["prompt"]
+    assert f"The earlier attempt did not finish the role: {error}" in second["prompt"]
     assert not rig.calls("01", "implementer")
 
 
@@ -635,7 +636,7 @@ def test_a_locked_file_with_a_name_that_git_quotes_is_protected_at_review_for_it
     own = impl("01", files={"demo/export.py": "def fn_01():\n    return '01'\n", ACCENT: WEAK})
     rig = accented(tmp_path, "review", **{"01/implementer": [own], "01/fixer": [{}, {}]})
     assert rig.led(f"Ticket 01: critical finding of kind code from the driver at {ACCENT}:1: locked file changed: {ACCENT}."), rig.ledger()
-    assert "BLOCKED at fix round 1" in blocked(rig)
+    assert "BLOCKED at fix round 1" in blocked(rig, code=2)
     later = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", ACCENT: WEAK})
     rig = accented(tmp_path, "landing", **{"02/implementer": [later]})
     assert rig.state()["tickets"]["01"]["locked"] == ["tests/test_01.py", ACCENT], rig.ledger()
@@ -954,12 +955,13 @@ def test_the_escalation_takes_the_next_entry_of_the_list():
     assert [driver_fixloop.entry(models, n) for n in (1, 2)] == ["a@low", "openai/b@low"]
 
 
-def test_a_fixer_that_does_not_finish_blocks_the_ticket_in_its_round(tmp_path):
-    """A fixer that reports BLOCKED asks a `fixer-stopped` question: test_decisions covers it."""
+def test_a_fixer_that_does_not_finish_blocks_the_ticket_with_its_round_to_run_again(tmp_path):
     rig = Inside(tmp_path).run(plan(**{"01/reviewer": [review("01", [STUCK])], "01/fixer": [{}, {}]}))
     entry = rig.state()["tickets"]["01"]
-    error = "BLOCKED at fix round 1: report .agent/implement/01/fixer-1.json is not"
-    assert error in blocked(rig) and entry["round"] == 1 and entry["tip"] == rig.sha("01", "implementer")
+    assert rig.code == 2 and entry["phase"] == "blocked", rig.ledger()
+    assert rig.led("BLOCKED at fix round 1: report .agent/implement/01/fixer-1.json is not")
+    assert [q["id"] for q in rig.state()["run"]["questions"]] == ["01-ticket-blocked-1"]
+    assert entry["round"] == 0 and entry["tip"] == rig.sha("01", "implementer")
 
 
 # ---------------------------------------------------------------- the reviewers' reports and the slot
@@ -1260,7 +1262,8 @@ def test_a_conflict_resolution_that_changes_a_locked_file_of_a_merged_ticket_doe
 def test_a_conflict_agent_that_gives_up_leaves_no_open_merge_in_the_slot(tmp_path):
     stuck = {"status": "BLOCKED", "commits": [], "files": [], "concerns": ["both sides are needed"]}
     rig = conflict(tmp_path, {"files": {"demo/cli.py": "half\n"}, "report": stuck})
-    assert "BLOCKED at the merge: the conflict agent: the conflict reported BLOCKED: both sides are needed." in blocked(rig)
+    assert rig.code == 2 and rig.led("Ticket 01: BLOCKED at the merge: the conflict agent: it reported BLOCKED: both sides are needed.")
+    assert len(rig.calls("01", "conflict")) == 2
     git = lambda *args: subprocess.run(["git", "-C", str(rig.repo), *args], capture_output=True, text=True)
     assert git("status", "--porcelain").stdout == "" and git("rev-parse", "-q", "--verify", "MERGE_HEAD").returncode
     assert git("symbolic-ref", "--short", "HEAD").stdout.strip() == "feat/csv"  # slot 1 is free again
@@ -1283,78 +1286,6 @@ def test_no_template_names_the_ledger_and_the_method_of_step_6_is_in_the_reviewe
         assert ("ledger" in path.read_text().lower()) == (path.name in final), path.name
     reviewer = (driver_report.PROMPTS / "reviewer.md").read_text()
     assert "Test each suspicion that the ticket names in its Suspicions line." in reviewer
-
-
-STOPPED = "02-review-stopped-1"
-
-
-def stuck(status="NEEDS_CONTEXT"):
-    """A review step whose report stops: BLOCKED or NEEDS_CONTEXT, with no finding."""
-    step = review("02")
-    step["report"] = {**step["report"], "status": status, "concerns": ["the checks file is absent"]}
-    return step
-
-
-def risky(tmp_path):
-    return Inside(tmp_path, RISKY)
-
-
-def test_a_review_that_reports_needs_context_asks_the_operator_and_retry_resumes_it(tmp_path):
-    """Issue #120: a stopped reviewer was a dead end with no question."""
-    steps = plan(**{"02/reviewer": [stuck()]})
-    rig = risky(tmp_path)
-    rig.run(steps)
-    assert rig.code == 2 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
-    assert rig.led("BLOCKED at the review: the reviewer: the reviewer reported NEEDS_CONTEXT: the checks file is absent.")
-    (question,) = rig.state()["run"]["questions"]
-    assert (question["id"], question["recommended"]) == (STOPPED, "retry")
-    assert [o["id"] for o in question["options"]] == ["retry", "accept", "redesign"]
-    assert question["evidence"][0] == ".agent/implement/02/reviewer-0.json"
-    assert "correctness" not in json.dumps(question)
-    rig.run(steps, "--answer", f"{STOPPED}=retry")
-    assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
-    assert len(rig.calls("02", "reviewer")) == 2
-    assert rig.led("Ruling: 02 review runs again (retry): the reviewer reported NEEDS_CONTEXT")
-
-
-def test_an_accepted_review_stop_lets_the_review_go_on_with_the_report(tmp_path):
-    steps = plan(**{"02/reviewer": [stuck("BLOCKED")] * 2})
-    rig = risky(tmp_path)
-    rig.run(steps)
-    assert rig.code == 2, rig.ledger()
-    rig.run(steps, "--answer", f"{STOPPED}=accept")
-    assert rig.code == 0 and rig.state()["tickets"]["02"]["phase"] == "merged", rig.ledger()
-    assert len(rig.calls("02", "reviewer")) == 2
-    assert rig.led("the reviewer reported BLOCKED: the checks file is absent", "goes on with its report")
-
-
-def test_a_review_stop_answered_redesign_keeps_the_ticket_blocked(tmp_path):
-    steps = plan(**{"02/reviewer": [stuck()]})
-    rig = risky(tmp_path)
-    rig.run(steps)
-    assert rig.code == 2, rig.ledger()
-    rig.run(steps, "--answer", f"{STOPPED}=redesign")
-    assert rig.code == 1 and rig.state()["tickets"]["02"]["phase"] == "blocked", rig.ledger()
-    assert len(rig.calls("02", "reviewer")) == 1
-
-
-def test_a_resumed_review_whose_older_records_name_the_correctness_pass_runs_the_reviewer_alone(tmp_path):
-    """An older driver stopped on its correctness pass: the accepted ruling and the rejection record name it."""
-    steps = plan(**{"02/reviewer": [stuck()] * 2})
-    rig = risky(tmp_path)
-    rig.run(steps)
-    assert rig.code == 2, rig.ledger()
-    path = rig.repo / ".agent/implement/state.json"
-    state = json.loads(path.read_text())
-    (question,) = state["run"]["questions"]
-    question["subject"] = "the correctness reported BLOCKED: the checks file is absent"
-    state["tickets"]["02"]["rejected"] = {"correctness": "no mutation proof"}
-    path.write_text(json.dumps(state))
-    rig.run(steps, "--answer", f"{STOPPED}=accept")
-    # The ruling on the correctness pass does not cover the reviewer, whose stop asks again.
-    assert rig.code == 2 and [q["id"] for q in rig.state()["run"]["questions"]] == [STOPPED, "02-review-stopped-2"]
-    second = rig.calls("02", "reviewer")[1]["prompt"]
-    assert "no mutation proof" not in second and "correctness" not in second
 
 
 def test_git_identity_is_not_needed_to_open_the_merge_for_the_conflict_agent(tmp_path):
