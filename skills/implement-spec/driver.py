@@ -24,6 +24,7 @@ from pathlib import Path
 import driver_agents
 import driver_answers
 import driver_decisions
+import driver_dispute
 import driver_final
 import driver_fixloop
 import driver_gate
@@ -74,24 +75,6 @@ def _check_out_ticket(ticket: Ticket, slot_number: int, entry: dict, run: Run) -
     return driver_slots.head(slot)
 
 
-def _locked_test_stop(number: str, run: Run) -> dict:
-    """The last `locked-test` question of the ticket; {} when it has none."""
-    asked = [q for q in run.state.read()["run"]["questions"] if (q["ticket"], q["kind"]) == (number, "locked-test")]
-    return asked[-1] if asked else {}
-
-
-def _blocked_report(number: str, run: Run) -> str:
-    """The report of the last `locked-test` stop of the ticket: an implementer's or a fixer's."""
-    return _locked_test_stop(number, run).get("evidence", [str(OUT / number / "implementer-0.json")])[0]
-
-
-def _overruled(number: str, run: Run) -> list[str]:
-    """The concerns of that report that the operator overruled: what an overrule correction names in
-    `not_addressed` (issue #134)."""
-    concerns = json.loads(Path(_blocked_report(number, run)).read_text())["concerns"]
-    return [concern for concern in concerns if concern.startswith(driver_decisions.CONTRADICTS)]
-
-
 def _risk(ticket: Ticket) -> str:
     """The reviewer's line on the Risk line of the ticket: one more criterion to check."""
     if not ticket.risk:
@@ -107,7 +90,6 @@ def _prompt_values(ticket: Ticket, slot: str, run: Run) -> dict[str, str]:
             "branch": run.names.ticket(ticket.number),
             "ticket": os.path.relpath(Path(run.args.tickets) / ticket.file, slot),
             "risk": _risk(ticket), "gate": run.args.fast_gate,
-            "blocked_report": os.path.relpath(_blocked_report(ticket.number, run), slot),
             "writer_report": os.path.relpath(folder / "test-writer-0.json", slot)}
 
 
@@ -122,13 +104,14 @@ def _first_notes(number: str, slot_number: int, entry: dict, run: Run, roles: li
     return []
 
 
-def _role_check(role: str, number: str, entry: dict, run: Run, values: dict) -> dict:
+def _role_check(role: str, number: str, entry: dict, run: Run, values: dict, slot: str) -> dict:
     """The check of the report of `role`. A test-writer on a ticket that has locked tests is the correction after a
-    ruling: it gets the overruled concerns."""
-    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"])}
+    `correct-test` answer: it gets the findings of that question."""
+    path = driver_dispute.correction(run.state.read()["run"]["questions"], number)
+    check = {"correction": role == "test-writer" and bool(entry["test_writer_sha"] and path)}
     if check["correction"]:
-        check["findings"] = _overruled(number, run)
-        values["overruled"] = "".join(f"- {concern}\n" for concern in check["findings"])
+        check["findings"] = [finding["title"] for finding in json.loads(Path(path).read_text())]
+        values["findings"] = os.path.relpath(path, slot)
     return check
 
 
@@ -145,16 +128,9 @@ def _run_roles(ticket: Ticket, slot_number: int, run: Run) -> None:
         run.state.ticket(number, phase=DURING.get(role, "review"))
         values.update(start_sha=start, gate_record=os.path.relpath(driver_gate.record_path(OUT / number, driver_gate.FAST, start),
                                                                  slot))
-        check = _role_check(role, number, entry, run, values)
+        check = _role_check(role, number, entry, run, values, slot)
         with during(f"the {role}"):
-            try:
-                report = run.agent(role, number, slot, values, notes=notes, check=check)
-            except Blocked:
-                if check["correction"]:
-                    # The ruling did not take: the operator rules on the same locked test again (issue #134).
-                    run.ask(number, "locked-test", [_locked_test_stop(number, run)["subject"]],
-                            _blocked_report(number, run))
-                raise
+            report = driver_dispute.agent(run, role, number, slot, values, notes=notes, check=check)
         for item in report.get("not_addressed", []):
             ledger(f"Ticket {number}: the test-writer correction did not correct {item['finding']}: {item['reason']}.")
         facts = {"tip": driver_slots.head(slot)}
