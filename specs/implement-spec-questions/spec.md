@@ -73,10 +73,14 @@ questions it is the ticket `final`.
     file the test-writer changed and judges it against the spec: a change the spec does not
     support is a `fixture` finding.
 11. Gone: the locked-file findings before each review, the merged-ticket findings before each
-    review, the landing tree comparison, `restore` and `adopt`, the restore commits before a
+    review, `merged-locked-file` with `restore` and `adopt`, the restore commits before a
     correction and their gate, the `held` references, restored files in
     `IMPLEMENT_SPEC_LOCKED`, and the final review's driver locked-file findings. A finding
-    names its lens `spec`, `correctness` or `structure`.
+    names its lens `spec`, `correctness` or `structure`. At landing, under the merge lock, the
+    driver runs the check of requirement 9 on the commit about to land against every other
+    ticket's locked files as the PR tip has them: a changed file blocks the ticket with one
+    `ticket-blocked` question naming it, and the PR branch does not move. A ticket's earlier
+    edit of a file that another ticket locked later cannot land unseen.
 12. When a finding is still open after the second round of the final review, the end of run
     raises one `final-ticket-blocked-<n>` question per finding. `retry` runs one more fix
     batch and scoped review on the open findings; `edit` keeps the end of run blocked.
@@ -257,7 +261,7 @@ questions it is the ticket `final`.
   changes it and lists it in `locked`
 - **When** ticket 02 is reviewed
 - **Then** the reviewer's prompt holds the diff of `tests/test_ledger.py`, no question is
-  asked, and at landing the driver compares no locked file
+  asked, and the landing check passes because the ticket lists the file
 
 ### Scenario: the test-writer must list a merged locked file it changes
 
@@ -266,6 +270,14 @@ questions it is the ticket `final`.
 - **When** it reports
 - **Then** the report is rejected naming the file, and the test-writer runs again on its second
   entry
+
+### Scenario: landing refuses a change to a file another ticket locked later
+
+- **Given** ticket 01's implementer changed `tests/test_ledger.py` before any ticket locked it,
+  then ticket 02's test-writer locked it and ticket 02 merged
+- **When** ticket 01 lands
+- **Then** the PR branch does not move, and ticket 01 is blocked with one `ticket-blocked`
+  question naming `tests/test_ledger.py`
 
 ### Scenario: no restore before a correction
 
