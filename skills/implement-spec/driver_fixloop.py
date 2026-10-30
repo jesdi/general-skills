@@ -13,7 +13,7 @@ import driver_dispute
 import driver_gate
 import driver_review
 import driver_slots
-from driver_run import OUT, Blocked, Run, during, ledger
+from driver_run import OUT, Blocked, Call, Run, during, ledger
 from driver_tickets import Ticket
 
 ROUNDS = 2
@@ -67,7 +67,7 @@ def _run_reviewer(job: Job) -> dict:
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
     notes += ["elsewhere"] * bool(values["elsewhere"])
     with during("the reviewer"):
-        return run.agent("reviewer", number, job.slot, values, fix_round=job.round, notes=notes)
+        return run.agent(Call("reviewer", number, job.slot, values, fix_round=job.round, notes=notes))
 
 
 def _prior_open(job: Job) -> dict[tuple[str, str], str | None]:
@@ -138,9 +138,9 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
         with during("the review"):
             driver_dispute.ambiguous(run, number, again, "review", {})
     with during("the test-writer correction"):
-        report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
-                           fix_round=job.round + 1, retry="reviewer",
-                           check={"correction": True, "findings": [finding["title"] for finding in findings]})
+        report = run.agent(Call("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
+                                fix_round=job.round + 1, retry="reviewer",
+                                check={"correction": True, "findings": [finding["title"] for finding in findings]}))
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
     code = _uncorrected(job, findings, report.get("not_addressed", []))
@@ -195,9 +195,10 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
         notes = ["landing-red"] + ["landing-merge"] * (landing != job.tip)
     baseline = run.state.read()["tickets"][number]["test_writer_sha"]
     with during(f"fix round {job.round}"):
-        driver_dispute.agent(run, "fixer", number, job.slot, values, entry=on, entries=run.models["implementer"],
-                             fix_round=job.round, notes=notes,
-                             check={"fix": [finding["title"] for finding in findings], "red": _red(job, landing)})
+        driver_dispute.agent(run, Call("fixer", number, job.slot, values, entry=on, entries=run.models["implementer"],
+                                       fix_round=job.round, notes=notes,
+                                       check={"fix": [finding["title"] for finding in findings],
+                                              "red": _red(job, landing)}))
     before, job.tip = job.tip, driver_slots.head(job.slot)
     corrected = run.state.ticket(number, tip=job.tip, landing=None)["test_writer_sha"] != baseline
     # No review saw a red `before`, so the next review covers the fix before it too. No review has seen a test-writer
