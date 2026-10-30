@@ -42,7 +42,7 @@ def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
     assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["landing"] is None
     assert again["tickets"]["02"] == {
         "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": {"fast": [], "full": []}, "slot": None,
-        "note": "", "held": {}, "landing": None}
+        "note": "", "landing": None}
 
 
 def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_path):

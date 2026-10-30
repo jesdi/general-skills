@@ -11,7 +11,6 @@ from dataclasses import dataclass
 
 import driver_decisions
 import driver_gate
-import driver_merge
 import driver_review
 import driver_slots
 from driver_run import OUT, Blocked, Run, during, ledger
@@ -57,14 +56,18 @@ def _log_findings(number: str, findings: list[dict]) -> list[dict]:
 
 
 def _run_reviewer(job: Job) -> dict:
-    """Run the reviewer in the slot. Returns its report."""
-    number = job.ticket.number
+    """Run the reviewer in the slot. Returns its report. It gets the diff of each locked file of another ticket that
+    the ticket changed: only its test-writer may, and the reviewer judges that change against the spec."""
+    run, number = job.run, job.ticket.number
     values = job.pointers(job.round - 1)
     values["fixer_report"] = os.path.relpath(OUT / number / f"fixer-{job.round}.json", job.slot)
+    values["elsewhere"] = driver_review.changed_elsewhere(
+        job.slot, run.tip(), driver_review.others(run.state.read()["tickets"], number))
     notes = ["rereview"] * bool(job.previous)
     notes += ["unchanged"] * (job.previous == job.tip)  # a fixer with no commit: its reasons need a check
+    notes += ["elsewhere"] * bool(values["elsewhere"])
     with during("the reviewer"):
-        return job.run.agent("reviewer", number, job.slot, values, fix_round=job.round, notes=notes)
+        return run.agent("reviewer", number, job.slot, values, fix_round=job.round, notes=notes)
 
 
 def _prior_open(job: Job) -> dict[tuple[str, str], str | None]:
@@ -111,14 +114,12 @@ def _store_observations(job: Job, observations: list[dict]) -> None:
 
 
 def _review(job: Job) -> list[dict]:
-    """Review `job.tip`. Returns the findings of the driver and of the reviewer."""
+    """Review `job.tip`. Returns the reviewer's findings."""
     run, number = job.run, job.ticket.number
-    state = run.state.ticket(number, phase="review")
-    merged = driver_merge.changed(job.slot, run.tip(), driver_merge.protected(run.state.read()["tickets"], number))
-    found = _log_findings(number, driver_review.locked_findings(job.slot, state) + driver_review.merged_changes(merged))
+    run.state.ticket(number, phase="review")
     report = run.read_only(number, job.slot, job.values["branch"], job.tip, lambda: _run_reviewer(job))
     reviewed, observations = _reviewer_results(job, report)
-    found += _log_findings(number, reviewed)
+    found = _log_findings(number, reviewed)
     _store_observations(job, observations)
     (OUT / number / f"findings-{job.round}.json").write_text(json.dumps(found, indent=1) + "\n")
     return found
@@ -132,31 +133,16 @@ def _correct(job: Job, findings: list[dict]) -> list[dict]:
     if job.corrected:
         run.ask(number, "locked-test-again", titles, evidence)
         raise Blocked(f"the review: a locked-test finding is open after the test-writer correction: {'; '.join(titles)}")
-    restored = run.restore_locked_files(number, job.slot)
-    job.tip = driver_slots.head(job.slot)  # the restore is a commit of the driver
-    # The gate was green on the tip before the restore, so a red gate here is a restored file that fails with the
-    # ticket's code. The driver decides that, not the correction (issue #90).
-    with during("the gate of the restore"):
-        record = run.red_gate(number, job.slot, job.tip, driver_gate.FAST, restored) if restored else ""
-    if not record and all(finding["source"] == "driver" for finding in findings):
-        job.previous = ""  # no review has seen the restore commit
-        ledger(f"Ticket {number}: the code does not need the change to {', '.join(restored)}: the restore closes it, "
-               "with no correction.")
-        return []
-    values = {**job.pointers(job.round), "restored": " ".join(restored),
-              "record": record and os.path.relpath(record, job.slot)}
-    notes = ["correction"] + ["restored"] * bool(restored) + ["restored-red"] * bool(record)
     with during("the test-writer correction"):
         try:
-            report = run.agent("test-writer", number, job.slot, values, notes=notes, fix_round=job.round + 1,
-                               check={"correction": True, "restored": restored, "restore_red": bool(record),
-                                      "findings": titles})
+            report = run.agent("test-writer", number, job.slot, job.pointers(job.round), notes=["correction"],
+                               fix_round=job.round + 1, check={"correction": True, "findings": titles})
         except Blocked:
             run.ask(number, "locked-test-again", titles, evidence)  # a rejected correction is one that did not close
             raise
     job.tip, job.previous, job.corrected = driver_slots.head(job.slot), "", True
     entry = run.state.read()["tickets"][number]
-    run.state.ticket(number, tip=job.tip, **driver_review.written(job.slot, entry, report["locked"], job.tip))
+    run.state.ticket(number, tip=job.tip, **driver_review.written(entry, report["locked"], job.tip))
     return _uncorrected(job, findings, report.get("not_addressed", []))
 
 
@@ -215,16 +201,15 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
 
 
 def _unaccepted(job: Job, state: dict, to_correct: list[dict]) -> list[dict]:
-    """The findings for a correction once an `accept` ruling closed the ticket's locked-test findings: only the
-    driver's, since a changed locked file is still restored. With no such ruling, `to_correct`."""
+    """The findings for a correction: none once an `accept` ruling closed the ticket's locked-test findings, else
+    `to_correct`."""
     number = job.ticket.number
     if not driver_decisions.corrections(state["run"]["questions"], number)[1]:
         return to_correct
     for finding in to_correct:
-        if finding["source"] != "driver":
-            ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
-                   f"(accept), with no correction: {finding['title']}.")
-    return [finding for finding in to_correct if finding["source"] == "driver"]
+        ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
+               f"(accept), with no correction: {finding['title']}.")
+    return []
 
 
 def _save_must_fix(state: dict, number: str, findings: list[dict]) -> None:
@@ -238,40 +223,35 @@ def _save_must_fix(state: dict, number: str, findings: list[dict]) -> None:
             existing.add(key)
 
 
-def _settled_at_landing(finding: dict) -> bool:
-    """The landing has its own restore/adopt question for a merged ticket's locked file."""
-    return (finding["source"] == "driver" and
-            finding["title"].startswith("the ticket changed the locked file of a merged ticket:"))
-
-
 def _at_cap(job: Job, findings: list[dict]) -> bool:
     """Block unmet criteria; carry other open findings to the required final fix batch."""
     blocking = [finding for finding in findings if finding.get("basis") != "regression"]
     if blocking:
         titles = [f"{finding['title']} ({finding['file']}:{finding['line']})" for finding in blocking]
         raise Blocked(f"the review: after round {ROUNDS} these findings are open: {'; '.join(titles)}")
-    # A changed locked file of a merged ticket is settled by the landing's restore/adopt ruling.
-    # The final fixer cannot edit that file while it remains protected.
-    carry = [finding for finding in findings if not _settled_at_landing(finding)]
-    if carry:
-        job.run.state.update(lambda state: _save_must_fix(state, job.ticket.number, carry))
+    job.run.state.update(lambda state: _save_must_fix(state, job.ticket.number, findings))
     ledger(f"Ticket {job.ticket.number}: the green gate and met criteria allow merge after round {ROUNDS}; "
-           f"{len(carry)} finding{'s' if len(carry) != 1 else ''} go to the final must-fix list.")
+           f"{len(findings)} finding{'s' if len(findings) != 1 else ''} go to the final must-fix list.")
     return True
+
+
+def _routed(job: Job, found: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(the findings for a correction, those for a fix round). A locked file of another ticket is protected."""
+    state = job.run.state.read()
+    locked = state["tickets"][job.ticket.number]["locked"]
+    protected = [path for path in driver_review.others(state["tickets"], job.ticket.number) if path not in locked]
+    to_correct, to_fix = driver_review.route(found, locked, protected)
+    to_correct = _unaccepted(job, state, to_correct)
+    if job.round == ROUNDS:
+        # No correction at the cap: no fix round could make its new locked tests green.
+        return [], [finding for finding in found if finding in to_correct + to_fix]
+    return to_correct, to_fix
 
 
 def _act_on(job: Job, found: list[dict]) -> bool:
     """Do what the findings of a review ask for: a correction, a fix round, or a stop. True: none is open."""
-    state = job.run.state.read()
-    to_correct, to_fix = driver_review.route(found, state["tickets"][job.ticket.number]["locked"],
-                                             driver_merge.protected(state["tickets"], job.ticket.number))
-    to_correct = _unaccepted(job, state, to_correct)
-    if job.round == ROUNDS:
-        # No correction at the cap: no fix round could make its new locked tests green.
-        to_correct, to_fix = [], [finding for finding in found if finding in to_correct + to_fix]
-    # A changed locked file is fixed first: a correction on top of it would make the changed file the reference.
-    locked_file_changed = any(finding["source"] == "driver" for finding in to_fix)
-    if to_correct and not locked_file_changed:
+    to_correct, to_fix = _routed(job, found)
+    if to_correct:
         to_fix += [finding for finding in _correct(job, to_correct) if finding["severity"] in driver_review.OPEN]
         if not to_fix:
             return False

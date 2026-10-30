@@ -883,26 +883,6 @@ def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(r
     assert "| fast gates run | 2 |" in out and "| full gates run | 2 |" in out
 
 
-def test_the_landing_check_runs_while_the_ticket_holds_the_merge_lock(repo, tmp_path, capsys, monkeypatch):
-    """Review round 1, m2: the check and the ref move are one step only under the lock that makes merges serial."""
-    two(repo)
-    runs, held, check = [], [], driver.driver_merge.refused
-
-    class Seen(driver.Run):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            runs.append(self)
-
-    def refused(*args):
-        held.append(runs[0].merging.locked())
-        return check(*args)
-
-    monkeypatch.setattr(driver, "Run", Seen)
-    monkeypatch.setattr(driver.driver_merge, "refused", refused)
-    code, _, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
-    assert code == 0 and held == [True, True], out
-
-
 # Fix round 1 of ticket 03.
 
 def test_a_merge_commit_the_slot_cannot_check_out_is_not_gated_and_does_not_land(repo, tmp_path, capsys):

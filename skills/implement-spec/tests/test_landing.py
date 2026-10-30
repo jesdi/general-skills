@@ -1,23 +1,16 @@
-"""Ticket 09 acceptance tests: locked tests are checked on the merge result; one driver per PR branch.
+"""Ticket 09 acceptance tests: the locked files of merged tickets on a ticket branch; one driver per PR branch.
 
-All through `sh run.sh --runner <script> --parallel 2` on the three-ticket fixture repository (the rigs of test_review
-and test_final), and through two worktrees of one fixture repository, on two PR branches, for the run lock. Tickets are ordered with signal
-files and with `wait_pr_moves`, never with a sleep.
+All through `sh run.sh --runner <script> --parallel 2` on the three-ticket fixture repository (the rig of test_review),
+and through two worktrees of one fixture repository, on two PR branches, for the run lock. Tickets are ordered with
+signal files and with `wait_pr_moves`, never with a sleep.
 
-Interface choices (ticket 09):
-- a ticket that "does not land" ends the run with phase `blocked`; one ledger sentence names the ticket and
-  `locked file changed: <path>`, and a `merged-locked-file` question (exit 2) names the path (issue #116); no commit of
-  the ticket is on the PR branch. Whether a fix round ran before is free:
-  each plan gives that ticket fixers that write no report.
+Interface choices:
+- a ticket agent whose commits change a locked file of a merged ticket is rejected naming the file; its rerun does the
+  same, so the ticket ends `blocked` with a `ticket-blocked` question (exit 2) and no commit of it on the PR branch.
 - an implementer "merges the PR branch" with the `git` hook of the fake runner: `git merge --no-edit feat/csv` in its
   slot, after `wait_pr_moves`, before it writes its files and commits.
 - a rejected test-writer report gets the usual one rerun: the second prompt is the first plus a note that names the
   file the report did not list.
-- check and ref move as one step: no black-box test can stop the driver between the two. The one window a test can
-  hold open is the merge gate, which runs between the merge commit and the ref move. The gate of the first merge
-  commit stays open until the reviewer of the other ticket ended, plus a bounded time for that ticket to reach its
-  landing. Either order of the two landings is correct, and so is a driver that gives the stale merge commit up;
-  a landing after the lock with the weakened file is not, and a landing that is lost is not.
 - a driver on another PR branch in another worktree runs its one ticket to exit 0 while the first driver runs, and
   changes no file and no ref of the first run. The lock of the same PR branch is in test_driver.
 - "never reported as an uncommitted change": no line of `git status --short` in either worktree has `lock` in it.
@@ -33,19 +26,13 @@ import pytest
 from driver_names import Names
 
 from test_cli import RUN, git, models_file, snapshot, three, ticket
-from test_final import Final
 from test_review import HOOKED, Review, cli
-from test_stops import UNATTENDED, blocked as contradicted
+from test_stops import blocked as contradicted
 from test_walk import GATE, Rig, fix, impl, make_env, plan, tw
 
-T01, T03, SHARED = "tests/test_01.py", "tests/test_03.py", "tests/test_shared.py"
+T01, T03 = "tests/test_01.py", "tests/test_03.py"
 LOCKED_01, LOCKED_03 = tw("01")["files"][T01], tw("03")["files"][T03]
 WEAK = "def test_x():\n    assert True\n"
-# A test file of the repository's start. A weaker first test and a new last test merge with no conflict.
-SEED = ("def test_first():\n    assert 1 + 1 == 2\n\n\n# one\n# two\n# three\n# four\n# five\n# six\n\n\n"
-        "def test_last():\n    assert 2 + 2 == 4\n")
-WEAK_SEED = SEED.replace("assert 1 + 1 == 2", "assert True")
-MORE_SEED = SEED + "\n\ndef test_more():\n    assert 3 + 3 == 'x'\n"
 NO_REPORT = [{}, {}]  # a fixer that writes no report: a fix round, when one starts, ends BLOCKED
 
 
@@ -70,46 +57,12 @@ def kept_out(rig, nn, codes=(1,)):
     assert not any(holds(rig, c["sha"]) for c in rig.calls(nn) if c["sha"])
 
 
-def refused(rig, nn, path):
-    """The landing of ticket `nn` was refused for the locked file `path` of a merged ticket, with a question."""
-    kept_out(rig, nn, codes=(2,))
-    assert rig.led(nn, f"locked file changed: {path}"), rig.ledger()
-    (question,) = [q for q in rig.state()["run"]["questions"] if q["answer"] is None]
-    assert (question["id"], question["subject"]) == (f"{nn}-merged-locked-file-1", path)
-
-
-def restored(rig, nn, path):
-    """The review of ticket `nn` found its change to the locked file `path` of a merged ticket, and the restore
-    closed it."""
-    return (rig.led(f"Ticket {nn}: critical finding of kind fixture from the driver at {path}:1")
-            and rig.led(f"Ticket {nn}:", "the restore closes it"))
-
-
 def writer(nn, path, text, listed=True):
     """The test-writer of `nn` that also writes `path`, and lists it as locked or not."""
     step = tw(nn)
     step["files"][path] = text
     step["report"]["locked"] += [path] * listed
     return step
-
-
-def seeded(rig):
-    (rig.repo / SHARED).parent.mkdir()
-    (rig.repo / SHARED).write_text(SEED)
-    git(rig.repo, "add", "-A")
-    git(rig.repo, "commit", "-q", "-m", "seed")
-    return rig
-
-
-# ---------------------------------------------------------------- the implementer of a later ticket
-
-def test_an_implementer_that_weakens_the_locked_test_of_a_merged_ticket_lands_only_with_the_test_put_back(tmp_path):
-    """The review finds the change and the driver restores the file; the gate stays green, so no correction runs."""
-    rig = Final(tmp_path, three())
-    weak = impl("02", files={"demo/export.py": "def fn_02():\n    return '02'\n", T01: WEAK})
-    rig.run(plan(**{"02/implementer": [weak], "02/fixer": NO_REPORT}), *UNATTENDED)
-    assert rig.code == 0 and restored(rig, "02", T01), rig.output()
-    assert len(rig.calls("02", "test-writer")) == 1 and on_pr(rig, T01) == LOCKED_01
 
 
 # ---------------------------------------------------------------- a ticket branch that takes the PR branch in
@@ -128,28 +81,13 @@ def test_a_ticket_that_merged_the_pr_branch_into_itself_lands_with_the_tests_of_
     assert phase(rig, "03") == "merged" and on_pr(rig, T01) == LOCKED_01 and on_pr(rig, T03) == LOCKED_03
 
 
-def test_a_ticket_that_merged_the_pr_branch_and_deleted_a_locked_test_of_the_merged_ticket_lands_with_it_put_back(tmp_path):
+def test_a_ticket_that_merged_the_pr_branch_and_deleted_a_locked_test_of_the_merged_ticket_is_rejected(tmp_path):
     rig = Review(tmp_path, three())
-    rig.run(plan(**{"03/implementer": [takes_in(["rm", "-q", T01])], "03/fixer": NO_REPORT}))
-    (call,) = rig.calls("03", "implementer")
+    rig.run(plan(**{"03/implementer": [takes_in(["rm", "-q", T01]), {}]}))
+    call = rig.calls("03", "implementer")[0]
     assert holds(rig, rig.sha("01", "implementer"), call["sha"]), "01 is in ticket/feat%2Fcsv/03"
-    assert rig.code == 0 and restored(rig, "03", T01), rig.output()
-    assert phase(rig, "01") == "merged" and on_pr(rig, T01) == LOCKED_01
-
-
-# ---------------------------------------------------------------- a file that no ticket had locked yet
-
-def test_a_ticket_that_weakened_a_test_file_before_a_ticket_locked_it_does_not_land_after_that_ticket(tmp_path):
-    """03 passes its gate and starts its review while 01 runs; 01 then locks the file and merges first."""
-    rig = seeded(Review(tmp_path, three()))
-    weak = impl("03", files={"demo/cli.py": cli("three"), SHARED: WEAK_SEED})
-    rig.run(plan(**{"01/test-writer": [writer("01", SHARED, MORE_SEED)],
-                    "01/implementer": [{**impl("01"), "wait": ["r3"]}],
-                    "03/implementer": [weak], "03/reviewer": [{"touch": ["r3"], "wait_pr_moves": True}],
-                    "03/fixer": NO_REPORT}))
-    assert phase(rig, "01") == "merged" and SHARED in rig.state()["tickets"]["01"]["locked"], rig.output()
-    refused(rig, "03", SHARED)
-    assert on_pr(rig, SHARED) == MORE_SEED
+    assert rig.code == 2 and rig.led("Ticket 03: implementer ran on", f"locked file changed: {T01}"), rig.output()
+    assert phase(rig, "01") == "merged" and phase(rig, "03") == "blocked" and on_pr(rig, T01) == LOCKED_01
 
 
 # ---------------------------------------------------------------- the test-writer of a later ticket
@@ -192,58 +130,17 @@ def test_a_conflict_resolution_lands_only_when_it_leaves_the_locked_files_of_the
     rig = Review(tmp_path, three()).run(plan(**{
         "01/test-writer": [{**tw("01"), "touch": ["s1"]}],
         "03/implementer": [{**impl("03", "demo/cli.py", cli("three")), "wait": ["s1"]}],
-        "01/implementer": [{**one, "wait_pr_moves": True}], "01/conflict": [resolve]}))
-    assert len(rig.calls("01", "conflict")) == 1 and phase(rig, "03") == "merged", rig.output()
+        "01/implementer": [{**one, "wait_pr_moves": True}], "01/conflict": [resolve, resolve]}))
+    assert len(rig.calls("01", "conflict")) == 1 + changes and phase(rig, "03") == "merged", rig.output()
     assert on_pr(rig, T03) == LOCKED_03
     if changes:
-        refused(rig, "01", T03)
+        kept_out(rig, "01", codes=(2,))
+        (question,) = rig.state()["run"]["questions"]
+        assert question["kind"] == "ticket-blocked" and f"locked file changed: {T03}" in question["subject"]
         assert on_pr(rig, "demo/cli.py") == cli("three") and not rig.calls("02")
     else:
         assert rig.code == 0, rig.output()
         assert on_pr(rig, "demo/cli.py") == cli("resolved") and not rig.led("locked file changed")
-
-
-# ---------------------------------------------------------------- the check and the ref move are one step
-
-# The gate of test_walk. The gate of the first merge commit stays open until the call `hold` ended, and 1 s more.
-HELD = GATE.replace('print("GATE-OUTPUT-MARK"', '''def ended():
-    calls = [json.loads(p.read_text()) for p in (rig / "calls").glob("*.json")]
-    return any(c["key"] == conf["hold"] and "t1" in c for c in calls)
-merge = len(git("rev-list", "--parents", "-n1", "HEAD").split()) == 3
-if conf.get("hold") and merge and not (rig / "sig/held").exists():
-    (rig / "sig/held").touch()
-    end = time.time() + 30
-    while not ended() and time.time() < end:
-        time.sleep(0.02)
-    time.sleep(1)  # not an order: the time the other ticket gets to try its landing in the open window
-    rec["held"] = ended()
-print("GATE-OUTPUT-MARK"''', 1)
-assert HELD.count("sig/held") == 2
-
-
-def landed(rig, sha):
-    """The place, in the first-parent history the walk made, of the first PR commit that holds `sha`."""
-    line = git(rig.repo, "rev-list", "--first-parent", "--reverse", rig.walked()).split()
-    return next(i for i, commit in enumerate(line) if holds(rig, sha, commit))
-
-
-def test_a_ticket_that_lands_while_the_merge_gate_of_another_is_open_does_not_let_that_one_land_unchecked(tmp_path):
-    """03 weakens a file that 02 locks. 03 is at its merge gate (after any check on its merge commit, before the ref
-    move) when 02 passes its review and wants to land."""
-    rig = seeded(Review(tmp_path, three()))
-    (rig.rig / "gate").write_text(HELD)
-    rig.gate_conf(hold="02/reviewer")
-    weak = impl("03", files={"demo/cli.py": cli("three"), SHARED: WEAK_SEED})
-    rig.run(plan(**{"02/test-writer": [writer("02", SHARED, MORE_SEED)],
-                    "03/implementer": [{**weak, "wait_pr_moves": True}], "03/fixer": NO_REPORT}))
-    assert [g for g in rig.gates() if g.get("held")], "the merge gate of 03 was open while 02 ended its review"
-    assert phase(rig, "02") == "merged" and "test_more" in on_pr(rig, SHARED), rig.output()
-    if phase(rig, "03") == "merged":  # 03 landed first, when no merged ticket had locked the file
-        assert rig.code == 0, rig.output()
-        assert landed(rig, rig.sha("03", "implementer")) < landed(rig, rig.sha("02", "test-writer")), rig.ledger()
-    else:  # 02 landed in the window: the driver looked again (a question), or it gave the stale merge commit up
-        kept_out(rig, "03", codes=(1, 2))
-        assert on_pr(rig, SHARED) == MORE_SEED
 
 
 # ---------------------------------------------------------------- one driver for each repository

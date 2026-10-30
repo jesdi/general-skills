@@ -1,10 +1,10 @@
 """Report validation: validate(role, path, context) -> list of errors, empty when the report is accepted.
 
 context: repo (slot path), branch, start (HEAD when the role started), log, correction (a test-writer corrects locked
-  tests), restored (locked files the driver put back before it), restore_red (the gate is red on the commit of that
-  restore), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), merged (locked
-  files of merged tickets, not its own), pr (tip), fix (the titles of the findings a fixer gets), red (the red gate a
-  fix must make green, as `the <tier> gate is red on <sha7>`)."""
+  tests), findings (the titles a correction gets), owners (ticket numbers, for the final fix batch), others (the locked
+  files of every other ticket whose test-writer has run), own (the test-writer commit of the ticket and its locked
+  files, for a role that may not change a locked file), pr (the PR branch ref), fix (the titles of the findings a fixer
+  gets), red (the red gate a fix must make green, as `the <tier> gate is red on <sha7>`)."""
 from __future__ import annotations
 
 import json
@@ -116,30 +116,57 @@ def _moved_errors(context: dict) -> list[str]:
 
 
 def _correction_errors(report: dict, context: dict) -> list[str]:
-    """A correction changes only the files it lists in `locked` and the files the driver `restored`."""
+    """A correction changes only the files it lists in `locked`."""
     if not context.get("correction"):
         return []
     changed = _git(context["repo"], "diff", "--name-only", "-z", context["start"], context["branch"], end="\0")
-    more = [path for path in changed if path not in report.get("locked", []) + context.get("restored", [])]
+    more = [path for path in changed if path not in report.get("locked", [])]
     errors = [f"a correction may change only the files it lists in `locked`: its commits also change {', '.join(more)}"
               ] if more else []
-    if context.get("restore_red") and report["status"] in ("DONE", "DONE_WITH_CONCERNS") and not (
-            set(report["locked"]) & set(context["restored"])):
-        errors.append("the gate is red on the restore commit, so a restored file fails with the code of this ticket: "
-                      "update that file and list it in `locked`, or report BLOCKED with a concern that starts with "
-                      "`locked test contradicts spec:`")
     return errors + [f"not_addressed: {item['finding']} is not the title of a finding of this correction"
                      for item in report.get("not_addressed", []) if item["finding"] not in context.get("findings", [])]
 
 
-def _merged_errors(report: dict, context: dict) -> list[str]:
-    """A test-writer changes a locked file of a merged ticket only when it lists the file in `locked`."""
+def _others_errors(role: str, report: dict, context: dict) -> list[str]:
+    """A test-writer changes a locked file of another ticket only when it lists the file in `locked`."""
     def blob(commit: str, path: str) -> list[str]:
         return _git(context["repo"], "rev-parse", "-q", "--verify", f"{commit}:{path}")
 
-    return [f"{path} is a locked file of a merged ticket, and `locked` does not list it: list it in `locked`, or "
-            "leave the file as it was" for path in context.get("merged", []) if path not in report.get("locked", [])
+    others = context.get("others", []) if role == "test-writer" else []
+    return [f"{path} is a locked file of another ticket, and `locked` does not list it: list it in `locked`, or "
+            "leave the file as it was" for path in others if path not in report.get("locked", [])
             and blob(context["branch"], path) not in (blob(context["start"], path), blob(context["pr"], path))]
+
+
+def _differ(repo: str, old: str, new: str, paths: list[str]) -> set[str] | None:
+    """The `paths` whose entry (mode, type, content) differs between the two commits; None when git cannot tell."""
+    diff = subprocess.run(["git", "-C", repo, "diff", "--name-only", "-z", old, new, "--", *paths],
+                          capture_output=True, text=True)
+    return None if diff.returncode else set(filter(None, diff.stdout.split("\0")))
+
+
+def _changed_locked(context: dict, baseline: str, paths: list[str]) -> list[str]:
+    """The errors for the `paths` that the branch changed since `baseline`. A file as the PR tip has it is no change:
+    it holds what landed."""
+    repo, branch, pr = context["repo"], context["branch"], context["pr"]
+    changed, off_pr = _differ(repo, baseline, branch, paths), _differ(repo, pr, branch, paths)
+    if changed is None or off_pr is None:
+        return [f"the locked-file check failed: git cannot compare {baseline[:7]}, {pr} and {branch}"]
+    as_landed = set(_present(repo, branch, paths)) - off_pr
+    return [f"locked file changed: {path}: only the test-writer may change a locked file, so make it as it is at "
+            f"{baseline[:7]}" for path in sorted(changed - as_landed)]
+
+
+def _breach_errors(context: dict) -> list[str]:
+    """Only the test-writer changes a locked file: the ticket's own locked files are checked against its last
+    test-writer commit, every other ticket's against the merge base of the branch and the PR tip."""
+    if "own" not in context:
+        return []
+    sha, own = context["own"]
+    base = _git(context["repo"], "merge-base", context["branch"], context["pr"]) or [context["pr"]]
+    groups = ((sha, own), (base[0], [path for path in context["others"] if path not in own]))
+    return [error for baseline, paths in groups if baseline and paths
+            for error in _changed_locked(context, baseline, paths)]
 
 
 def _red_errors(report: dict, context: dict) -> list[str]:
@@ -176,4 +203,4 @@ def validate(role: str, path: str, context: dict) -> list[str]:
         report["locked"] = locked_files(report["locked"])
     return (_space_errors(report) + _commit_errors(report, context) + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
-            + _merged_errors(report, context) + _red_errors(report, context))
+            + _others_errors(role, report, context) + _breach_errors(context) + _red_errors(report, context))

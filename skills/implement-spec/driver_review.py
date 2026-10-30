@@ -1,4 +1,4 @@
-"""The driver's own part of a review: the locked-file check of the ticket's own tests and the routing of the findings.
+"""The driver's own part of a review: the locked files of the tickets and the routing of the findings.
 
 A finding is the dict of the reviewer schema plus `source`: the role that reported it, or `driver`.
 """
@@ -25,60 +25,39 @@ def locked_changes(slot: str, sha: str | None, locked: list[str]) -> list[dict]:
              "evidence": f"git diff {sha}..HEAD -- {path}"} for path, title in titles.items()]
 
 
-def merged_changes(paths: list[str]) -> list[dict]:
-    """One critical `fixture` finding per locked file of a merged ticket that the ticket changed. A fixture finding
-    goes to a test-writer correction: the driver puts the file back before it and gates that commit."""
-    return [{"severity": "critical", "file": path, "line": 1, "kind": "fixture", "source": "driver",
-             "basis": "regression",
-             "title": f"the ticket changed the locked file of a merged ticket: {path}",
-             "evidence": f"git diff <merge base with the PR branch> -- {path}"} for path in paths]
+def others(tickets: dict, number: str) -> list[str]:
+    """The locked files of every ticket but `number` whose test-writer has run, merged or not. `tickets` is that of
+    state.json."""
+    return sorted({path for key, entry in tickets.items() if key != number and entry["test_writer_sha"]
+                   for path in entry["locked"]})
 
 
-def _references(entry: dict) -> list[tuple[str | None, list[str]]]:
-    """(reference commit, the locked files it is the reference of): `test_writer_sha`, or the older commit that
-    `held` names for a file."""
-    held = entry["held"]
-    groups = [(entry["test_writer_sha"], [path for path in entry["locked"] if path not in held])]
-    return groups + [(sha, [path for path, at in held.items() if at == sha]) for sha in dict.fromkeys(held.values())]
+def changed_elsewhere(slot: str, pr: str, paths: list[str]) -> str:
+    """The diff of each of `paths` that the ticket branch in `slot` changed since its merge base with `pr`."""
+    if not paths:
+        return ""
+    base = git(slot, "merge-base", "HEAD", pr).stdout.strip() or pr
+    return git(slot, "diff", base, "HEAD", "--", *paths).stdout
 
 
-def locked_findings(slot: str, entry: dict) -> list[dict]:
-    """The locked-file check for the ticket record `entry`."""
-    return [finding for sha, paths in _references(entry) for finding in locked_changes(slot, sha, paths)]
+def written(entry: dict, listed: list[str], tip: str) -> dict:
+    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed`: `tip` is
+    the new baseline of the ticket's own locked files."""
+    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed))}
 
 
-def restore_locked(slot: str, entry: dict) -> list[str]:
-    """Put each locked file that differs from its reference back to the reference version, in the tree only.
-    Returns those paths."""
-    restored = []
-    for sha, paths in _references(entry):
-        if sha and paths:
-            restored += names(git(slot, "diff", "--name-only", "-z", sha, "--", *paths).stdout)
-    for path in restored:
-        git(slot, "checkout", "-q", entry["held"].get(path, entry["test_writer_sha"]), "--", path)
-    return restored
-
-
-def written(slot: str, entry: dict, listed: list[str], tip: str) -> dict:
-    """The locked-file fields of the ticket record after a test-writer commit at `tip` that lists `listed`. `tip` is
-    the new reference. A locked file that a correction does not list and that differs
-    from the old reference keeps the old one in `held`, so a change the implementer made before stays a finding."""
-    held = {path: sha for path, sha in entry["held"].items() if path not in listed}
-    others = [path for path in entry["locked"] if path not in listed and path not in held]
-    if entry["test_writer_sha"] and others:
-        diff = git(slot, "diff", "--name-only", "-z", entry["test_writer_sha"], tip, "--", *others)
-        # A diff that git cannot make holds each file.
-        held.update(dict.fromkeys(names(diff.stdout) if diff.returncode == 0 else others, entry["test_writer_sha"]))
-    return {"test_writer_sha": tip, "locked": list(dict.fromkeys(entry["locked"] + listed)), "held": held}
+def _corrected(finding: dict, locked: list[str], protected: list[str]) -> bool:
+    """Whether a correction, not a fixer, takes the finding: see `route`."""
+    return finding["kind"] == "fixture" or finding["severity"] in OPEN and (
+        finding["file"] in protected or finding["kind"] == "test" and finding["file"] in locked)
 
 
 def route(findings: list[dict], locked: list[str], protected: list[str]) -> tuple[list[dict], list[dict]]:
     """(the findings for a test-writer correction; the other findings that are severe enough for a fix round).
     A correction gets each fixture finding, whatever its severity, each severe test finding on a `locked` file, and
-    each severe finding on a `protected` file (a locked file of a merged ticket): the fixer may not edit those files,
+    each severe finding on a `protected` file (a locked file of another ticket): the fixer may not edit those files,
     so a fix round cannot close it. Only a correction can take a protected file into the ticket's `locked` (#116)."""
-    correct = [finding for finding in findings if finding["kind"] == "fixture" or finding["severity"] in OPEN and (
-               finding["file"] in protected or finding["kind"] == "test" and finding["file"] in locked)]
+    correct = [finding for finding in findings if _corrected(finding, locked, protected)]
     return correct, [finding for finding in findings if finding not in correct and finding["severity"] in OPEN]
 
 

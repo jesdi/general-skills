@@ -8,6 +8,7 @@ Files in conflict: {files}
 
 The merge of the PR branch into the ticket branch is open in this worktree and it has conflicts in those files.
 Resolve each conflict so that the behavior of both sides holds: the spec and the ticket say what each side is for. Change nothing that the resolution does not need.
+Leave each locked test file as one side of the merge has it: the driver rejects a report whose commits change a locked file.
 Run the targeted tests of the files you resolved. The driver runs the gate on your commit.
 Finish the merge with `git commit` on the checked-out ticket branch. Do not abort the merge and do not dispatch subagents.
 In `files`, give each file you resolved.
