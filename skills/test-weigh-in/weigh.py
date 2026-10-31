@@ -63,7 +63,8 @@ def main(argv=None):
     if branch_percent(cov["value_report"]) is not None:
         values["branch_coverage"] = branch_percent(cov["value_report"])
     if passing:
-        values["no_unique_coverage"] = 100 * sum(not u for u in unique.values()) / len(passing)
+        # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage
+        values["no_unique_coverage"] = 100 * sum(not u for u in unique.values()) / len(tests)
     metrics, pillars = score(rules, values)
     data = {
         "commit": commit,
