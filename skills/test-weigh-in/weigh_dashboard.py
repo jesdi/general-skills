@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from weigh_coverage import similarity_map
 from weigh_score import display
 
 TEMPLATE = Path(__file__).resolve().parent / "dashboard.html"
@@ -25,6 +26,9 @@ def write_dashboard(home, data, rules):
     page = {
         "banner": f"{failing} tests are failing" if failing > 1 else "1 test is failing" if failing else None,
         "skipped": [n for n, t in data["tests"].items() if t["outcome"] == "skipped"],
+        "overlaps": data.get("overlaps", []),
+        "map": [{**d, "runtime": data["tests"][d["test"]]["duration"], "unique": data["tests"][d["test"]].get("unique_coverage", 0)}
+                for d in similarity_map({n: t.get("coverage", {}) for n, t in data["tests"].items() if t["outcome"] == "passed"})],
         "inventory": inventory_line(data["inventory"]),
         "pillars": [
             {"key": k, "name": p["name"], **data["pillars"][k],
