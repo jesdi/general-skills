@@ -39,7 +39,7 @@ def jaccard(a, b):
 
 def build(out):
     rules = load()
-    tests = {n: {"outcome": "passed", "duration": 0.05 * (i + 1), "coverage": {"demo/a.py": lines}, "unique_coverage": 0, "flaky": False, "smells": []}
+    tests = {n: {"outcome": "passed", "duration": 0.05 * (i + 1), "coverage": {"demo/a.py": lines}, "unique_coverage": 0, "flaky": False, "smells": [], "lines": 2}
              for i, (n, lines) in enumerate(COVERAGE.items())}
     metrics, pillars = score(rules, {**feedback_values(tests, 1.0), "no_unique_coverage": 100.0})
     names = list(COVERAGE)
