@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-10-29T12:22:26.879Z",
+  "generatedAt": "2026-10-31T08:31:27.446Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -58,8 +58,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.46",
-      "hash": "sha256-fc47dd018aeb520ba6db5196f2487bdf126c1c447d250462767f2a1fd72d6664",
+      "version": "0.1.47",
+      "hash": "sha256-0aef522504cc63d918dd8731f9b2fa00e33c7291c680f37c3dfc6a08adc38d93",
       "description": "Implement a specification in code."
     },
     {
@@ -94,8 +94,8 @@
     },
     {
       "name": "review-page",
-      "version": "0.1.1",
-      "hash": "sha256-e8204e4c6f05e2721a20d9ac3f72b8ff84a2854647688bb9bf057312b53a59f4",
+      "version": "0.1.2",
+      "hash": "sha256-12746275595aafc21ea043843ee89a6bbc6f5a82e1e5440af831a1f3384b63d7",
       "description": "One interactive HTML page for a plan review or a questionnaire, built from a fixed template. Use when a pipeline session must deliver a plan review or a questionnaire as an interactive page the console shows."
     },
     {
@@ -118,8 +118,8 @@
     },
     {
       "name": "to-tickets",
-      "version": "0.1.6",
-      "hash": "sha256-b8e508cc04da4cb7b2645ae67198ff7b7404970a51bd4d7167366b0e4eec7d5d",
+      "version": "0.1.7",
+      "hash": "sha256-c67cfed832cad39836bd054f7ca3ce423f4dc51055aa07e14c773c3bafa922f4",
       "description": "Break a spec, plan, or the current conversation into numbered tracer-bullet ticket files under .agent/tickets/, each declaring its blocking edges and acceptance criteria phrased as observable behavior. Use after a spec is approved and before implementation starts."
     },
     {
