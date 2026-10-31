@@ -18,8 +18,9 @@ pnpm check
 virtual environment is active. Otherwise they use `python3` from your PATH.
 
 `pnpm check:fast [file…]` is the fast gate: the type check, then the given
-test files (default: `IMPLEMENT_SPEC_LOCKED`), each `.py` in its own pytest run
-and the `.ts` files in one vitest run. implement-spec takes it as `--fast-gate`.
+test files (default: `IMPLEMENT_SPEC_LOCKED`), each `test_*.py` or `*_test.py` in its own
+pytest run and the `*.test.ts` files in one vitest run; other files, such as fixtures, are
+skipped. implement-spec takes it as `--fast-gate`.
 
 ## Install skills
 
