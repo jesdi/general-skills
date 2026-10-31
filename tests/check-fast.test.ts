@@ -26,14 +26,15 @@ function fixture() {
 }
 
 describe('fast check runner', () => {
-  it('type checks, then runs each locked Python file alone and the TypeScript files together', () => {
+  it('type checks, then runs each locked Python test file alone and the TypeScript test files together, skipping fixtures', () => {
     const { root, log, env } = fixture();
-    const locked = 'a/test_x.py b/test_x.py tests/one.test.ts tests/fixture.json tests/two.test.ts';
+    const locked = 'a/test_x.py b/test_x.py c/map_fixture.py d/x_test.py tests/one.test.ts tests/fixture.json tests/helper.ts tests/two.test.ts';
     execFileSync('sh', [runner], { cwd: root, env: { ...env, IMPLEMENT_SPEC_LOCKED: locked } });
     expect(readFileSync(log, 'utf8').trim().split('\n')).toEqual([
       'pnpm exec tsc --noEmit',
       'venv -m pytest -q a/test_x.py',
       'venv -m pytest -q b/test_x.py',
+      'venv -m pytest -q d/x_test.py',
       'pnpm exec vitest run tests/one.test.ts tests/two.test.ts',
     ]);
   });
