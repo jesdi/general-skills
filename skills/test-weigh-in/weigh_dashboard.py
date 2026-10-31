@@ -4,7 +4,7 @@ from pathlib import Path
 
 from weigh_coverage import similarity_map, valued
 from weigh_score import display
-from weigh_smells import PILLAR_SMELLS, worst_tests
+from weigh_smells import PILLAR_SMELLS, pillar_smells, worst_tests
 
 TEMPLATE = Path(__file__).resolve().parent / "dashboard.html"
 
@@ -35,7 +35,8 @@ def write_dashboard(home, data, rules):
             {"key": k, "name": p["name"], **data["pillars"][k],
              "metrics": [{"name": m["name"], **data["metrics"][i]} for i, m in p["metrics"].items() if i in data["metrics"]],
              "total": len(p["metrics"]),
-             "worst": worst_tests(data["tests"], PILLAR_SMELLS.get(k, ()))}
+             "worst": worst_tests(data["tests"], PILLAR_SMELLS.get(k, ())),
+             "smells": pillar_smells(data["tests"], PILLAR_SMELLS.get(k, ()))}
             for k, p in rules["pillars"].items()
         ],
     }
