@@ -1,5 +1,9 @@
 version = 1
 
+[ruff]
+# PT rules that are not style-only; each violation inside a test is a maintainability smell of it
+pt = ["PT009", "PT010", "PT011", "PT012", "PT014", "PT015", "PT017", "PT018", "PT027", "PT029", "PT030", "PT031"]
+
 [pillars.regression]
 name = "Protection against regressions"
 
