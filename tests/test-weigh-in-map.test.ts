@@ -55,6 +55,24 @@ describe('Economy details tabs', () => {
   });
 });
 
+describe('Overlaps tab', () => {
+  it('lists the 12 pairs at 1.00 inside the twins and inside the others, and no pair with an edge test', async () => {
+    const doc = await open();
+    gauges(doc).find((g) => g.textContent?.includes('Economy'))!.click();
+    tabs(doc).find((b) => b.textContent?.trim() === 'Overlaps')!.click();
+    const rows = [...doc.querySelectorAll('[data-testid=details] p')].map((r) => r.textContent ?? '');
+    expect(rows).toHaveLength(12);
+    for (const group of [[INTENT, ...TWINS], OTHERS]) {
+      for (const [i, a] of group.entries()) {
+        for (const b of group.slice(i + 1)) {
+          expect(rows.find((r) => r.includes(a) && r.includes(b)), `${a} ~ ${b}`).toContain('1.00');
+        }
+      }
+    }
+    for (const edge of [EDGE_AT, EDGE_BELOW]) expect(rows.some((r) => r.includes(edge))).toBe(false);
+  });
+});
+
 describe('Map tab', () => {
   it('highlights and lists the 3 twins (1.00) and the test at exactly 0.60 of test_intent_1, and no other test', async () => {
     const doc = await open();
