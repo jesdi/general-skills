@@ -57,4 +57,9 @@ def summary(data, rules, snapshot, dashboard):
         lines.append(f"Warning: {failing} tests are failing" if failing > 1 else "Warning: 1 test is failing")
     if flaky:
         lines.append(f"Warning: {flaky} flaky tests" if flaky > 1 else "Warning: 1 flaky test")
+    scored = {k: p["score"] for k, p in data["pillars"].items() if p["score"] is not None}
+    if scored:
+        lowest = min(scored, key=scored.get)
+        worst = worst_tests(data["tests"], PILLAR_SMELLS.get(lowest, ()), 3)
+        lines += [f"Worst tests ({rules['pillars'][lowest]['name']}):", *(f"  {w['test']} ({w['reason']})" for w in worst)]
     return "\n".join([*lines, f"Snapshot: {snapshot}", f"Dashboard: {dashboard}"])
