@@ -20,7 +20,28 @@ const data = __DATA__;
 const shown = (s) => Math.min(99, Math.max(1, Math.round(s)));
 const el = (tag, text, parent) => { const e = document.createElement(tag); e.textContent = text; parent.appendChild(e); return e; };
 const fmt = (n) => String(Math.round(n * 100) / 100);
-let selected = 0;
+let selected = 0, tab = 'Metrics', picked = null;
+const NS = 'http://www.w3.org/2000/svg';
+function drawMap(parent) {
+  const near = picked ? new Map(picked.similar) : new Map();
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 400 300'); svg.setAttribute('width', '400'); svg.setAttribute('height', '300');
+  parent.appendChild(svg);
+  data.map.forEach((d) => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('cx', 20 + d.x * 360); c.setAttribute('cy', 20 + d.y * 260);
+    c.setAttribute('r', 4 + Math.min(10, d.runtime * 4));
+    c.setAttribute('fill', d.unique === 0 ? '#9ca3af' : d.unique < 4 ? '#f59e0b' : '#16a34a');
+    c.setAttribute('stroke', picked && (picked === d || near.has(d.test)) ? '#2563eb' : 'none');
+    c.setAttribute('stroke-width', '3');
+    c.setAttribute('data-testid', 'map-dot'); c.dataset.test = d.test;
+    if (picked && (picked === d || near.has(d.test))) c.dataset.highlighted = 'true';
+    c.onclick = () => { picked = d; render(); };
+    svg.appendChild(c);
+  });
+  const list = el('div', '', parent); list.setAttribute('data-testid', 'map-similar');
+  if (picked) picked.similar.forEach(([n, s]) => el('p', n + ' ' + s.toFixed(2), list).setAttribute('data-testid', 'map-similar-item'));
+}
 function render() {
   document.getElementById('inventory').textContent = data.inventory;
   const banner = document.getElementById('banner');
@@ -34,20 +55,26 @@ function render() {
     el('span', p.name, g);
     el('span', p.score === null ? '–' : shown(p.score), g).className = 'score';
     if (p.partial) el('span', 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured', g).className = 'flag';
-    g.onclick = () => { selected = i; render(); };
+    g.onclick = () => { selected = i; tab = 'Metrics'; picked = null; render(); };
   });
   const p = data.pillars[selected];
   el('h2', p.name, details);
-  el('h3', 'Metrics', details);
-  const t = el('table', '', details);
-  p.metrics.forEach((m) => {
-    const r = el('tr', '', t);
-    el('td', m.name, r); el('td', fmt(m.value), r); el('td', String(shown(m.score)), r);
-  });
-  if (data.skipped.length) {
-    el('h3', 'Skipped tests', details);
-    data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
-  }
+  const names = ['Metrics', 'Worst tests', 'Smells', ...(p.key === 'economy' ? ['Overlaps', 'Map'] : [])];
+  names.forEach((n) => { const b = el('button', n, details); b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
+  el('h3', tab, details);
+  if (tab === 'Metrics') {
+    const t = el('table', '', details);
+    p.metrics.forEach((m) => {
+      const r = el('tr', '', t);
+      el('td', m.name, r); el('td', fmt(m.value), r); el('td', String(shown(m.score)), r);
+    });
+    if (data.skipped.length) {
+      el('h3', 'Skipped tests', details);
+      data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
+    }
+  } else if (tab === 'Overlaps') {
+    data.overlaps.forEach((o) => el('p', o.tests.join(' ~ ') + ' ' + o.jaccard.toFixed(2), details));
+  } else if (tab === 'Map') drawMap(details);
 }
 render();
 </script></body></html>
