@@ -50,9 +50,12 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
-    for node, found in find_smells(repo, tests).items():
-        tests[node]["smells"] = found
+    found, clusters = find_smells(repo, tests)
+    for node, info in found.items():
+        tests[node].update(info)
     values.update(smell_values(tests))
+    if inventory["source_lines"]:
+        values["test_source_ratio"] = inventory["test_lines"] / inventory["source_lines"]
     # failing, erroring and skipped tests cost (runtime, lines, smells) but give no value: no coverage, overlap or uniqueness
     covered = per_test(cov["report"], cov["arcs"], repo)
     cov_tests = aggregate(cov["cases"])
@@ -82,6 +85,7 @@ def main(argv=None):
         "pillars": pillars,
         "tests": tests,
         "overlaps": overlaps(passing),
+        "clusters": clusters,
     }
     path = write_snapshot(home, data)
     dashboard = write_dashboard(home, data, rules)
