@@ -61,11 +61,13 @@ def aggregate(cases):
 
 
 def coverage_run(python, repo, overlay, pytest_args, eligible):
-    """Pytest under branch coverage with a context per test phase: (cases, the coverage json report of the passing cases, the same of the eligible tests that also passed under coverage, each None when it has no data)."""
+    """Pytest under branch coverage with a context per test phase, as a dict: cases; report, the coverage json report of
+    the passing cases; value_report, the same of the eligible tests that also passed under coverage; arcs, the arcs of
+    each passing case's call context. A coverage report that fails is an error, so no metric comes from missing data."""
     with tempfile.TemporaryDirectory() as tmp:
         rc = os.path.join(tmp, "rc")
         open(rc, "w").close()
-        data, report = os.path.join(tmp, "data"), os.path.join(tmp, "report.json")
+        data = os.path.join(tmp, "data")
         # test files are the cost being weighed, not the code under test; anchored in the repo, so a folder
         # named tests above it excludes nothing
         omit = ",".join(f"{repo}/**/{p}" for p in OMIT)
@@ -76,17 +78,47 @@ def coverage_run(python, repo, overlay, pytest_args, eligible):
         with open(out) as f:
             cases = json.load(f)["cases"]
         eligible = eligible & {n for n, t in aggregate(cases).items() if t["outcome"] == "passed"}
-        return (cases, *(_report(python, repo, overlay, rc, data, os.path.join(tmp, name), contexts_regex(cases, e))
-                         for name, e in (("report.json", None), ("eligible.json", eligible))))
+        env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
+        coverage = lambda *a: subprocess.run([str(python), *a], cwd=repo, env=env, capture_output=True, text=True)
+        passing = contexts_regex(cases)
+        return {"cases": cases,
+                "report": _report(coverage, rc, data, os.path.join(tmp, "report.json"), passing),
+                "value_report": _report(coverage, rc, data, os.path.join(tmp, "eligible.json"), contexts_regex(cases, eligible)),
+                "arcs": _arcs(coverage, data, os.path.join(tmp, "arcs.json"), passing)}
 
 
-def _report(python, repo, overlay, rc, data, out, regex):
+def _report(coverage, rc, data, out, regex):
     with open(rc, "w") as f:
         f.write("[report]\ncontexts = " + regex + "\n")
-    env = {**os.environ, "PYTHONPATH": str(overlay), "PYTHONDONTWRITEBYTECODE": "1", "COVERAGE_RCFILE": rc}
-    proc = subprocess.run([str(python), "-m", "coverage", "json", "--show-contexts", f"--data-file={data}", "-o", out, "-q"],
-                          cwd=repo, env=env, capture_output=True, text=True)
+    proc = coverage("-m", "coverage", "json", "--show-contexts", f"--data-file={data}", "-o", out, "-q")
+    if "No data to report" in proc.stdout + proc.stderr:  # no source file ran at all: measured, and empty
+        return {"files": {}, "totals": {"covered_branches": 0, "num_branches": 0}}
     if proc.returncode or not os.path.exists(out):
-        return None
+        raise SetupError(f"coverage json exited {proc.returncode}:\n" + proc.stdout + proc.stderr)
+    with open(out) as f:
+        return json.load(f)
+
+
+# Runs in the target's interpreter: coverage json has per-context lines but not per-context arcs.
+# ponytail: one query per context and file; read the data file's arc table in one query if suites of thousands get slow
+ARCS = """import json, re, sys
+from coverage import CoverageData
+data, regex, out = sys.argv[1:]
+cov = CoverageData(basename=data)
+cov.read()
+arcs = {}
+for ctx in sorted(c for c in cov.measured_contexts() if re.search(regex, c)):
+    cov.set_query_contexts(["^" + re.escape(ctx) + "$"])
+    arcs[ctx] = {path: sorted(a) for path in cov.measured_files() if (a := cov.arcs(path))}
+with open(out, "w") as f:
+    json.dump(arcs, f)
+"""
+
+
+def _arcs(coverage, data, out, regex):
+    """{context: {measured path: [[from, to]]}} of the contexts the regex matches."""
+    proc = coverage("-c", ARCS, data, regex, out)
+    if proc.returncode or not os.path.exists(out):
+        raise SetupError(f"reading the coverage arcs exited {proc.returncode}:\n" + proc.stdout + proc.stderr)
     with open(out) as f:
         return json.load(f)
