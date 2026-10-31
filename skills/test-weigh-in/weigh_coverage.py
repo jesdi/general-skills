@@ -44,7 +44,6 @@ def per_test(report, arcs, repo):
     for ctx, files in arcs.items():
         for path, file_arcs in files.items():
             rel = _relative(path, repo)
-            # ponytail: raw arcs that coverage's report translates (multi-line statements) do not match and are dropped
             for arc in map(tuple, file_arcs):
                 if arc in branches.get(rel, ()):
                     add(ctx, "branches", rel, arc)

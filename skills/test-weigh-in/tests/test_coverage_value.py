@@ -39,6 +39,17 @@ def test_a_test_that_alone_takes_a_branch_has_unique_coverage_on_the_same_lines(
     assert data["overlaps"] == []  # 4 of 5 lines and branches shared: Jaccard 0.8
 
 
+def test_a_branch_of_a_multi_line_condition_counts_as_unique(tmp_path, home, cache):
+    # the tracer records the true branch from line 3, the condition's last line; the report from line 2, its first
+    source = "def both(a, b):\n    if (a\n            and b):\n        return 1\n    return 2\n"
+    tests = ("from demo.both import both\n\n\ndef test_both_true():\n    both(1, 1)\n\n\n"
+             "def test_first_false():\n    both(0, 1)\n")
+    data = run(tmp_path, home, cache, {"demo/both.py": source, "tests/test_both.py": tests}, "tests/test_both.py")
+    true = data["tests"]["tests/test_both.py::test_both_true"]
+    assert [2, 4] in true["branches"]["demo/both.py"]
+    assert true["unique_coverage"] > 0
+
+
 def test_an_expected_failure_keeps_its_coverage(tmp_path, home, cache):
     tests = ("import pytest\nfrom demo.flag import flag\n\n\n@pytest.mark.xfail\ndef test_xfail():\n"
              "    flag(False)\n    assert False\n")

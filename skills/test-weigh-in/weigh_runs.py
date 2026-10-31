@@ -102,14 +102,21 @@ def _report(coverage, rc, data, out, regex):
 # Runs in the target's interpreter: coverage json has per-context lines but not per-context arcs.
 # ponytail: one query per context and file; read the data file's arc table in one query if suites of thousands get slow
 ARCS = """import json, re, sys
-from coverage import CoverageData
+from coverage import Coverage, CoverageData
+from coverage.python import PythonFileReporter
 data, regex, out = sys.argv[1:]
 cov = CoverageData(basename=data)
 cov.read()
+# raw arcs use the physical lines the tracer saw; the report maps them to each statement's first line, so
+# map them the same way or a branch of a multi-line statement matches no reported branch
+loaded = Coverage(data_file=data)
+loaded.load()
+reporters = {}
+reporter = lambda path: reporters.setdefault(path, PythonFileReporter(path, loaded))
 arcs = {}
 for ctx in sorted(c for c in cov.measured_contexts() if re.search(regex, c)):
     cov.set_query_contexts(["^" + re.escape(ctx) + "$"])
-    arcs[ctx] = {path: sorted(a) for path in cov.measured_files() if (a := cov.arcs(path))}
+    arcs[ctx] = {path: sorted(reporter(path).translate_arcs(a)) for path in cov.measured_files() if (a := cov.arcs(path))}
 with open(out, "w") as f:
     json.dump(arcs, f)
 """
