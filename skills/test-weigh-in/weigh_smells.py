@@ -12,13 +12,13 @@ MOCK_MAKERS = ("MagicMock", "Mock", "AsyncMock", "NonCallableMock", "create_auto
 HELPER_ASSERTS = ("assert", "check_", "expect_")
 RAISES = ("pytest.raises", "pytest.warns", "pytest.deprecated_call")
 MOCK_HEAVY_ABOVE = 3
-# Worst tests tab: the smells each pillar lists
+# Smells and Worst tests tabs: the smells of each pillar
 PILLAR_SMELLS = {
     "regression": ("No assertion",),
     "refactoring": ("Mock-heavy", "Interaction-only", "Private access"),
     "feedback": ("Real sleep",),
     "maintainability": ("Eager test", "Conditional test logic", "Mystery guest", "Swallowed exception", "PT"),
-    "economy": ("Duplicate body", "No unique coverage"),
+    "economy": ("Duplicate body",),
 }
 MAINTAINABILITY_SMELLS = PILLAR_SMELLS["maintainability"]
 LONG_TEST_LINES = 50
@@ -108,7 +108,22 @@ def _safe_names(func):
     return safe
 
 
-def _reads_guest(n, safe):
+def _literal_path(node, safe, guests):
+    """A path built from a string literal or from a name holding one, and not from tmp_path or monkeypatch."""
+    names = _names(node)
+    return bool(any(isinstance(c, ast.Constant) and isinstance(c.value, str) for c in ast.walk(node)) or names & guests) and not names & safe
+
+
+def _guest_names(func, safe):
+    """Names assigned a literal path, in source order, so a name assigned from another one carries its path."""
+    guests = set()
+    for n in sorted((n for n in ast.walk(func) if isinstance(n, ast.Assign)), key=lambda n: (n.lineno, n.col_offset)):
+        if _literal_path(n.value, safe, guests):
+            guests |= {t.id for t in n.targets if isinstance(t, ast.Name)}
+    return guests
+
+
+def _reads_guest(n, safe, guests):
     """A file read or home/environment access whose path is not from tmp_path or monkeypatch."""
     if isinstance(n, ast.Attribute) and _dotted(n) in HOME_ENV:
         return "monkeypatch" not in safe
@@ -120,7 +135,7 @@ def _reads_guest(n, safe):
         target = n.func.value
     else:
         return False
-    return any(isinstance(c, ast.Constant) and isinstance(c.value, str) for c in ast.walk(target)) and not _names(target) & safe
+    return _literal_path(target, safe, guests)
 
 
 def _eager(func):
@@ -130,11 +145,10 @@ def _eager(func):
     def walk(body):
         nonlocal cycles, acted
         for st in body:
-            raises = isinstance(st, ast.With) and any(isinstance(i.context_expr, ast.Call) and _dotted(i.context_expr.func) == "pytest.raises" for i in st.items)
-            if isinstance(st, ast.With) and not raises:
-                walk(st.body)
-            elif isinstance(st, ast.Assert) or raises:
+            if _assertion(st):
                 cycles, acted = cycles + acted, False
+            elif isinstance(st, (ast.With, ast.AsyncWith)):
+                walk(st.body)
             else:
                 acted = True
 
@@ -143,7 +157,7 @@ def _eager(func):
 
 
 def _swallows(func):
-    return any(isinstance(h, ast.ExceptHandler) and not any(isinstance(x, (ast.Raise, ast.Assert)) for x in ast.walk(h))
+    return any(isinstance(h, ast.ExceptHandler) and not any(isinstance(x, ast.Raise) or _assertion(x) for x in ast.walk(h))
                for n in ast.walk(func) if isinstance(n, ast.Try) for h in n.handlers)
 
 
@@ -186,11 +200,12 @@ def smells_of(func, module_privates, aliases):
         elif isinstance(n, ast.Attribute):
             private |= _private(n.attr) and not _test_owned(n.value, aliases)
     safe = _safe_names(func)
+    guests = _guest_names(func, safe)
     return [s for s, has in (("No assertion", not plain and not mock), ("Interaction-only", mock and not plain),
                              ("Mock-heavy", mocks > MOCK_HEAVY_ABOVE), ("Private access", private),
                              ("Eager test", _eager(func) >= EAGER_CYCLES),
                              ("Conditional test logic", any(isinstance(n, (ast.If, ast.For, ast.While)) for n in ast.walk(func))),
-                             ("Mystery guest", any(_reads_guest(n, safe) for n in ast.walk(func))),
+                             ("Mystery guest", any(_reads_guest(n, safe, guests) for n in ast.walk(func))),
                              ("Swallowed exception", _swallows(func)), ("Real sleep", _sleeps(func))) if has]
 
 
@@ -265,9 +280,25 @@ def pillar_smells(tests, smells):
     return dict(sorted(found.items()))
 
 
-def worst_tests(tests, smells, limit=10):
-    """The tests with most of the given smells first, each with its reasons."""
-    # "No unique coverage" is not an AST smell: it is a measured value, only for tests that passed unflaky
-    reasons = lambda t: [*t["smells"], *(["No unique coverage"] if t["outcome"] == "passed" and not t["flaky"] and not t.get("unique_coverage", 0) else [])]
-    ranked = sorted(((n, [s for s in reasons(t) if s.startswith(smells)]) for n, t in tests.items()), key=lambda r: (-len(r[1]), r[0]))
-    return [{"test": n, "reason": ", ".join(r)} for n, r in ranked if r][:limit]
+def _measured(test, pillar, slow):
+    """(reasons, weight) a test ranks low by in a pillar beyond its smells: its length, duration or redundant coverage."""
+    if pillar == "maintainability" and test["lines"] > LONG_TEST_LINES:
+        return [f"{test['lines']} lines"], test["lines"]
+    if pillar == "feedback" and test["duration"] > slow:
+        return [f"{test['duration']:.2f} s"], test["duration"]
+    # unique coverage is measured only for tests that passed unflaky
+    if pillar == "economy" and test["outcome"] == "passed" and not test["flaky"] and not test.get("unique_coverage", 0):
+        return ["No unique coverage"], 0
+    return [], 0
+
+
+def worst_tests(tests, pillar, slow, limit=10):
+    """The lowest-ranked tests of a pillar, each with its reasons: most reasons first, then the longest or slowest.
+    A test is slow above `slow` seconds."""
+    ranked = []
+    for node, t in tests.items():
+        extra, weight = _measured(t, pillar, slow)
+        reasons = [s for s in t["smells"] if s.startswith(PILLAR_SMELLS.get(pillar, ()))] + extra
+        if reasons:
+            ranked.append((-len(reasons), -weight, node, reasons))
+    return [{"test": n, "reason": ", ".join(r)} for _, _, n, r in sorted(ranked)[:limit]]

@@ -22,6 +22,11 @@ def _flaky(tests):
     return sum(t.get("flaky", False) for t in tests.values())
 
 
+def _slow(rules):
+    """A test is slow when it takes longer than the target of the p95 test duration."""
+    return rules["pillars"]["feedback"]["metrics"]["p95_duration"]["target"]
+
+
 def write_dashboard(home, data, rules):
     failing = _failing(data["tests"])
     page = {
@@ -35,7 +40,7 @@ def write_dashboard(home, data, rules):
             {"key": k, "name": p["name"], **data["pillars"][k],
              "metrics": [{"name": m["name"], **data["metrics"][i]} for i, m in p["metrics"].items() if i in data["metrics"]],
              "total": len(p["metrics"]),
-             "worst": worst_tests(data["tests"], PILLAR_SMELLS.get(k, ())),
+             "worst": worst_tests(data["tests"], k, _slow(rules)),
              "smells": pillar_smells(data["tests"], PILLAR_SMELLS.get(k, ()))}
             for k, p in rules["pillars"].items()
         ],
@@ -61,6 +66,6 @@ def summary(data, rules, snapshot, dashboard):
     scored = {k: p["score"] for k, p in data["pillars"].items() if p["score"] is not None}
     if scored:
         lowest = min(scored, key=scored.get)
-        worst = worst_tests(data["tests"], PILLAR_SMELLS.get(lowest, ()), 3)
+        worst = worst_tests(data["tests"], lowest, _slow(rules), 3)
         lines += [f"Worst tests ({rules['pillars'][lowest]['name']}):", *(f"  {w['test']} ({w['reason']})" for w in worst)]
     return "\n".join([*lines, f"Snapshot: {snapshot}", f"Dashboard: {dashboard}"])
