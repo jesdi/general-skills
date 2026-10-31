@@ -13,7 +13,7 @@ PILLAR_SMELLS = {
     "regression": ("No assertion",),
     "refactoring": ("Mock-heavy", "Interaction-only", "Private access"),
     "feedback": ("Real sleep",),
-    "maintainability": ("Eager test", "Conditional test logic", "Mystery guest", "Swallowed exception"),
+    "maintainability": ("Eager test", "Conditional test logic", "Mystery guest", "Swallowed exception", "PT"),
     "economy": ("Duplicate body", "No unique coverage"),
 }
 MAINTAINABILITY_SMELLS = PILLAR_SMELLS["maintainability"]
@@ -160,8 +160,10 @@ def smells_of(func, module_privates):
                              ("Swallowed exception", _swallows(func)), ("Real sleep", _sleeps(func))) if has]
 
 
-def find_smells(repo, tests):
+def find_smells(repo, tests, ruff=()):
     """({node: {smells, lines}}, clusters) for every test; a test whose source cannot be read or parsed has none.
+
+    ruff holds (path, row, code) violations: each is a smell of the test whose lines contain the row.
 
     A cluster is the sorted node ids of 2 or more tests with one normalized body; each gets the smell Duplicate body."""
     trees, result, bodies = {}, {}, {}
@@ -177,6 +179,8 @@ def find_smells(repo, tests):
                                       if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == name), None)
         result[node] = {"smells": smells_of(found, trees[path][1]) if found else [], "lines": found.end_lineno - found.lineno + 1 if found else 0}
         if found:
+            result[node]["smells"] += sorted({c for p, row, c in ruff if p == path and found.lineno <= row <= found.end_lineno})
+        if found:
             bodies.setdefault(_body_hash(found), []).append(node)
     clusters = sorted(sorted(g) for g in bodies.values() if len(g) > 1)
     for node in (n for c in clusters for n in c):
@@ -188,7 +192,7 @@ def smell_values(tests):
     n = len(tests) or 1
     share = lambda smell: 100 * sum(smell in t["smells"] for t in tests.values()) / n
     return {"hollow_tests": share("No assertion"), "duplicate_clusters": share("Duplicate body"),
-            "smelly_tests": 100 * sum(any(s in t["smells"] for s in MAINTAINABILITY_SMELLS) for t in tests.values()) / n,
+            "smelly_tests": 100 * sum(any(s.startswith(MAINTAINABILITY_SMELLS) for s in t["smells"]) for t in tests.values()) / n,
             "long_tests": 100 * sum(t["lines"] > LONG_TEST_LINES for t in tests.values()) / n, "mock_heavy": share("Mock-heavy"),
             "interaction_only": share("Interaction-only"), "private_access": share("Private access")}
 
@@ -197,5 +201,5 @@ def worst_tests(tests, smells, limit=10):
     """The tests with most of the given smells first, each with its reasons."""
     # "No unique coverage" is not an AST smell: it is a measured value, only for tests that passed unflaky
     reasons = lambda t: [*t["smells"], *(["No unique coverage"] if t["outcome"] == "passed" and not t["flaky"] and not t.get("unique_coverage", 0) else [])]
-    ranked = sorted(((n, [s for s in reasons(t) if s in smells]) for n, t in tests.items()), key=lambda r: (-len(r[1]), r[0]))
+    ranked = sorted(((n, [s for s in reasons(t) if s.startswith(smells)]) for n, t in tests.items()), key=lambda r: (-len(r[1]), r[0]))
     return [{"test": n, "reason": ", ".join(r)} for n, r in ranked if r][:limit]

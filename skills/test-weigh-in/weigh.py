@@ -11,6 +11,7 @@ from weigh_coverage import branch_percent, overlaps, per_test, unique_coverage, 
 from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
 from weigh_rules import RulesError, load as load_rules
+from weigh_ruff import violations
 from weigh_runs import aggregate, coverage_run, plain_run
 from weigh_smells import find_smells, smell_values
 from weigh_score import feedback_values, score
@@ -50,7 +51,7 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
-    found, clusters = find_smells(repo, tests)
+    found, clusters = find_smells(repo, tests, violations(repo, rules.get("ruff", {}).get("pt", [])))
     for node, info in found.items():
         tests[node].update(info)
     values.update(smell_values(tests))
