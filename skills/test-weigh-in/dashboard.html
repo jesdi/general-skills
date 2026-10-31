@@ -91,6 +91,8 @@ function render() {
       el('h3', 'Skipped tests', details);
       data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
     }
+  } else if (tab === 'Worst tests') {
+    p.worst.forEach((w) => el('p', w.test + ' (' + w.reason + ')', details).setAttribute('data-testid', 'worst-test'));
   } else if (tab === 'Overlaps') {
     data.overlaps.forEach((o) => el('p', o.tests.join(' ~ ') + ' ' + o.jaccard.toFixed(2), details));
   } else if (tab === 'Map') drawMap(details);

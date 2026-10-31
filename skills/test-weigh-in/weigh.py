@@ -12,6 +12,7 @@ from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
 from weigh_rules import RulesError, load as load_rules
 from weigh_runs import aggregate, coverage_run, plain_run
+from weigh_smells import find_smells, smell_values
 from weigh_score import feedback_values, score
 from weigh_snapshot import commit_state, home_dir, write_snapshot
 
@@ -49,6 +50,9 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
+    for node, found in find_smells(repo, tests).items():
+        tests[node]["smells"] = found
+    values.update(smell_values(tests))
     # failing, erroring and skipped tests cost (runtime, lines, smells) but give no value: no coverage, overlap or uniqueness
     covered = per_test(cov["report"], cov["arcs"], repo)
     cov_tests = aggregate(cov["cases"])
