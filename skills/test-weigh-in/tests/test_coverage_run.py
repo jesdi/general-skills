@@ -80,10 +80,10 @@ def test_a_test_that_differs_between_the_runs_is_flaky(tmp_path, home, cache):
     assert tests["tests/test_retry.py::test_retry"]["flaky"] is True
     assert [n for n, t in tests.items() if t.get("flaky")] == ["tests/test_retry.py::test_retry"]
     assert "1 flaky test" in result.stdout
-    # failing under coverage, test_retry gives no value: no unique coverage counts only the other tests
+    # failing under coverage, test_retry gives no value: it is out of the count, yet in the base of all tests
     others = [t for n, t in tests.items() if n != "tests/test_retry.py::test_retry"]
     assert snap(home)["metrics"]["no_unique_coverage"]["value"] == pytest.approx(
-        100 * sum(not t["unique_coverage"] for t in others) / len(others))
+        100 * sum(not t["unique_coverage"] for t in others) / len(tests))
 
 
 def test_a_repo_inside_a_folder_named_tests_keeps_its_source_coverage(tmp_path, home, cache):
@@ -105,11 +105,11 @@ def test_a_red_suite_is_measured_without_the_failing_tests_value(tmp_path, home,
     assert all(data["tests"][n]["coverage"] == {} for n in failed)
     assert not any(set(pair["tests"]) & failed for pair in data["overlaps"])
     assert data["metrics"]["branch_coverage"]["value"] == pytest.approx(50)
-    # failing tests are outside the uniqueness accounting: not in the numerator, not in the denominator
+    # failing tests give no value: not in the count, yet in the base, a percentage of all 40 tests (req 17)
     passed = [t for t in data["tests"].values() if t["outcome"] == "passed"]
     assert all(data["tests"][n]["unique_coverage"] == 0 for n in failed)
     assert data["metrics"]["no_unique_coverage"]["value"] == pytest.approx(
-        100 * sum(not t["unique_coverage"] for t in passed) / len(passed))
+        100 * sum(not t["unique_coverage"] for t in passed) / 40)
     assert data["pillars"]["regression"]["partial"] and data["pillars"]["economy"]["partial"]
     assert "3 tests are failing" in result.stdout
 
