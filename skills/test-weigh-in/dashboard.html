@@ -25,12 +25,24 @@ const NS = 'http://www.w3.org/2000/svg';
 function drawMap(parent) {
   const near = picked ? new Map(picked.similar) : new Map();
   const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 400 300'); svg.setAttribute('width', '400'); svg.setAttribute('height', '300');
   parent.appendChild(svg);
-  data.map.forEach((d) => {
+  // tests with the same coverage share a place: spread them on a ring wide enough that no two of them touch
+  const groups = new Map();
+  const at = (d) => d.x.toFixed(3) + ',' + d.y.toFixed(3);
+  data.map.forEach((d) => groups.set(at(d), [...(groups.get(at(d)) || []), d]));
+  const dots = data.map.map((d) => {
+    const g = groups.get(at(d)), a = 2 * Math.PI * g.indexOf(d) / g.length;
+    const ring = g.length > 1 ? 15 / Math.sin(Math.PI / g.length) : 0;
+    return { d, cx: 20 + d.x * 360 + ring * Math.cos(a), cy: 20 + d.y * 260 + ring * Math.sin(a), r: 4 + Math.min(10, d.runtime * 4) };
+  });
+  // the view grows to hold every ring, at one unit per pixel so sizes keep their meaning
+  const x0 = Math.min(0, ...dots.map((o) => o.cx - o.r - 2)), y0 = Math.min(0, ...dots.map((o) => o.cy - o.r - 2));
+  const w = Math.max(400, ...dots.map((o) => o.cx + o.r + 2)) - x0, h = Math.max(300, ...dots.map((o) => o.cy + o.r + 2)) - y0;
+  svg.setAttribute('viewBox', `${x0} ${y0} ${w} ${h}`); svg.setAttribute('width', w); svg.setAttribute('height', h);
+  dots.forEach(({ d, cx, cy, r }) => {
     const c = document.createElementNS(NS, 'circle');
-    c.setAttribute('cx', 20 + d.x * 360); c.setAttribute('cy', 20 + d.y * 260);
-    c.setAttribute('r', 4 + Math.min(10, d.runtime * 4));
+    c.setAttribute('cx', cx); c.setAttribute('cy', cy);
+    c.setAttribute('r', r);
     c.setAttribute('fill', d.unique === 0 ? '#9ca3af' : d.unique < 4 ? '#f59e0b' : '#16a34a');
     c.setAttribute('stroke', picked && (picked === d || near.has(d.test)) ? '#2563eb' : 'none');
     c.setAttribute('stroke-width', '3');
