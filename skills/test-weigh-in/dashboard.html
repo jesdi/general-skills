@@ -93,6 +93,13 @@ function render() {
     }
   } else if (tab === 'Worst tests') {
     p.worst.forEach((w) => el('p', w.test + ' (' + w.reason + ')', details).setAttribute('data-testid', 'worst-test'));
+  } else if (tab === 'Smells') {
+    const smells = Object.entries(p.smells);
+    if (!smells.length) el('p', 'No test has a smell of this pillar.', details);
+    smells.forEach(([smell, tests]) => {
+      el('h4', smell + ' (' + tests.length + (tests.length === 1 ? ' test)' : ' tests)'), details).setAttribute('data-testid', 'smell');
+      tests.forEach((n) => el('p', n, details).setAttribute('data-testid', 'smell-test'));
+    });
   } else if (tab === 'Overlaps') {
     data.overlaps.forEach((o) => el('p', o.tests.join(' ~ ') + ' ' + o.jaccard.toFixed(2), details));
   } else if (tab === 'Map') drawMap(details);
