@@ -7,11 +7,12 @@ import tempfile
 
 from weigh_coverage import contexts_regex
 from weigh_env import SetupError
+from weigh_inventory import TEST_GLOBS
 from weigh_snapshot import git
 
 PYTEST = ["-m", "pytest", "-p", "no:randomly", "-p", "no:cacheprovider", "-p", "weigh_pytest_plugin"]
-# Paths inside the repo that the coverage run leaves out.
-OMIT = (".venv/**", "venv/**", "tests/**", "test/**", "test_*.py", "*_test.py", "conftest.py")
+# Paths inside the repo that the coverage run leaves out: environments, and the test files.
+OMIT = (".venv/**", "venv/**") + TEST_GLOBS
 # pytest exit codes of a run that executed its tests: all passed, some failed.
 RAN = (0, 1)
 

@@ -3,7 +3,7 @@ import os
 import re
 from itertools import combinations
 
-from weigh_inventory import TEST_FILE
+from weigh_inventory import is_test
 
 OVERLAP_JACCARD = 0.9
 
@@ -21,7 +21,7 @@ def contexts_regex(cases, eligible=None):
 
 def _relative(path, repo):
     rel = os.path.relpath(path, repo) if os.path.isabs(path) else path
-    return None if TEST_FILE.search(rel) else rel
+    return None if is_test(rel) else rel
 
 
 def per_test(report, arcs, repo):
