@@ -26,15 +26,22 @@ function drawMap(parent) {
   const near = picked ? new Map(picked.similar) : new Map();
   const svg = document.createElementNS(NS, 'svg');
   parent.appendChild(svg);
-  // tests with the same coverage share a place: spread them on a ring wide enough that no two of them touch
-  const groups = new Map();
-  const at = (d) => d.x.toFixed(3) + ',' + d.y.toFixed(3);
-  data.map.forEach((d) => groups.set(at(d), [...(groups.get(at(d)) || []), d]));
-  const dots = data.map.map((d) => {
-    const g = groups.get(at(d)), a = 2 * Math.PI * g.indexOf(d) / g.length;
-    const ring = g.length > 1 ? 15 / Math.sin(Math.PI / g.length) : 0;
-    return { d, cx: 20 + d.x * 360 + ring * Math.cos(a), cy: 20 + d.y * 260 + ring * Math.sin(a), r: 4 + Math.min(10, d.runtime * 4) };
-  });
+  // tests with the same or nearly the same coverage land on or near one place: push apart each pair of dots that
+  // overlaps until none does, so every dot stays clickable; same data, same pushes, same map on every load
+  // ponytail: all pairs per pass, quadratic; a spatial grid if maps of thousands of dots get slow
+  const dots = data.map.map((d) => ({ d, cx: 20 + d.x * 360, cy: 20 + d.y * 260, r: 4 + Math.min(10, d.runtime * 4) }));
+  for (let pass = 0, moved = true; moved && pass < 200; pass++) {
+    moved = false;
+    dots.forEach((a, i) => dots.slice(i + 1).forEach((b, k) => {
+      const dx = b.cx - a.cx, dy = b.cy - a.cy, dist = Math.hypot(dx, dy), gap = a.r + b.r + 2;
+      if (dist >= gap) return;
+      // dots on one spot part along an angle fixed by their order
+      const angle = dist > 1e-9 ? Math.atan2(dy, dx) : 2.39996 * (i + k + 1), push = (gap - dist) / 2 + 0.01;
+      a.cx -= push * Math.cos(angle); a.cy -= push * Math.sin(angle);
+      b.cx += push * Math.cos(angle); b.cy += push * Math.sin(angle);
+      moved = true;
+    }));
+  }
   // the view grows to hold every ring, at one unit per pixel so sizes keep their meaning
   const x0 = Math.min(0, ...dots.map((o) => o.cx - o.r - 2)), y0 = Math.min(0, ...dots.map((o) => o.cy - o.r - 2));
   const w = Math.max(400, ...dots.map((o) => o.cx + o.r + 2)) - x0, h = Math.max(300, ...dots.map((o) => o.cy + o.r + 2)) - y0;
