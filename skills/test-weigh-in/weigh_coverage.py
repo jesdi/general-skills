@@ -109,12 +109,12 @@ def _axis(b, others, n):
     return [x * max(lam, 0) ** 0.5 for x in v]
 
 
-def similarity_map(coverage):
-    """Dots for the map: [{test, x, y, similar: [[other, jaccard >= 0.6]]}], x and y in 0..1.
+def similarity_map(tests):
+    """Dots for the map, one per test given: [{test, x, y, similar: [[other, jaccard >= 0.6]]}], x and y in 0..1.
     Placement is classical MDS of 1 - similarity from a fixed start, so it is the same on every load."""
     # ponytail: dense n x n, fine for hundreds of tests; sample or bucket if suites of thousands get slow
-    nodes = list(coverage)
-    sets = [_items({"coverage": coverage[n]}) for n in nodes]
+    nodes = list(tests)
+    sets = [_items(tests[n]) for n in nodes]
     n = len(nodes)
     if not n:
         return []
