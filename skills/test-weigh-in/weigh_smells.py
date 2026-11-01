@@ -47,22 +47,30 @@ def _from_test_module(node):
     return is_test((node.module or "").replace(".", "/") + ".py")
 
 
+def _scope_nodes(nodes):
+    """The nodes of a scope's statements in source order, not those inside the functions and classes it defines."""
+    for n in nodes:
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            yield from _scope_nodes(ast.iter_child_nodes(n))
+
+
 def _module_privates(tree):
-    """Private names the module imports from a non-test module."""
+    """Private names the module imports, at module scope, from a non-test module."""
     found = set()
-    for n in ast.walk(tree):
+    for n in _scope_nodes(tree.body):
         if isinstance(n, ast.ImportFrom) and not _from_test_module(n):
             found |= {a.asname or a.name for a in n.names if _private(a.name)}
     return found
 
 
-def _module_aliases(tree):
-    """{name bound by an import: the dotted module or object it names}."""
+def _aliases(nodes):
+    """{name bound by an import among nodes: the dotted module or object it names}; a later import wins."""
     found = {}
-    for n in ast.walk(tree):
+    for n in nodes:
         if isinstance(n, ast.Import):
-            found.update({a.asname: a.name for a in n.names if a.asname})
-            found.update({a.name.split(".")[0]: a.name.split(".")[0] for a in n.names if not a.asname})
+            for a in n.names:
+                found[a.asname or a.name.split(".")[0]] = a.name if a.asname else a.name.split(".")[0]
         elif isinstance(n, ast.ImportFrom):
             found.update({a.asname or a.name: f"{n.module}.{a.name}" if n.module else a.name for a in n.names})
     return found
@@ -77,12 +85,23 @@ def _test_owned(owner, aliases):
     return head in aliases and is_test(".".join(filter(None, (aliases[head], rest))).replace(".", "/") + ".py")
 
 
+def _conjuncts(test):
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
+        return [c for v in test.values for c in _conjuncts(v)]
+    return [test]
+
+
+def _reads_mock(expr):
+    return any(isinstance(a, ast.Attribute) and a.attr in MOCK_ATTRS for a in ast.walk(expr))
+
+
 def _assertion(n):
     """"plain", "mock" or None: the one classification of an assertion, shared by every rule that looks for one."""
     if isinstance(n, ast.Expr):
         return _assertion(n.value)
     if isinstance(n, ast.Assert):
-        return "mock" if any(isinstance(a, ast.Attribute) and a.attr in MOCK_ATTRS for a in ast.walk(n.test)) else "plain"
+        # `assert result == x and sender.call_count == 1` checks a result too
+        return "plain" if not all(_reads_mock(c) for c in _conjuncts(n.test)) else "mock"
     if isinstance(n, (ast.With, ast.AsyncWith)):
         return "plain" if any(isinstance(i.context_expr, ast.Call) and _dotted(i.context_expr.func) in RAISES for i in n.items) else None
     if isinstance(n, ast.Call):
@@ -184,7 +203,8 @@ def _body_hash(func):
     return hashlib.sha1(ast.dump(body).encode()).hexdigest()
 
 
-def smells_of(func, module_privates, aliases):
+def smells_of(func, module_privates, module_aliases):
+    aliases = {**module_aliases, **_aliases(ast.walk(func))}
     kinds = {_assertion(n) for n in ast.walk(func)}
     plain, mock, private = "plain" in kinds, "mock" in kinds, False
     mocks = 0
@@ -209,27 +229,41 @@ def smells_of(func, module_privates, aliases):
                              ("Swallowed exception", _swallows(func)), ("Real sleep", _sleeps(func))) if has]
 
 
-def _test_functions(tree):
-    """{"Class::name" or "name": function}, by the qualification pytest gives a test; a later definition wins, as in Python."""
-    found = {}
+def _definitions(tree):
+    """({"Class::name" or "name": function}, {"Class": (enclosing prefix, class)}), by the qualification pytest gives;
+    a later definition wins, as in Python."""
+    functions, classes = {}, {}
 
     def visit(body, prefix):
         for st in body:
             if isinstance(st, ast.ClassDef):
+                classes[prefix + st.name] = (prefix, st)
                 visit(st.body, f"{prefix}{st.name}::")
             elif isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                found[prefix + st.name] = st
+                functions[prefix + st.name] = st
 
     visit(tree.body, "")
-    return found
+    return functions, classes
 
 
-def _resolve(module, qualified):
-    """The function of a test: by its full qualification, else (a test inherited from a base class) the last one of its name."""
-    if qualified in module["functions"]:
-        return module["functions"][qualified]
-    name = qualified.split("::")[-1]
-    return next((f for q, f in reversed(module["functions"].items()) if q.split("::")[-1] == name), None)
+def _resolve(module, qualified, seen=frozenset()):
+    """The function of a test: by its full qualification, else the method its class inherits from a base class
+    defined in the module, bases searched depth first (None when the base lives in another module)."""
+    functions, classes = module["functions"], module["classes"]
+    if qualified in functions:
+        return functions[qualified]
+    cls, _, name = qualified.rpartition("::")
+    if cls not in classes or cls in seen:
+        return None
+    prefix, node = classes[cls]
+    # ponytail: depth-first, not C3; differs only for diamond hierarchies
+    for base in node.bases:
+        dotted = _dotted(base).replace(".", "::")
+        owner = next((q for q in (prefix + dotted, dotted) if q in classes), None)
+        found = owner and _resolve(module, f"{owner}::{name}", seen | {cls})
+        if found:
+            return found
+    return None
 
 
 def find_smells(repo, tests, ruff=()):
@@ -244,7 +278,9 @@ def find_smells(repo, tests, ruff=()):
         if path not in modules:
             try:
                 tree = ast.parse((repo / path).read_text(errors="replace"))
-                modules[path] = {"functions": _test_functions(tree), "privates": _module_privates(tree), "aliases": _module_aliases(tree)}
+                functions, classes = _definitions(tree)
+                modules[path] = {"functions": functions, "classes": classes, "privates": _module_privates(tree),
+                                 "aliases": _aliases(_scope_nodes(tree.body))}
             except (OSError, SyntaxError, ValueError):
                 modules[path] = None
         module = modules[path]
