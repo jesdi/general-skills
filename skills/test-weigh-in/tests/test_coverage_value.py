@@ -50,6 +50,15 @@ def test_a_branch_of_a_multi_line_condition_counts_as_unique(tmp_path, home, cac
     assert true["unique_coverage"] > 0
 
 
+@pytest.mark.parametrize("arg", ["a, b", "$HOME"])
+def test_a_test_id_with_a_comma_or_a_dollar_name_keeps_its_coverage(tmp_path, home, cache, arg):
+    # coverage splits its config lists at commas and expands $NAME there: the context regex must survive both
+    tests = ("import pytest\nfrom demo.flag import flag\n\n\n"
+             f"@pytest.mark.parametrize('arg', [{arg!r}])\ndef test_odd(arg):\n    flag(True)\n")
+    data = run(tmp_path, home, cache, {"demo/flag.py": FLAG, "tests/test_odd.py": tests}, "tests/test_odd.py")
+    assert data["tests"]["tests/test_odd.py::test_odd"]["coverage"] == {"demo/flag.py": [2, 3, 4]}
+
+
 def test_an_expected_failure_keeps_its_coverage(tmp_path, home, cache):
     tests = ("import pytest\nfrom demo.flag import flag\n\n\n@pytest.mark.xfail\ndef test_xfail():\n"
              "    flag(False)\n    assert False\n")
