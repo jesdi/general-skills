@@ -42,7 +42,7 @@ def smelly(snap, smell):
 
 def test_check_and_expect_helpers_are_assertions(snap):
     assert snap["tests"][T + "test_check"]["outcome"] == "passed"
-    assert smelly(snap, "No assertion") == {"TestA::test_board", "TestOther::test_inherited"}
+    assert smelly(snap, "No assertion") == {"TestA::test_board", "TestOther::test_inherited", "TestDiamond::test_diamond"}
 
 
 def test_call_count_and_call_args_assertions_are_interaction_only_and_one_beside_a_result_check_is_not(snap):

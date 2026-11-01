@@ -3,8 +3,9 @@
 rules_suite adds tests/conftest.py, demo/_queue.py, data/app.json, tests/test_rules.py and tests/test_maint_rules.py.
 Expected smells by test of test_rules.py:
   No assertion:     TestA::test_board (TestB::test_board, same name, asserts),
-                    TestOther::test_inherited (TestChild::test_inherited, from Base, asserts)
-  Interaction-only: test_call_count, test_call_args (test_mixed also asserts on a result)
+                    TestOther::test_inherited (TestChild::test_inherited, from Base, asserts),
+                    TestDiamond::test_diamond (Python takes it from DRight, which does not assert; DBase does)
+  Interaction-only: test_call_count, test_call_args (test_mixed and test_tuple_mixed also assert on a result)
   Mock-heavy:       test_setattr_4 (4 monkeypatch.setattr; test_setattr_3 has 3)
   Private access:   test_module_private (demo._queue._requeue through a module alias),
                     test_local_private (the same through a function-local alias `module`)
@@ -99,6 +100,13 @@ def test_mixed():
     assert result == "1" and sender.send.call_count == 1
 
 
+def test_tuple_mixed():
+    sender = MagicMock()
+    result = board.render(1)
+    sender.send(result)
+    assert (result, sender.send.call_count) == ("1", 1)
+
+
 class TestA:
     def test_board(self):
         board.render(1)
@@ -120,6 +128,24 @@ class TestOther:
 
 
 class TestChild(Base):
+    pass
+
+
+class DBase:
+    def test_diamond(self):
+        assert board.render(1) == "1"
+
+
+class DLeft(DBase):
+    pass
+
+
+class DRight(DBase):
+    def test_diamond(self):
+        board.render(1)
+
+
+class TestDiamond(DLeft, DRight):
     pass
 '''
 

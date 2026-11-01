@@ -86,8 +86,13 @@ def _test_owned(owner, aliases):
 
 
 def _conjuncts(test):
+    """The checks of an assert: each side of an `and`, each pair of an equality of two tuples or lists."""
     if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
         return [c for v in test.values for c in _conjuncts(v)]
+    sides = [test.left, *test.comparators] if isinstance(test, ast.Compare) else []
+    if (len(sides) == 2 and isinstance(test.ops[0], ast.Eq) and all(isinstance(e, (ast.Tuple, ast.List)) for e in sides)
+            and len(sides[0].elts) == len(sides[1].elts)):
+        return [c for a, b in zip(sides[0].elts, sides[1].elts) for c in _conjuncts(ast.Compare(a, [ast.Eq()], [b]))]
     return [test]
 
 
@@ -246,24 +251,31 @@ def _definitions(tree):
     return functions, classes
 
 
-def _resolve(module, qualified, seen=frozenset()):
-    """The function of a test: by its full qualification, else the method its class inherits from a base class
-    defined in the module, bases searched depth first (None when the base lives in another module)."""
+def _mro(classes, cls, seen=frozenset()):
+    """Python's method resolution order (C3) of a class of the module; a base defined elsewhere ends its line."""
+    if cls not in classes or cls in seen:
+        return [cls]
+    prefix, node = classes[cls]
+    bases = [next((q for q in (prefix + d, d) if q in classes), d)
+             for d in (_dotted(b).replace(".", "::") for b in node.bases)]
+    lines, order = [_mro(classes, b, seen | {cls}) for b in bases] + [bases], [cls]
+    while lines := [line for line in lines if line]:
+        head = next((line[0] for line in lines if not any(line[0] in other[1:] for other in lines)), None)
+        if head is None:  # no consistent order: Python refuses to create such a class
+            return order + [c for line in lines for c in line if c not in order]
+        order.append(head)
+        lines = [line[1:] if line[0] == head else line for line in lines]
+    return order
+
+
+def _resolve(module, qualified):
+    """The function of a test: by its full qualification, else the method its class inherits, found in Python's
+    resolution order among the classes of the module (None when the method lives in another module)."""
     functions, classes = module["functions"], module["classes"]
     if qualified in functions:
         return functions[qualified]
     cls, _, name = qualified.rpartition("::")
-    if cls not in classes or cls in seen:
-        return None
-    prefix, node = classes[cls]
-    # ponytail: depth-first, not C3; differs only for diamond hierarchies
-    for base in node.bases:
-        dotted = _dotted(base).replace(".", "::")
-        owner = next((q for q in (prefix + dotted, dotted) if q in classes), None)
-        found = owner and _resolve(module, f"{owner}::{name}", seen | {cls})
-        if found:
-            return found
-    return None
+    return next((functions[f"{c}::{name}"] for c in _mro(classes, cls)[1:] if f"{c}::{name}" in functions), None)
 
 
 def find_smells(repo, tests, ruff=()):
