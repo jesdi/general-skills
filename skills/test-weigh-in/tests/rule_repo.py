@@ -5,7 +5,8 @@ Expected smells by test of test_rules.py:
   No assertion:     TestA::test_board (TestB::test_board, same name, asserts),
                     TestOther::test_inherited (TestChild::test_inherited, from Base, asserts),
                     TestDiamond::test_diamond (Python takes it from DRight, which does not assert; DBase does)
-  Interaction-only: test_call_count, test_call_args (test_mixed and test_tuple_mixed also assert on a result)
+  Interaction-only: test_call_count, test_call_args (test_mixed and test_tuple_mixed also assert on a result;
+                    test_empty_equal compares two empty lists, a plain check)
   Mock-heavy:       test_setattr_4 (4 monkeypatch.setattr; test_setattr_3 has 3)
   Private access:   test_module_private (demo._queue._requeue through a module alias),
                     test_local_private (the same through a function-local alias `module`)
@@ -105,6 +106,12 @@ def test_tuple_mixed():
     result = board.render(1)
     sender.send(result)
     assert (result, sender.send.call_count) == ("1", 1)
+
+
+def test_empty_equal():
+    sender = MagicMock()
+    sender.send(board.render(1))
+    assert [] == []
 
 
 class TestA:

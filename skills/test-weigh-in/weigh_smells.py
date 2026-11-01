@@ -91,7 +91,7 @@ def _conjuncts(test):
         return [c for v in test.values for c in _conjuncts(v)]
     sides = [test.left, *test.comparators] if isinstance(test, ast.Compare) else []
     if (len(sides) == 2 and isinstance(test.ops[0], ast.Eq) and all(isinstance(e, (ast.Tuple, ast.List)) for e in sides)
-            and len(sides[0].elts) == len(sides[1].elts)):
+            and len(sides[0].elts) == len(sides[1].elts) > 0):
         return [c for a, b in zip(sides[0].elts, sides[1].elts) for c in _conjuncts(ast.Compare(a, [ast.Eq()], [b]))]
     return [test]
 
