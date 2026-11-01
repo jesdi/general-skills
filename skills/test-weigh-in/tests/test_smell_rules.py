@@ -42,10 +42,10 @@ def smelly(snap, smell):
 
 def test_check_and_expect_helpers_are_assertions(snap):
     assert snap["tests"][T + "test_check"]["outcome"] == "passed"
-    assert smelly(snap, "No assertion") == {"TestA::test_board"}
+    assert smelly(snap, "No assertion") == {"TestA::test_board", "TestOther::test_inherited"}
 
 
-def test_call_count_and_call_args_assertions_are_interaction_only(snap):
+def test_call_count_and_call_args_assertions_are_interaction_only_and_one_beside_a_result_check_is_not(snap):
     assert smelly(snap, "Interaction-only") == {"test_call_count", "test_call_args"}
 
 
@@ -54,12 +54,18 @@ def test_four_monkeypatch_setattr_calls_are_mock_heavy_and_three_are_not(snap):
 
 
 def test_a_private_name_read_through_a_conftest_module_is_not_private_access(snap):
-    assert smelly(snap, "Private access") == {"test_module_private"}
+    assert smelly(snap, "Private access") == {"test_module_private", "test_local_private"}
 
 
 def test_same_named_methods_of_two_classes_are_checked_apart(snap):
     a, b = snap["tests"][T + "TestA::test_board"], snap["tests"][T + "TestB::test_board"]
     assert "No assertion" in a["smells"] and "No assertion" not in b["smells"]
+
+
+def test_an_inherited_test_is_its_base_class_method_not_a_same_named_one(snap):
+    child = snap["tests"][T + "TestChild::test_inherited"]
+    assert child["outcome"] == "passed"
+    assert "No assertion" not in child["smells"] and child["lines"] == 2
 
 
 def maint(snap, smell):

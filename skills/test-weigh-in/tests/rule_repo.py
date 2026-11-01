@@ -2,12 +2,15 @@
 
 rules_suite adds tests/conftest.py, demo/_queue.py, data/app.json, tests/test_rules.py and tests/test_maint_rules.py.
 Expected smells by test of test_rules.py:
-  No assertion:     TestA::test_board (TestB::test_board, same name, asserts)
-  Interaction-only: test_call_count, test_call_args
+  No assertion:     TestA::test_board (TestB::test_board, same name, asserts),
+                    TestOther::test_inherited (TestChild::test_inherited, from Base, asserts)
+  Interaction-only: test_call_count, test_call_args (test_mixed also asserts on a result)
   Mock-heavy:       test_setattr_4 (4 monkeypatch.setattr; test_setattr_3 has 3)
-  Private access:   test_module_private (demo._queue._requeue through a module alias)
+  Private access:   test_module_private (demo._queue._requeue through a module alias),
+                    test_local_private (the same through a function-local alias `module`)
 No smell: test_check (check_equal from conftest), test_expect (expect_equal from conftest),
-test_conftest_private (conftest._conftest_private through `from tests import conftest`).
+test_conftest_private (conftest._conftest_private through `from tests import conftest`),
+test_local_conftest (the same through a function-local alias `module`, defined after test_local_private).
 Expected smells by test of test_maint_rules.py:
   Mystery guest:    test_guest_name (open(path), path a literal), test_guest_path (Path from a literal, then read_text)
   Eager test:       test_eager_helpers (3 act-then-check_equal cycles)
@@ -79,6 +82,23 @@ def test_module_private():
     assert queue._requeue() == 1
 
 
+def test_local_private():
+    import demo._queue as module
+    assert module._requeue() == 1
+
+
+def test_local_conftest():
+    from tests import conftest as module
+    assert module._conftest_private() == 1
+
+
+def test_mixed():
+    sender = MagicMock()
+    result = board.render(1)
+    sender.send(result)
+    assert result == "1" and sender.send.call_count == 1
+
+
 class TestA:
     def test_board(self):
         board.render(1)
@@ -87,6 +107,20 @@ class TestA:
 class TestB:
     def test_board(self):
         assert board.render(1) == "1"
+
+
+class Base:
+    def test_inherited(self):
+        assert board.render(1) == "1"
+
+
+class TestOther:
+    def test_inherited(self):
+        board.render(1)
+
+
+class TestChild(Base):
+    pass
 '''
 
 MAINT = """from pathlib import Path
