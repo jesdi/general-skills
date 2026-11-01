@@ -89,8 +89,10 @@ def coverage_run(python, repo, overlay, pytest_args, eligible):
 
 
 def _report(coverage, rc, data, out, regex):
+    # coverage splits a config list at each comma and expands $NAME in it: write both as regex escapes that
+    # match the same characters (re.escape writes a literal $ as \$)
     with open(rc, "w") as f:
-        f.write("[report]\ncontexts = " + regex + "\n")
+        f.write("[report]\ncontexts = " + regex.replace(",", r"\x2c").replace(r"\$", r"\x24") + "\n")
     proc = coverage("-m", "coverage", "json", "--show-contexts", f"--data-file={data}", "-o", out, "-q")
     if "No data to report" in proc.stdout + proc.stderr:  # no source file ran at all: measured, and empty
         return {"files": {}, "totals": {"covered_branches": 0, "num_branches": 0}}
