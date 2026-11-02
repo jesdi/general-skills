@@ -125,7 +125,7 @@ def test_shipped_rules_are_version_1_and_hashed(run, home):
 
 
 @pytest.fixture
-def browser_log(tmp_path):
+def browser_log(tmp_path, monkeypatch):
     """Fake browser launchers first on PATH: each one appends its name to the log when run."""
     bin_dir, log = tmp_path / "fakebin", tmp_path / "opened.log"
     bin_dir.mkdir()
@@ -133,11 +133,9 @@ def browser_log(tmp_path):
         script = bin_dir / name
         script.write_text(f'#!/bin/sh\necho {name} "$@" >> "{log}"\n')
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
-    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
-    os.environ["BROWSER"] = str(bin_dir / "open")
-    yield log
-    os.environ.pop("BROWSER")
-    os.environ["PATH"] = os.environ["PATH"].split(os.pathsep, 1)[1]
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("BROWSER", str(bin_dir / "open"))
+    return log
 
 
 def test_no_open_opens_no_browser_and_prints_the_dashboard_path(run, home, browser_log):

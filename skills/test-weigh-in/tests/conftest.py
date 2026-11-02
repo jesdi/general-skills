@@ -5,10 +5,14 @@ import pytest
 from fixture_repo import build_repo, weigh
 
 
-@pytest.fixture(autouse=True)
-def no_browser(monkeypatch):
-    """The engine opens the dashboard unless --no-open: a no-op BROWSER keeps every test from opening a real tab."""
-    monkeypatch.setenv("BROWSER", "true")
+@pytest.fixture(autouse=True, scope="session")
+def no_browser():
+    """The engine opens the dashboard unless --no-open: a no-op BROWSER keeps every test from opening a real tab.
+
+    Session scope sets it before any module fixture runs the engine."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("BROWSER", "true")
+        yield
 
 
 @pytest.fixture(scope="session")
