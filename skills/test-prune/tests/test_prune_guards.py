@@ -225,7 +225,7 @@ def test_finish_refuses_a_head_moved_since_the_proof_and_stays_for_the_rerun(tar
 
 
 def test_new_commits_for_a_reverted_item_are_refused(target):
-    drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
+    drift_ids = ["x_apply_drift__mutmut_4"]  # DRIFT_TEST kills only _2: nothing proven, reverted
     target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
                    groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(drift_ids)})
     target.ok("strengthen-start")

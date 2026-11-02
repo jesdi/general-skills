@@ -138,8 +138,10 @@ when `prune` exited 1 (the status keeps that failure, so the job still goes red)
    commit, or a change to a function or a created file another open item already changed: each
    test belongs to one item, so write another item's tests as new functions. Leave the tree clean.
 3. `strengthen-verify` rejects commits without a known trailer or outside `backend/tests/`, then
-   proves each item on a cold run: every named id survived on the base and is killed on the
-   head. Unproven items are reverted and closed: a later commit for a closed item is refused.
+   proves each item on a cold run: an item kills a named id that survived on the base and is
+   killed on the head. An item that kills at least one is proven for those ids only; the PR
+   lists the rest under "Still surviving". An item that kills none is reverted and closed: a
+   later commit for a closed item is refused.
    When `git revert` conflicts with a later item's lines, the item's functions are removed or
    restored instead and its created files deleted; an item that changed anything else in a file
    still stops the run with exit 1. It

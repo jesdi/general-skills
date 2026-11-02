@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from prune_harness import PRUNE_BRANCH, REFERENCE, STRENGTHEN_BRANCH, R, arg, cand, case
+from prune_harness import PRUNE_BRANCH, REFERENCE, STRENGTHEN_BRANCH, R, arg, cand, case, lines_with
 
 COMPUTE = "rebalancer.compute_trades"
 DRIFT = "rebalancer.apply_drift"
@@ -144,8 +144,8 @@ def test_a_commit_naming_two_items_is_rejected_with_a_recovery_the_agent_can_run
     target.ok("strengthen-verify")
 
 
-def test_strengthen_item_whose_ids_are_not_all_killed_is_reverted_and_left_out_of_the_pr(target):
-    drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
+def test_strengthen_item_that_kills_none_of_its_ids_is_reverted_and_left_out_of_the_pr(target):
+    drift_ids = ["x_apply_drift__mutmut_4"]  # DRIFT_TEST kills only _2
     target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
                    groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(drift_ids)})
 
@@ -285,10 +285,10 @@ def test_strengthen_commit_refuses_an_unknown_item(target):
 
 
 def test_strengthen_commit_refuses_an_item_strengthen_verify_closed(target):
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     write_test(target, DRIFT_TEST)
     target.ok("strengthen-commit", "--item", DRIFT)
-    target.ok("strengthen-verify")  # DRIFT_TEST leaves _4 alive: the item is reverted and closed
+    target.ok("strengthen-verify")  # DRIFT_TEST kills none of its ids (_4): reverted, closed
     assert target.read_state("strengthen.json")["status"][DRIFT] == "reverted"
     write_test(target, DRIFT_TEST.replace("_new", "_again"))
     refused(target, DRIFT, "reverted")
@@ -342,7 +342,7 @@ def test_strengthen_commit_refuses_a_head_off_the_strengthen_start(target):
 
 def test_an_unproven_item_committed_before_a_proven_one_is_removed_without_a_conflict(target):
     # Both items append to the end of one file: `git revert` of the earlier one conflicts.
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     for item, source in [(DRIFT, DRIFT_TEST), (COMPUTE, COMPUTE_TEST)]:
         write_test(target, source)
         target.ok("strengthen-commit", "--item", item)
@@ -360,7 +360,7 @@ def test_an_unproven_item_committed_before_a_proven_one_is_removed_without_a_con
 
 
 def test_a_new_file_left_without_tests_by_a_closed_item_is_deleted(target):
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     new_file = "backend/tests/test_drift_new.py"
     (target.root / new_file).write_text("from services.rebalancer import apply_drift\n" + DRIFT_TEST)
     write_test(target, DRIFT_TEST.replace("_new", "_also"))  # the append COMPUTE's append conflicts with
@@ -379,13 +379,13 @@ def test_a_new_file_left_without_tests_by_a_closed_item_is_deleted(target):
 
 
 def test_a_test_a_closed_item_changed_is_free_for_another_item(target):
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     path = target.root / TESTS_FILE
     path.write_text(path.read_text().rstrip("\n") + "\n        assert apply_drift(-0.5) == 0\n")
     target.ok("strengthen-commit", "--item", DRIFT)
     write_test(target, COMPUTE_TEST)
     target.ok("strengthen-commit", "--item", COMPUTE)
-    target.ok("strengthen-verify")  # DRIFT leaves _4 alive: reverted, test_drift_scales is back to the base
+    target.ok("strengthen-verify")  # DRIFT kills none of its ids: reverted, test_drift_scales is back to the base
     scales = "        assert apply_drift(base) <= base\n"
     path.write_text(path.read_text().replace(scales, scales + "        assert apply_drift(base) >= 0\n"))
 
@@ -404,7 +404,7 @@ def test_strengthen_commit_refuses_a_test_another_item_already_changed(target):
 
 
 def test_a_test_the_closed_item_changed_is_restored_under_a_later_items_test(target):
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     path = target.root / TESTS_FILE
     path.write_text(path.read_text().rstrip("\n") + "\n        assert apply_drift(-0.5) == 0\n")
     target.ok("strengthen-commit", "--item", DRIFT)
@@ -418,7 +418,7 @@ def test_a_test_the_closed_item_changed_is_restored_under_a_later_items_test(tar
 
 
 def test_a_closed_item_that_changed_more_than_functions_still_stops_the_run_on_a_conflict(target):
-    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    two_items(target, drift_ids=("x_apply_drift__mutmut_4",))
     write_test(target, "LIMIT = -0.5\n" + DRIFT_TEST)
     target.ok("strengthen-commit", "--item", DRIFT)
     write_test(target, COMPUTE_TEST)
@@ -432,7 +432,7 @@ def test_a_closed_item_that_changed_more_than_functions_still_stops_the_run_on_a
 
 
 def test_the_strengthen_pr_is_one_commit_on_the_base_with_a_trailer_per_kept_item(target):
-    drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
+    drift_ids = ["x_apply_drift__mutmut_4"]  # DRIFT_TEST kills only _2: nothing proven, reverted
     target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
                    groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(drift_ids)})
 
@@ -448,3 +448,25 @@ def test_the_strengthen_pr_is_one_commit_on_the_base_with_a_trailer_per_kept_ite
     source = target.show(head, TESTS_FILE)
     assert "def test_compute_trades_rounding(targets):" in source and "test_apply_drift_new" not in source
     assert baseline_at(target, head)["services/rebalancer.py"]["survivors"] == 18
+
+
+def test_an_item_that_kills_some_of_its_ids_is_kept_for_those_and_reports_the_rest(target):
+    # DRIFT_TEST kills _2 but not _4: keep the test and its proven kill, drop only the claim on _4.
+    drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
+    target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
+                   groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(drift_ids)})
+
+    finish = strengthen(target, [(COMPUTE, COMPUTE_TEST), (DRIFT, DRIFT_TEST)], [COMPUTE, DRIFT])
+
+    assert finish.returncode == 0, finish.stdout + finish.stderr
+    assert target.read_state("strengthen.json")["status"][DRIFT] == "proven"
+    head = target.remote_sha(STRENGTHEN_BRANCH)
+    assert "def test_apply_drift_new():" in target.show(head, TESTS_FILE)
+    assert baseline_at(target, head)["services/rebalancer.py"]["survivors"] == 17
+    body = strengthen_pr(target)
+    kills = lines_with(body, "test_apply_drift_new")
+    assert "x_apply_drift__mutmut_2" in kills and "x_apply_drift__mutmut_4" not in kills
+    proof = body[body.index("## Proof per mutant id"):body.index("## Still surviving")]
+    assert "x_apply_drift__mutmut_2" in proof and "x_apply_drift__mutmut_4" not in proof
+    still = lines_with(body, "x_apply_drift__mutmut_4")
+    assert "still survives" in still and DRIFT in still

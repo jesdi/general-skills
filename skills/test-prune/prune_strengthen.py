@@ -1,5 +1,5 @@
-"""strengthen-start, strengthen-verify and strengthen-finish: prove each strengthen item kills the
-mutant ids it names (surviving on the base, killed on the head), keep what the reviewer accepts,
+"""strengthen-start, strengthen-verify and strengthen-finish: prove which of the mutant ids each
+strengthen item names it kills (surviving on the base, killed on the head), keep what the reviewer accepts,
 lower the baseline, and (unattended) open the strengthen PR from the base commit."""
 from __future__ import annotations
 
@@ -229,13 +229,15 @@ def _close(repo, st: dict, item_id: str, commits: list, status: str, why: str) -
 
 
 def item_proof(base_codes: dict, codes: dict, item: dict, has_commits: bool) -> dict:
-    """Per mutant id the base and head exit codes; proven when the item names at least one id, every id
-    survived on the base and is killed on the head, and the item has a commit."""
+    """Per mutant id the base and head exit codes, and the ids the item kills: survived on the base,
+    killed on the head. Proven when it kills at least one and has a commit; the ids it does not kill
+    are no longer its claim, so one survivor no longer throws away the kills it did make."""
     module = item.get("module")
     mutants = {m: {"base": base_codes.get(module, {}).get(m), "head": codes.get(module, {}).get(m)}
                for m in item["mutant_ids"]}
-    proven = has_commits and bool(mutants) and all(e["base"] in SURVIVING and e["head"] in KILLED for e in mutants.values())
-    return {"status": "proven" if proven else "unproven", "module": module, "mutants": mutants}
+    kills = [m for m, e in mutants.items() if e["base"] in SURVIVING and e["head"] in KILLED]
+    return {"status": "proven" if has_commits and kills else "unproven", "module": module,
+            "mutants": mutants, "kills": kills}
 
 
 def _judge(ctx, base: dict, st: dict, proof: dict, commits: list) -> list:
@@ -261,7 +263,7 @@ def _prove(ctx, base: dict, st: dict) -> dict:
         failing = _judge(ctx, base, st, proof, commits)
         for item_id in failing:
             _close(ctx.repo, st, item_id, commits, "reverted",
-                   "Its mutant ids are not all killed on the head while surviving on the base.")
+                   "None of its mutant ids is killed on the head while surviving on the base.")
             proof[item_id]["status"] = "reverted"
         ctx.state.save("strengthen.json", st)
         ctx.state.save("strengthen-proof.json", {"start": st["start"], "head": ctx.repo.head(), "items": proof})
@@ -273,7 +275,8 @@ def _proof_lines(proof: dict) -> list:
     lines = []
     for item_id, entry in proof.items():
         lines.append(f"- {item_id}: {entry['status']}")
-        lines += [f"    {m}: base exit code {e['base']}, head exit code {e['head']}" for m, e in entry["mutants"].items()]
+        lines += [f"    {m}: base exit code {e['base']}, head exit code {e['head']}"
+                  f"{'' if m in entry.get('kills', ()) else ' (not killed)'}" for m, e in entry["mutants"].items()]
     return lines
 
 
@@ -317,23 +320,32 @@ def _guard_equivalents(repo, base: dict, new: dict) -> None:
                    + "; ".join(f"{m}: {', '.join(ids)}" for m, ids in gained.items()))
 
 
-def _test_lines(items: dict, accepted: list, tests: dict) -> list:
+def _test_lines(items: dict, accepted: list, tests: dict, proof: dict) -> list:
     lines = []
     for item_id in accepted:
-        ids = items[item_id]["mutant_ids"]
+        ids = proof[item_id]["kills"]
         kills = f"now kills {', '.join(f'`{m}`' for m in ids)}" if ids else f"adds `{items[item_id]['assertion']}`"
         lines += [f"- `{t}` ({item_id}) {kills}" for t in tests[item_id]] or [f"- {item_id}: {kills}"]
     return lines
+
+
+def _still_surviving(accepted: list, proof: dict) -> list:
+    """The ids a kept item named but does not kill: still open for a later run."""
+    left = [f"- `{m}` ({i}) still survives: its tests do not kill it" for i in accepted
+            for m in proof[i]["mutants"] if m not in proof[i]["kills"]]
+    return ["", "## Still surviving", ""] + left if left else []
 
 
 def _body(base: dict, st: dict, proof: dict, accepted: list, tests: dict, new: dict, ratchet: str, out: dict) -> str:
     lines = [f"Strengthened tests from `{base['branch']}` at {base['commit'][:12]}, independent of the prune PR. "
              "Every mutant id listed survived the cold mutation run on the base and is killed by the cold run on "
              "this branch.", "", "## Changed tests", ""]
-    lines += _test_lines({i["id"]: i for i in st["items"]}, accepted, tests)
+    lines += _test_lines({i["id"]: i for i in st["items"]}, accepted, tests, proof)
     lines += ["", "## Proof per mutant id", ""]
     lines += [f"- `{m}` ({proof[i]['module']}): survived the base run (exit code {e['base']}), killed on this "
-              f"branch (exit code {e['head']})" for i in accepted for m, e in proof[i]["mutants"].items()]
+              f"branch (exit code {e['head']})" for i in accepted for m, e in proof[i]["mutants"].items()
+              if m in proof[i]["kills"]]
+    lines += _still_surviving(accepted, proof)
     lines += ["", "## Baseline survivors", ""]
     lines += [f"- {m}: {base['baseline'].get(m, {}).get('survivors', 'new')} → {e['survivors']}" for m, e in new.items()]
     lines += ["", "## Mutation ratchet", "", "```", ratchet.strip(), "```"]
