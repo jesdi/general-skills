@@ -54,3 +54,27 @@ def score(rules, values, red=False):
             "partial": not values.keys() >= pillar["metrics"].keys() or (red and bool(VALUE_METRICS & pillar["metrics"].keys())),
         }
     return metrics, pillars
+
+
+MIN_EVIDENCE = 2
+
+
+def kill_matrix(tests, passing, mutation):
+    """Flag each test hollow, subsumed or insufficient_evidence from the sampled kill matrix, and return the one metric the
+    matrix alone owns, subsumed_in_kill_matrix; the metrics the flags change are computed from them afterwards. Only
+    passing tests are judged.
+
+    On its lines = a sampled mutant whose line the test executes. Subsumed = at least 2 of them, it kills some, and one
+    other test kills all it kills."""
+    matrix = mutation["matrix"]
+    for node, test in tests.items():
+        covered = {rel: set(lines) for rel, lines in test.get("coverage", {}).items()}
+        on = [m for m, info in mutation["mutants"].items() if info["line"] in covered.get(info["file"], ())] if node in passing else []
+        kills = {m for m in on if node in matrix[m]}
+        enough = len(on) >= MIN_EVIDENCE
+        every = {m for m in matrix if node in matrix[m]}
+        test["insufficient_evidence"] = node in passing and not enough
+        test["hollow"] = enough and not kills
+        test["subsumed"] = enough and bool(kills) and any(
+            other != node and every <= {m for m in matrix if other in matrix[m]} for other in {t for row in matrix.values() for t in row})
+    return {"subsumed_in_kill_matrix": 100 * sum(t["subsumed"] for t in tests.values()) / (len(tests) or 1)}
