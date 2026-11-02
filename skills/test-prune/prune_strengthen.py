@@ -398,6 +398,13 @@ def _lower_baseline(repo, base: dict) -> tuple[str, dict]:
     return "\n".join(ratchet_lines({"output": ratchet})), new
 
 
+def _squash(repo, start: str, title: str, accepted: list) -> str:
+    """One commit on start with the proven head's tree: the PR shows the kept tests and the baseline,
+    not the per-item commits and reverts the proof needed."""
+    message = "\n\n".join([title, "\n".join(f"{TRAILER}: {i}" for i in accepted)])
+    return repo.git("commit-tree", "HEAD^{tree}", "-p", start, "-m", message).strip()
+
+
 def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
     repo = ctx.repo
     proof, accepted = _keep_accepted(ctx, base, st, reviews)
@@ -412,9 +419,9 @@ def _finish(ctx, base: dict, st: dict, reviews: dict, unattended: bool) -> int:
         ctx.state.emit(f"Strengthen commits kept on {repo.branch()}:\n\n{body}")
         return 0
     branch = _branch(ctx)
-    repo.git("branch", branch)
-    repo.push(branch)
     title = f"test: strengthen {len(accepted)} weak spot{'' if len(accepted) == 1 else 's'}"
+    repo.git("branch", branch, _squash(repo, st["start"], title, accepted))
+    repo.push(branch)
     path, body = ctx.state.save_body("strengthen-pr.md", body)
     url = repo.open_pr(base["branch"], branch, title, path)
     ctx.state.emit(f"Opened {url}\n\n{body}")

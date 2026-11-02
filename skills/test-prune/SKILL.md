@@ -156,9 +156,10 @@ when `prune` exited 1 (the status keeps that failure, so the job still goes red)
    `strengthen-verify` after any new commit); on any exit 2 HEAD stays at the proven head, so fix
    the input and rerun it. It reverts rejected items, reruns the proof cold, runs
    `make mutation-check`, `make test`, `make crap` and `make mutation-baseline`, refuses a
-   baseline that gained an equivalent id, and commits the lower baseline. Unattended it opens the
-   strengthen PR listing each changed test with the ids it now kills; interactive it leaves the
-   commits on the current branch for the human.
+   baseline that gained an equivalent id, and commits the lower baseline. Unattended it pushes the
+   result as one commit on the base (a `Test-Prune-Item` trailer per kept item; the per-item
+   commits and reverts stay local) and opens the strengthen PR listing each changed test with the
+   ids it now kills; interactive it leaves the commits on the current branch for the human.
 
 ## Report
 

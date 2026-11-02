@@ -429,3 +429,22 @@ def test_a_closed_item_that_changed_more_than_functions_still_stops_the_run_on_a
     assert verify.returncode == 1, verify.stdout + verify.stderr
     assert f"changes {TESTS_FILE} beyond adding or editing functions" in verify.stdout + verify.stderr
     assert target.git("status", "--porcelain").strip() == ""
+
+
+def test_the_strengthen_pr_is_one_commit_on_the_base_with_a_trailer_per_kept_item(target):
+    drift_ids = ["x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"]
+    target.prepare([cand(case(1))], accept=[COMPUTE, DRIFT],
+                   groups={COMPUTE: strengthen_group(IDS_7_9), DRIFT: strengthen_group(drift_ids)})
+
+    finish = strengthen(target, [(DRIFT, DRIFT_TEST), (COMPUTE, COMPUTE_TEST)], [COMPUTE])
+
+    assert finish.returncode == 0, finish.stdout + finish.stderr
+    head = target.remote_sha(STRENGTHEN_BRANCH)
+    assert target.git("rev-list", f"{target.base}..{head}").split() == [head]
+    assert target.git("rev-parse", f"{head}^").strip() == target.base
+    assert target.git("log", "-1", "--format=%s", head).strip() == "test: strengthen 1 weak spot"
+    trailers = target.git("log", "-1", "--format=%(trailers:key=Test-Prune-Item,valueonly)", head).split()
+    assert trailers == [COMPUTE]
+    source = target.show(head, TESTS_FILE)
+    assert "def test_compute_trades_rounding(targets):" in source and "test_apply_drift_new" not in source
+    assert baseline_at(target, head)["services/rebalancer.py"]["survivors"] == 18
