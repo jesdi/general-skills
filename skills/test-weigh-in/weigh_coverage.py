@@ -52,9 +52,12 @@ def per_test(report, arcs, repo):
 
 
 def branch_percent(report):
-    """Branch arcs only: percent_covered mixes statements in. No branches: the metric is not measured."""
+    """Branch arcs only: percent_covered mixes statements in. Code that ran without a branch misses none (100); with no
+    code run at all, the metric is not measured."""
     totals = report["totals"]
-    return 100 * totals["covered_branches"] / totals["num_branches"] if totals["num_branches"] else None
+    if not totals["num_branches"]:
+        return 100.0 if report["files"] else None
+    return 100 * totals["covered_branches"] / totals["num_branches"]
 
 
 def valued(tests):

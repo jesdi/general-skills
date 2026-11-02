@@ -310,9 +310,12 @@ def find_smells(repo, tests, ruff=()):
 
 
 def smell_values(tests):
+    """Percentages of all tests. A hollow test is one with no assertion or one the kill matrix found hollow; an
+    insufficient-evidence test counts in no Economy metric (duplicate clusters)."""
     n = len(tests) or 1
     share = lambda smell: 100 * sum(smell in t["smells"] for t in tests.values()) / n
-    return {"hollow_tests": share("No assertion"), "duplicate_clusters": share("Duplicate body"),
+    return {"hollow_tests": 100 * sum("No assertion" in t["smells"] or t.get("hollow", False) for t in tests.values()) / n,
+            "duplicate_clusters": 100 * sum("Duplicate body" in t["smells"] and not t.get("insufficient_evidence") for t in tests.values()) / n,
             "smelly_tests": 100 * sum(any(s.startswith(MAINTAINABILITY_SMELLS) for s in t["smells"]) for t in tests.values()) / n,
             "long_tests": 100 * sum(t["lines"] > LONG_TEST_LINES for t in tests.values()) / n, "mock_heavy": share("Mock-heavy"),
             "interaction_only": share("Interaction-only"), "private_access": share("Private access")}

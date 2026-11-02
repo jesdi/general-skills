@@ -32,6 +32,7 @@ def write_dashboard(home, data, rules):
     page = {
         "banner": f"{failing} tests are failing" if failing > 1 else "1 test is failing" if failing else None,
         "skipped": [n for n, t in data["tests"].items() if t["outcome"] == "skipped"],
+        "insufficient": [n for n, t in data["tests"].items() if t.get("insufficient_evidence")],
         "overlaps": data.get("overlaps", []),
         "map": [{**d, "runtime": data["tests"][d["test"]]["duration"], "unique": data["tests"][d["test"]].get("unique_coverage", 0)}
                 for d in similarity_map(valued(data["tests"]))],

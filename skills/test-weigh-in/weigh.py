@@ -17,7 +17,7 @@ from weigh_ruff import violations
 from weigh_runs import aggregate, coverage_run, plain_run
 from weigh_smells import find_smells, smell_values
 from weigh_mutation import refuse_dirty, refuse_red, remove_stale, score as mutation_score
-from weigh_score import feedback_values, score
+from weigh_score import feedback_values, kill_matrix, score
 from weigh_snapshot import commit_state, home_dir, write_snapshot
 
 
@@ -27,6 +27,7 @@ def main(argv=None):
     parser.add_argument("--pytest-args", default="")
     parser.add_argument("--python")
     parser.add_argument("--mutation", action="store_true")
+    parser.add_argument("--matrix-per-function", default="3", type=lambda v: None if v == "all" else int(v))
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
     repo = Path(args.repo_path).resolve()
@@ -50,7 +51,7 @@ def main(argv=None):
             refuse_red(run["cases"])
         eligible = {n for n, t in aggregate(run["cases"]).items() if t["outcome"] == "passed"}
         cov = coverage_run(python, repo, overlay, args.pytest_args, eligible)
-        mutation = mutation_score(python, repo) if args.mutation else None
+        mutation = mutation_score(python, repo, overlay, args.matrix_per_function) if args.mutation else None
     except SetupError as e:
         print(f"weigh.py: {e}", file=sys.stderr)
         return 1
@@ -64,11 +65,11 @@ def main(argv=None):
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
     if mutation is not None:
-        values["mutation_score"] = mutation
+        values["mutation_score"] = mutation["score"]
+        values["pseudo_tested_functions"] = mutation["pseudo_tested"]
     found, clusters = find_smells(repo, tests, violations(repo, rules.get("ruff", {}).get("pt", [])))
     for node, info in found.items():
         tests[node].update(info)
-    values.update(smell_values(tests))
     if inventory["source_lines"]:
         values["test_source_ratio"] = inventory["test_lines"] / inventory["source_lines"]
     # failing, erroring and skipped tests cost (runtime, lines, smells) but give no value: no coverage, overlap or uniqueness
@@ -84,9 +85,13 @@ def main(argv=None):
         test["unique_coverage"] = unique.get(node, 0)
     if branch_percent(cov["value_report"]) is not None:
         values["branch_coverage"] = branch_percent(cov["value_report"])
+    if mutation is not None:  # flags tests before the metrics they change are computed
+        values.update(kill_matrix(tests, passing, mutation))
+    values.update(smell_values(tests))
     if passing:
-        # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage
-        values["no_unique_coverage"] = 100 * sum(not u for u in unique.values()) / len(tests)
+        # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage, and an
+        # insufficient-evidence test counts in no Economy metric
+        values["no_unique_coverage"] = 100 * sum(not u and not tests[n].get("insufficient_evidence") for n, u in unique.items()) / len(tests)
     test_files = brittleness(repo, test_file_sources(tests))
     if (percent := brittle_percent(test_files)) is not None:
         values["brittle_test_files"] = percent
@@ -101,6 +106,8 @@ def main(argv=None):
         "inventory": inventory,
         "metrics": metrics,
         "pillars": pillars,
+        "mutation_settings": {"mutation": args.mutation, "matrix_per_function": "all" if args.matrix_per_function is None else args.matrix_per_function},
+        **({"mutation": {k: mutation[k] for k in ("sampled", "mutants", "matrix")}} if mutation is not None else {}),
         "tests": tests,
         "test_files": test_files,
         "overlaps": overlaps(passing),
