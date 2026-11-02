@@ -134,11 +134,15 @@ when `prune` exited 1 (the status keeps that failure, so the job still goes red)
    `python3 <skill-dir>/prune.py strengthen-commit --item <item id>` as soon as its tests are
    written. Never run `git commit` yourself: the command commits every change under
    `backend/tests/` with the item's trailer, one item per call (an item may take several calls),
-   and refuses an unknown or closed item, any change outside `backend/tests/`, or nothing to
-   commit. Leave the tree clean.
+   and refuses an unknown or closed item, any change outside `backend/tests/`, nothing to
+   commit, or a change to a function or a created file another open item already changed: each
+   test belongs to one item, so write another item's tests as new functions. Leave the tree clean.
 3. `strengthen-verify` rejects commits without a known trailer or outside `backend/tests/`, then
    proves each item on a cold run: every named id survived on the base and is killed on the
-   head. Unproven items are reverted and closed: a later commit for a closed item is refused. It
+   head. Unproven items are reverted and closed: a later commit for a closed item is refused.
+   When `git revert` conflicts with a later item's lines, the item's functions are removed or
+   restored instead and its created files deleted; an item that changed anything else in a file
+   still stops the run with exit 1. It
    writes `<state>/strengthen-proof.json`, including the proven head. On failure HEAD stays
    where the commits are (detached, unattended): fix and rerun. A rejection names the recovery
    that needs no reset: `git checkout <start>`, then commit each item again with

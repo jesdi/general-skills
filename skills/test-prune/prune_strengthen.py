@@ -8,7 +8,7 @@ import re
 
 from prune_repo import KILLED, SURVIVING, BadInput, Fail, Repo, ratchet_lines
 from prune_review import check_reviews, equivalents_section, suggestions_section
-from prune_source import test_sources
+from prune_source import delete_tests, functions, restore_functions, skeleton, test_sources
 
 TRAILER = "Test-Prune-Item"
 # Read from the whole message, not git's trailer block: git only takes trailers from the
@@ -105,6 +105,47 @@ def _commits(repo, st: dict) -> list:
     return [(sha, items[0]) for sha, items, _ in history]
 
 
+def _units(path: str, before: str | None, after: str | None) -> set:
+    """What one file change claims for its item: every function it adds or changes, or the whole file
+    when the change creates it, deletes it, or the file is not Python the AST can split. No two items
+    may claim the same unit, so closing one item never has to undo another's lines."""
+    if before is None or after is None or not path.endswith(".py"):
+        return {path}
+    try:
+        old, new = functions(before), functions(after)
+    except SyntaxError:
+        return {path}
+    return {"::".join((path, *classes, name)) for classes, name in old.keys() | new.keys()
+            if old.get((classes, name)) != new.get((classes, name))}
+
+
+def _paths(repo, sha: str) -> list:
+    return repo.git("diff-tree", "--no-commit-id", "--name-only", "-r", sha).split()
+
+
+def _owners(repo, st: dict) -> dict:
+    """unit → the still-open item whose commits claimed it first."""
+    owners: dict = {}
+    for sha, items, paths in _history(repo, st["start"]):
+        if len(items) == 1 and st["status"].get(items[0]) in ("open", "proven"):
+            for path in paths:
+                for unit in _units(path, repo.show(f"{sha}^", path), repo.show(sha, path)):
+                    owners.setdefault(unit, items[0])
+    return owners
+
+
+def _require_unowned(repo, st: dict, item_id: str, changed: list) -> None:
+    owners = _owners(repo, st)
+    for path in changed:
+        current = repo.root / path
+        after = current.read_text() if current.is_file() else None
+        for unit in sorted(_units(path, repo.show("HEAD", path), after) | {path}):
+            owner = owners.get(unit, item_id)
+            if owner != item_id:
+                raise BadInput(f"{unit} is {owner}'s: each test and each created file belongs to one item. "
+                               f"Discard this change, or write {item_id}'s tests as new functions.")
+
+
 def strengthen_commit(ctx) -> int:
     """Commit the working tree's changes under backend/tests/ as one commit for one open item; the
     trailer is written here, so a commit can never name two items."""
@@ -119,10 +160,54 @@ def strengthen_commit(ctx) -> int:
         raise BadInput("changes outside backend/tests/, discard them first:\n" + "\n".join(outside))
     if not changed:
         raise BadInput(f"nothing to commit for {item_id}: write its tests under backend/tests/ first")
+    _require_unowned(repo, st, item_id, changed)
     repo.git("add", "-A", "--", "backend/tests/")
     repo.git("commit", "-q", "-m", f"test: strengthen {item_id}", "-m", f"{TRAILER}: {item_id}")
     ctx.state.emit(repo.head())
     return 0
+
+
+def _confined(repo, item_id: str, shas: list) -> dict:
+    """{path: (text before the item's first commit to it, the item's function keys in it)}; Fail when a
+    commit changes anything but functions and imports, or deletes a function."""
+    out: dict = {}
+    for sha in shas:
+        for path in _paths(repo, sha):
+            before, after = repo.show(f"{sha}^", path), repo.show(sha, path)
+            entry = out.setdefault(path, (before, set()))
+            if entry[0] is None:
+                continue  # the item created the file: removing the file undoes it whole
+            keys = _function_change(path, before, after)
+            if keys is None:
+                raise Fail(f"reverting strengthen item {item_id} conflicts with a later item's commits, and "
+                           f"{sha[:12]} changes {path} beyond adding or editing functions and imports")
+            entry[1].update(keys)
+    return out
+
+
+def _function_change(path: str, before: str | None, after: str | None) -> set | None:
+    """The function keys a commit's change to path adds or edits, or None when it changes anything but
+    functions and imports, or deletes a function."""
+    if before is None or after is None or not path.endswith(".py") or skeleton(before) != skeleton(after):
+        return None
+    old, new = functions(before), functions(after)
+    return None if old.keys() - new.keys() else {k for k in new if old.get(k) != new[k]}
+
+
+def _remove(repo, item_id: str, shas: list) -> None:
+    """Undo the item's commits by function instead of by line, when a later item's lines sit next to
+    its own and `git revert` conflicts: delete the functions it added, restore the ones it changed, and
+    remove the files it created. Every unit is the item's alone (see _units)."""
+    for path, (before, keys) in _confined(repo, item_id, shas).items():
+        current = repo.show("HEAD", path)
+        if before is None:
+            if current is not None:
+                repo.git("rm", "-q", "--", path)
+            continue
+        old = functions(before)
+        text = restore_functions(current, before, {k for k in keys if k in old})
+        (repo.root / path).write_text(delete_tests(text, {k for k in keys if k not in old}))
+        repo.git("add", "--", path)
 
 
 def _revert(repo, item_id: str, commits: list, why: str) -> None:
@@ -131,7 +216,7 @@ def _revert(repo, item_id: str, commits: list, why: str) -> None:
         return
     if repo.run_git("revert", "--no-commit", *shas).returncode:
         repo.run_git("revert", "--abort")
-        raise Fail(f"reverting strengthen item {item_id} conflicts with a later item's commits")
+        _remove(repo, item_id, shas[::-1])
     repo.git("commit", "-q", "--allow-empty", "-m", f"Revert test-prune item {item_id}", "-m", why,
              "-m", f"{TRAILER}: {item_id}")
 

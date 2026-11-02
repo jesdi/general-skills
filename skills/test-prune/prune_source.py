@@ -220,6 +220,54 @@ def delete_tests(source: str, targets: set[tuple[tuple[str, ...], str]]) -> str:
     return "".join(line for number, line in enumerate(lines, 1) if number not in removed)
 
 
+def _function_nodes(body: list[ast.stmt], scope: tuple[str, ...] = ()):
+    """((classes, name), node) for every function defined at module or class level."""
+    for node in body:
+        if isinstance(node, FUNCS):
+            yield (scope, node.name), node
+        elif isinstance(node, ast.ClassDef):
+            yield from _function_nodes(node.body, scope + (node.name,))
+
+
+def functions(source: str) -> dict[tuple[tuple[str, ...], str], str]:
+    """(classes, name) → source (decorators included) of every module- or class-level function."""
+    lines = source.splitlines()
+    return {key: "\n".join(lines[_span(node)[0] - 1:node.end_lineno])
+            for key, node in _function_nodes(ast.parse(source).body)}
+
+
+def _strip(body: list[ast.stmt]) -> list[ast.stmt]:
+    kept = []
+    for node in body:
+        if isinstance(node, (*FUNCS, ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.ClassDef):
+            node.body = _strip(node.body)
+            if not (node.body[1:] if ast.get_docstring(node) is not None else node.body):
+                continue
+        kept.append(node)
+    return kept
+
+
+def skeleton(source: str) -> str:
+    """The file without its functions, its imports and the classes that leave only a docstring: equal
+    before and after a change confined to functions and imports."""
+    tree = ast.parse(source)
+    tree.body = _strip(tree.body)
+    return ast.dump(tree)
+
+
+def restore_functions(source: str, before: str, keys: set) -> str:
+    """source with each function in keys ({(classes, name)}) put back to its text in before."""
+    old = functions(before)
+    lines = source.splitlines(keepends=True)
+    spans = sorted(((_span(node), key) for key, node in _function_nodes(ast.parse(source).body) if key in keys),
+                   reverse=True)
+    for (start, end), key in spans:
+        lines[start - 1:end] = [old[key] + "\n"]
+    return "".join(lines)
+
+
 def test_sources(source: str) -> dict[str, str]:
     """`[Class::]name` → source of every test function in the file."""
     out: dict[str, str] = {}

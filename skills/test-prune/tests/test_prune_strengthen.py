@@ -336,3 +336,96 @@ def test_strengthen_commit_refuses_a_head_off_the_strengthen_start(target):
     target.git("commit", "-q", "-m", "unrelated root")
     write_test(target, COMPUTE_TEST)
     refused(target, COMPUTE, "does not descend")
+
+
+# --- closing an item removes its tests, even under a later item's commits ---------------------
+
+def test_an_unproven_item_committed_before_a_proven_one_is_removed_without_a_conflict(target):
+    # Both items append to the end of one file: `git revert` of the earlier one conflicts.
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    for item, source in [(DRIFT, DRIFT_TEST), (COMPUTE, COMPUTE_TEST)]:
+        write_test(target, source)
+        target.ok("strengthen-commit", "--item", item)
+
+    target.ok("strengthen-verify")
+
+    assert target.read_state("strengthen.json")["status"] == {COMPUTE: "proven", DRIFT: "reverted"}
+    source = (target.root / TESTS_FILE).read_text()
+    assert "def test_compute_trades_rounding(targets):" in source
+    assert "test_apply_drift_new" not in source
+    assert source == target.show(target.base, TESTS_FILE) + "\n\n" + COMPUTE_TEST.strip("\n") + "\n"
+    trailers = target.git("log", "-1", "--format=%(trailers:key=Test-Prune-Item,valueonly)").split()
+    assert trailers == [DRIFT]
+    assert target.git("status", "--porcelain").strip() == ""
+
+
+def test_a_new_file_left_without_tests_by_a_closed_item_is_deleted(target):
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    new_file = "backend/tests/test_drift_new.py"
+    (target.root / new_file).write_text("from services.rebalancer import apply_drift\n" + DRIFT_TEST)
+    write_test(target, DRIFT_TEST.replace("_new", "_also"))  # the append COMPUTE's append conflicts with
+    target.ok("strengthen-commit", "--item", DRIFT)
+    (target.root / new_file).write_text((target.root / new_file).read_text() + COMPUTE_TEST)
+    refused(target, COMPUTE, new_file)  # another item's file
+    target.git("checkout", "-q", "--", new_file)
+    write_test(target, COMPUTE_TEST)
+    target.ok("strengthen-commit", "--item", COMPUTE)
+
+    target.ok("strengthen-verify")
+
+    assert not (target.root / new_file).exists()
+    assert (target.root / TESTS_FILE).read_text() == \
+        target.show(target.base, TESTS_FILE) + "\n\n" + COMPUTE_TEST.strip("\n") + "\n"
+
+
+def test_a_test_a_closed_item_changed_is_free_for_another_item(target):
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    path = target.root / TESTS_FILE
+    path.write_text(path.read_text().rstrip("\n") + "\n        assert apply_drift(-0.5) == 0\n")
+    target.ok("strengthen-commit", "--item", DRIFT)
+    write_test(target, COMPUTE_TEST)
+    target.ok("strengthen-commit", "--item", COMPUTE)
+    target.ok("strengthen-verify")  # DRIFT leaves _4 alive: reverted, test_drift_scales is back to the base
+    scales = "        assert apply_drift(base) <= base\n"
+    path.write_text(path.read_text().replace(scales, scales + "        assert apply_drift(base) >= 0\n"))
+
+    target.ok("strengthen-commit", "--item", COMPUTE)
+
+
+def test_strengthen_commit_refuses_a_test_another_item_already_changed(target):
+    two_items(target)
+    write_test(target, COMPUTE_TEST)
+    target.ok("strengthen-commit", "--item", COMPUTE)
+    path = target.root / TESTS_FILE
+    path.write_text(path.read_text().replace("== 0.267", "== 0.267  # pinned"))
+    write_test(target, DRIFT_TEST)
+
+    refused(target, DRIFT, f"test_compute_trades_rounding is {COMPUTE}'s")
+
+
+def test_a_test_the_closed_item_changed_is_restored_under_a_later_items_test(target):
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    path = target.root / TESTS_FILE
+    path.write_text(path.read_text().rstrip("\n") + "\n        assert apply_drift(-0.5) == 0\n")
+    target.ok("strengthen-commit", "--item", DRIFT)
+    write_test(target, COMPUTE_TEST)
+    target.ok("strengthen-commit", "--item", COMPUTE)
+
+    target.ok("strengthen-verify")
+
+    assert target.read_state("strengthen.json")["status"] == {COMPUTE: "proven", DRIFT: "reverted"}
+    assert path.read_text() == target.show(target.base, TESTS_FILE) + "\n\n" + COMPUTE_TEST.strip("\n") + "\n"
+
+
+def test_a_closed_item_that_changed_more_than_functions_still_stops_the_run_on_a_conflict(target):
+    two_items(target, drift_ids=("x_apply_drift__mutmut_2", "x_apply_drift__mutmut_4"))
+    write_test(target, "LIMIT = -0.5\n" + DRIFT_TEST)
+    target.ok("strengthen-commit", "--item", DRIFT)
+    write_test(target, COMPUTE_TEST)
+    target.ok("strengthen-commit", "--item", COMPUTE)
+
+    verify = target.run("strengthen-verify")
+
+    assert verify.returncode == 1, verify.stdout + verify.stderr
+    assert f"changes {TESTS_FILE} beyond adding or editing functions" in verify.stdout + verify.stderr
+    assert target.git("status", "--porcelain").strip() == ""
