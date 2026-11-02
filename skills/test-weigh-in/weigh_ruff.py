@@ -4,15 +4,14 @@ import subprocess
 from pathlib import Path
 
 from weigh_env import UV, SetupError
-from weigh_inventory import is_test
+from weigh_inventory import is_test, python_files
 
 RUFF = "ruff==0.17.3"
 
 
 def violations(repo, codes):
     """--isolated: the target repo's own ruff configuration changes nothing; uv runs ruff outside the repo's environment."""
-    tracked = subprocess.run(["git", "ls-files", "-z", "*.py"], cwd=repo, capture_output=True, text=True, check=True).stdout
-    files = [f for f in tracked.split("\0") if f and is_test(f)]
+    files = [f for f in python_files(repo) if is_test(f)]
     if not files or not codes:
         return []
     proc = subprocess.run([UV, "tool", "run", "--isolated", RUFF, "check", "--isolated", "--no-cache", "--select", ",".join(codes),
