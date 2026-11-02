@@ -91,6 +91,10 @@ function render() {
       el('h3', 'Skipped tests', details);
       data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
     }
+    if (p.key === 'economy' && data.insufficient.length) {
+      el('h3', 'Insufficient evidence (fewer than 2 sampled mutants on their lines)', details);
+      data.insufficient.forEach((n) => el('p', n, details));
+    }
   } else if (tab === 'Worst tests') {
     p.worst.forEach((w) => el('p', w.test + ' (' + w.reason + ')', details).setAttribute('data-testid', 'worst-test'));
   } else if (tab === 'Smells') {
