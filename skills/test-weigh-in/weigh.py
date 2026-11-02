@@ -1,5 +1,6 @@
 """Weigh a repo's test suite: `weigh.py <repo-path> [--pytest-args "..."]`."""
 import argparse
+import signal
 import sys
 import webbrowser
 from pathlib import Path
@@ -8,13 +9,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weigh_env import SetupError, build_overlay, check_versions, find_interpreter
 from weigh_coverage import branch_percent, overlaps, per_test, test_file_sources, unique_coverage, valued
-from weigh_git import brittle_percent, brittleness
+from weigh_git import brittle_percent, brittleness, is_repo
 from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
 from weigh_rules import RulesError, load as load_rules
 from weigh_ruff import violations
 from weigh_runs import aggregate, coverage_run, plain_run
 from weigh_smells import find_smells, smell_values
+from weigh_mutation import refuse_dirty, refuse_red, remove_stale, score as mutation_score
 from weigh_score import feedback_values, score
 from weigh_snapshot import commit_state, home_dir, write_snapshot
 
@@ -24,6 +26,7 @@ def main(argv=None):
     parser.add_argument("repo_path")
     parser.add_argument("--pytest-args", default="")
     parser.add_argument("--python")
+    parser.add_argument("--mutation", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     args = parser.parse_args(argv)
     repo = Path(args.repo_path).resolve()
@@ -33,13 +36,21 @@ def main(argv=None):
         print(f"weigh.py: {e}", file=sys.stderr)
         return 2
     try:
+        if args.mutation:
+            remove_stale()  # before any refusal: an interrupted run's worktree never outlives the next start
+            if not is_repo(repo):
+                raise SetupError("--mutation needs a git repository with a commit")
+            refuse_dirty(repo)
         home = home_dir(repo)
         python = find_interpreter(repo, args.python)
         check_versions(python)
         overlay = build_overlay(python)
         run = plain_run(python, repo, overlay, args.pytest_args)
+        if args.mutation:
+            refuse_red(run["cases"])
         eligible = {n for n, t in aggregate(run["cases"]).items() if t["outcome"] == "passed"}
         cov = coverage_run(python, repo, overlay, args.pytest_args, eligible)
+        mutation = mutation_score(python, repo) if args.mutation else None
     except SetupError as e:
         print(f"weigh.py: {e}", file=sys.stderr)
         return 1
@@ -52,6 +63,8 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
+    if mutation is not None:
+        values["mutation_score"] = mutation
     found, clusters = find_smells(repo, tests, violations(repo, rules.get("ruff", {}).get("pt", [])))
     for node, info in found.items():
         tests[node].update(info)
@@ -101,5 +114,13 @@ def main(argv=None):
     return 0
 
 
+def _terminate(signum, frame):
+    raise KeyboardInterrupt
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    signal.signal(signal.SIGTERM, _terminate)
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:  # the temporary worktree is removed on the way out
+        sys.exit(130)

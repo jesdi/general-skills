@@ -35,11 +35,11 @@ VALUE_METRICS = {"mutation_score", "branch_coverage", "pseudo_tested_functions",
 def score(rules, values, red=False):
     """Metrics {id: {value, score}} and pillars {key: {score, partial}}; unmeasured metrics are left out and the weights re-normalized.
 
-    The mutation tier does not run, so a pillar that gives partial weights uses them, and its metrics without one do not count.
+    Without the mutation tier (no mutation_score), a pillar that gives partial weights uses them, and its metrics without one do not count.
     With a red suite (a test that gives no value), every pillar using a value metric is partial (req 14)."""
     metrics, pillars = {}, {}
     for key, pillar in rules["pillars"].items():
-        partial_weights = any("partial_weight" in m for m in pillar["metrics"].values())
+        partial_weights = "mutation_score" not in values and any("partial_weight" in m for m in pillar["metrics"].values())
         scored = []
         for mid, m in pillar["metrics"].items():
             if mid in values:
