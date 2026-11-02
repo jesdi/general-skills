@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weigh_env import SetupError, build_overlay, check_versions, find_interpreter
-from weigh_coverage import branch_percent, overlaps, per_test, unique_coverage, valued
+from weigh_coverage import branch_percent, overlaps, per_test, test_file_sources, unique_coverage, valued
+from weigh_git import brittle_percent, brittleness
 from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
 from weigh_rules import RulesError, load as load_rules
@@ -73,7 +74,10 @@ def main(argv=None):
     if passing:
         # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage
         values["no_unique_coverage"] = 100 * sum(not u for u in unique.values()) / len(tests)
-    metrics, pillars = score(rules, values)
+    test_files = brittleness(repo, test_file_sources(tests))
+    if (percent := brittle_percent(test_files)) is not None:
+        values["brittle_test_files"] = percent
+    metrics, pillars = score(rules, values, red=len(passing) < len(tests))
     data = {
         "commit": commit,
         "dirty": dirty,
@@ -85,6 +89,7 @@ def main(argv=None):
         "metrics": metrics,
         "pillars": pillars,
         "tests": tests,
+        "test_files": test_files,
         "overlaps": overlaps(passing),
         "clusters": clusters,
     }

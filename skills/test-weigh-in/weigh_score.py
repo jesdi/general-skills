@@ -27,10 +27,16 @@ def feedback_values(tests, runtime):
     }
 
 
-def score(rules, values):
+# Metrics read from the tests that give value (coverage, its test-file mapping, the kill matrix): a red suite leaves them partial.
+VALUE_METRICS = {"mutation_score", "branch_coverage", "pseudo_tested_functions", "brittle_test_files", "no_unique_coverage",
+                 "subsumed_in_kill_matrix"}
+
+
+def score(rules, values, red=False):
     """Metrics {id: {value, score}} and pillars {key: {score, partial}}; unmeasured metrics are left out and the weights re-normalized.
 
-    The mutation tier does not run, so a pillar that gives partial weights uses them, and its metrics without one do not count."""
+    The mutation tier does not run, so a pillar that gives partial weights uses them, and its metrics without one do not count.
+    With a red suite (a test that gives no value), every pillar using a value metric is partial (req 14)."""
     metrics, pillars = {}, {}
     for key, pillar in rules["pillars"].items():
         partial_weights = any("partial_weight" in m for m in pillar["metrics"].values())
@@ -45,6 +51,6 @@ def score(rules, values):
         weight = sum(w for w, _ in scored)
         pillars[key] = {
             "score": sum(w * s for w, s in scored) / weight if weight else None,
-            "partial": not values.keys() >= pillar["metrics"].keys(),
+            "partial": not values.keys() >= pillar["metrics"].keys() or (red and bool(VALUE_METRICS & pillar["metrics"].keys())),
         }
     return metrics, pillars

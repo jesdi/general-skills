@@ -89,6 +89,22 @@ def overlaps(tests):
     return found
 
 
+MAP_SHARE = 0.2
+
+
+def test_file_sources(tests):
+    """{test file: sorted source files holding at least 20% of the lines its tests cover}."""
+    lines = {}
+    for node, t in tests.items():
+        for rel, covered in t.get("coverage", {}).items():
+            lines.setdefault(node.split("::", 1)[0], {}).setdefault(rel, set()).update(covered)
+    mapped = {}
+    for file, per_source in lines.items():
+        total = sum(map(len, per_source.values()))
+        mapped[file] = sorted(rel for rel, n in per_source.items() if len(n) >= MAP_SHARE * total)
+    return mapped
+
+
 MAP_SIMILAR = 0.6
 
 
