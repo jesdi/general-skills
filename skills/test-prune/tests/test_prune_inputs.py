@@ -61,14 +61,19 @@ def test_commit_problems_need_one_known_trailer_and_test_paths_only():
     assert commit_problems("a" * 40, [], [], {"m.f"})
 
 
-def test_item_proof_needs_survived_on_base_and_killed_on_head_per_id():
+def test_item_proof_keeps_each_id_that_survived_on_base_and_is_killed_on_head():
     item = {"module": "s.py", "mutant_ids": ["m1", "m2"]}
     base = {"s.py": {"m1": 0, "m2": 33}}
 
-    assert item_proof(base, {"s.py": {"m1": 1, "m2": 3}}, item, True)["status"] == "proven"
-    assert item_proof(base, {"s.py": {"m1": 1, "m2": 0}}, item, True)["status"] == "unproven"
-    assert item_proof(base, {"s.py": {"m1": 1, "m2": 3}}, item, False)["status"] == "unproven"
-    assert item_proof({"s.py": {"m1": 1, "m2": 0}}, {"s.py": {"m1": 1, "m2": 1}}, item, True)["status"] == "unproven"
+    def proof(base_codes, head_codes, has_commits=True):
+        p = item_proof(base_codes, {"s.py": head_codes}, item, has_commits)
+        return p["status"], p["kills"]
+
+    assert proof(base, {"m1": 1, "m2": 3}) == ("proven", ["m1", "m2"])
+    assert proof(base, {"m1": 1, "m2": 0}) == ("proven", ["m1"])  # m2 stays a survivor, m1 is kept
+    assert proof(base, {"m1": 0, "m2": 5}) == ("unproven", [])  # kills nothing it named
+    assert proof(base, {"m1": 1, "m2": 3}, has_commits=False) == ("unproven", ["m1", "m2"])
+    assert proof({"s.py": {"m1": 1, "m2": 0}}, {"m1": 1, "m2": 1}) == ("proven", ["m2"])  # m1 was never a survivor
 
 
 def test_changed_tests_lists_new_and_edited_tests():
