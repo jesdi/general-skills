@@ -144,14 +144,19 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   (`driver._risk`), so a risk that the diff does not handle is an unmet criterion under the usual round and cap rules.
 - A `--models` file may name only the roles of the skill's `models.json` (`driver_agents.load_models`): a removed
   role (`correctness`, `explorer`) or an unknown one stops the run before the preflight.
+- The preflight asks every entry of every list on each invocation and returns the lists without the entries that
+  failed. A role keeps going on what is left, so a provider out of credits stops no run; a role with no entry left
+  exits 3. Round 2 stays on the only implementer entry left (`driver_fixloop.entry`).
 - The full final review is three lens roles, `final-spec`, `final-correctness` and `final-structure`, with no model
   list. `driver_agents.LENSES` is the one table of a lens: the `source` of its findings, the method file it follows,
   whether its lines of the one lens prompt `prompts/final-lens.md` inline that file, and whether it runs on another
   provider. Its lines are `prompts/lens-<source>.md`, with `prompts/lens-copy.md` as `{copy}`. The entry, the
   prompt values (`driver_final._lens_values`), the precondition errors and the source tags read it, and `TIMEOUTS` and
   `READ_ONLY` take its roles. `driver_agents.lens_entries` takes the entries from `final-reviewer`, and
-  `other_provider_entries` keeps a lens, its rerun too, on another provider than the first implementer entry;
-  `load_models` refuses a list with none. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
+  `correctness_entries` keeps a lens, its rerun too, on another provider than the first implementer entry;
+  `load_models` refuses a list with none. When the preflight (`driver_agents.preflight`) leaves none, because each
+  such entry failed it, the lens falls back to the `final-reviewer` entries that are left, and `run.skipped` (ledger
+  and PR body) says so. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
   twice stops the round only after every lens has ended, with one `final-ticket-blocked` question for each such lens
   (`Run.ask` adds them to one stop); an accepted lens report is kept in `run.final.lenses` with

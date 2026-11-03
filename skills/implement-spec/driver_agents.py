@@ -106,9 +106,15 @@ def other_provider_entry(models: dict[str, list[str]]) -> str:
     return next(iter(other_provider_entries(models)), "")
 
 
+def correctness_entries(models: dict[str, list[str]]) -> list[str]:
+    """The entries of the correctness lens and the scoped review: the other-provider ones, or, when none passed the
+    preflight, the whole `final-reviewer` list, so a provider out of credits stops no run (the PR body says so)."""
+    return other_provider_entries(models) or models["final-reviewer"]
+
+
 def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:
     """The entries a lens of the final review runs on, the first one first, its rerun on the next one."""
-    return other_provider_entries(models) if LENSES[role].other_provider else models["final-reviewer"]
+    return correctness_entries(models) if LENSES[role].other_provider else models["final-reviewer"]
 
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:
@@ -127,18 +133,17 @@ def _entry_errors(models: dict[str, list[str]]) -> list[str]:
     return [error for error in found if error]
 
 
-def used_entries(models: dict[str, list[str]]) -> list[str]:
-    """Each entry the driver can start an agent on: the first of each role, the other-provider entry and the second
-    implementer entry (fix round 2)."""
-    firsts = (entries[0] for entries in models.values())
-    return sorted({*firsts, other_provider_entry(models), *models["implementer"][1:2]})
-
-
-def preflight(models: dict[str, list[str]]) -> list[str]:
-    """Give one short prompt to each used entry, all at the same time. Returns one error per entry whose CLI fails:
-    a model that the account cannot use, a CLI that is not signed in."""
+def preflight(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[str], list[str]]:
+    """Give one short prompt to every entry of every list, all at the same time. Returns (the lists without the
+    entries whose CLI failed: a model the account cannot use or is out of credits for, a CLI that is not signed in;
+    one error per role with no entry left; one sentence per skipped entry, and one more when no entry on another
+    provider than the implementer's first one is left)."""
+    entries = sorted({entry for role in models.values() for entry in role})
     with tempfile.TemporaryDirectory(prefix="implement-spec-preflight-") as folder:
         def check(index: int, entry: str) -> str:
+            cli = PROVIDERS[split(entry)[0]][0]
+            if not shutil.which(cli):
+                return f"{cli} is not on PATH"
             prompt, log = (Path(folder) / f"{index}{suffix}" for suffix in (".prompt.md", ".log"))
             prompt.write_text(PREFLIGHT)
             # A read-only command: the agent can change nothing, and codex writes its answer to the -o file.
@@ -147,12 +152,22 @@ def preflight(models: dict[str, list[str]]) -> list[str]:
             if code == 0:
                 return ""
             why = f"no answer in {PREFLIGHT_MINUTES} minutes" if code is None else f"exit {code}"
-            cli = PROVIDERS[split(entry)[0]][0]
-            return f"model entry {entry}: the {cli} CLI failed the preflight ({why}): {last_words(log)}"
+            return f"the {cli} CLI failed the preflight ({why}): {last_words(log)}"
 
-        entries = used_entries(models)
         with ThreadPoolExecutor(len(entries)) as pool:
-            return [error for error in pool.map(check, range(len(entries)), entries) if error]
+            failed = {entry: why for entry, why in zip(entries, pool.map(check, range(len(entries)), entries)) if why}
+    kept = {role: [entry for entry in role_entries if entry not in failed] for role, role_entries in models.items()}
+    errors = [f"{role}: every model entry failed the preflight: "
+              + "; ".join(f"model entry {entry}: {failed[entry]}" for entry in models[role])
+              for role, role_entries in kept.items() if not role_entries]
+    skipped = [f"Model entry {entry} is skipped for this invocation: {why}; each role that lists it goes on with its "
+               f"next entry ({', '.join(role for role in models if entry in models[role])})."
+               for entry, why in failed.items()]
+    if not errors and other_provider_entry(models) and not other_provider_entry(kept):
+        skipped.append(f"No final-reviewer entry on another provider than {kept['implementer'][0]} passed the "
+                       f"preflight: the correctness lens and the scoped review run on "
+                       f"{', '.join(kept['final-reviewer'])}, the implementer's provider.")
+    return kept, errors, skipped
 
 
 def last_words(log: Path) -> str:

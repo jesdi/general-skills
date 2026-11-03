@@ -417,7 +417,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
 def _scoped(run: Run, values: dict[str, str], tip: str, done: int) -> tuple[list[dict], set[str]]:
     """The scoped review after the fix batch, one `final-reviewer`. Returns (its findings, each with the source
     `final-reviewer`; the titles of the must-fix findings it resolved)."""
-    entries = driver_agents.other_provider_entries(run.models)
+    entries = driver_agents.correctness_entries(run.models)
     report = run.read_only(FINAL, ".", run.pr, tip, lambda: run.agent(Call(
         "final-reviewer", FINAL, ".", values, entry=entries[0], entries=entries, fix_round=done)))
     return ([{**finding, "source": "final-reviewer"} for finding in report["findings"]],
@@ -596,7 +596,9 @@ def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
         "map": "\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items()),
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
         "tip": tip, "onto": final["onto"], "tidied": final["tidied"],
-        "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed"})
+        "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed",
+        "skipped": "".join(f"\n  - {sentence}" for sentence in dict.fromkeys(run.state.read()["run"].get("skipped", [])))
+        or " none"})
 
 
 def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:

@@ -51,9 +51,9 @@ class Job:
 
 
 def entry(models: dict[str, list[str]], round: int) -> str:
-    """The implementer entry of a fix round: the second one for round 2."""
+    """The implementer entry of a fix round: the second one for round 2, or the only one the preflight left."""
     entries = models["implementer"]
-    return entries[1] if round >= 2 else entries[0]
+    return entries[1] if round >= 2 and len(entries) > 1 else entries[0]
 
 
 def _log_findings(number: str, findings: list[dict]) -> list[dict]:

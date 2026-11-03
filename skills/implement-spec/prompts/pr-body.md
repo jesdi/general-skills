@@ -17,3 +17,4 @@ One commit per ticket, in merge order:
 - Branch tip and reviewed tip: {tip}
 - Full review: {onto}..{tidied}
 - Scoped review after the fix batch: {scoped}
+- Model entries skipped after a failed preflight:{skipped}
