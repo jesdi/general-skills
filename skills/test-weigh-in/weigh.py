@@ -96,6 +96,10 @@ def main(argv=None):
     test_files = brittleness(repo, test_file_sources(tests))
     if (percent := brittle_percent(test_files)) is not None:
         values["brittle_test_files"] = percent
+    tier = "the mutation tier did not run"
+    unmeasured = {} if mutation is not None else {m: tier for m in ("mutation_score", "pseudo_tested_functions", "hollow_tests", "subsumed_in_kill_matrix")}
+    if "brittle_test_files" not in values:
+        unmeasured["brittle_test_files"] = "no source file maps to a test file" if is_repo(repo) else "no git history"
     metrics, pillars = score(rules, values, red=len(passing) < len(tests))
     data = {
         "commit": commit,
@@ -106,6 +110,7 @@ def main(argv=None):
         "rules": {"version": rules["version"], "sha256": rules["sha256"]},
         "inventory": inventory,
         "metrics": metrics,
+        "unmeasured": unmeasured,
         "pillars": pillars,
         "mutation_settings": {"mutation": args.mutation, "matrix_per_function": "all" if args.matrix_per_function is None else args.matrix_per_function},
         **({"mutation": {k: mutation[k] for k in ("sampled", "mutants", "matrix")}} if mutation is not None else {}),
