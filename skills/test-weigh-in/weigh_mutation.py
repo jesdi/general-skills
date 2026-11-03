@@ -105,7 +105,7 @@ def _failing(python, wt, env, mutant, tests, timeout):
     """The tests (params folded) that fail with the mutant active, every one of them run (pytest without -x); None when the run hangs."""
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "cases.json")
-        run_env = {**env, "MUTANT_UNDER_TEST": mutant, "TEST_WEIGH_IN_OUT": out, "TEST_WEIGH_IN_ARTIFACTS": tmp}
+        run_env = {**env, "MUTANT_UNDER_TEST": mutant, "TEST_WEIGH_IN_OUT": out}
         try:
             subprocess.run([str(python), "-m", "pytest", "-p", "no:randomly", "-p", "no:cacheprovider", "--maxfail=1000000", "-p", "weigh_pytest_plugin", *tests],
                            cwd=wt / "mutants", env=run_env, capture_output=True, timeout=timeout)
