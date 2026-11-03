@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-03T07:02:30.559Z",
+  "generatedAt": "2026-11-03T11:57:29.230Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -106,8 +106,8 @@
     },
     {
       "name": "test-weigh-in",
-      "version": "0.1.0",
-      "hash": "sha256-b121ea2a0c8d1f96aac95e5d3d45ebdf11f64d89ec71ef04c67bdeb12bfd1179",
+      "version": "0.1.1",
+      "hash": "sha256-ac7274252521da3b7c27896d73e3010fffd8a7da40fc88b401ea8f7462de23bf",
       "description": "Measure a Python/pytest suite and score it on five pillars (Protection against regressions, Resistance to refactoring, Fast feedback, Maintainability, Economy), writing a JSON snapshot and a static HTML dashboard. Read-only. Use when the user asks to weigh, measure or score their test suite."
     },
     {
