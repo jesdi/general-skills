@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-02T14:19:47.551Z",
+  "generatedAt": "2026-11-03T07:02:30.559Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -34,8 +34,8 @@
     },
     {
       "name": "crap-gate",
-      "version": "0.1.4",
-      "hash": "sha256-a3fe7bcb7ad6566aa25c44b0bc7823c625b536b4f3eb5cdfe73e6628ad04ee05",
+      "version": "0.1.5",
+      "hash": "sha256-ddf100022e078ad567efc30cdffb02d2e332e59db5866614e42c100173a7974f",
       "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions above 15 and new functions above 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
     },
     {
@@ -58,8 +58,8 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.47",
-      "hash": "sha256-0aef522504cc63d918dd8731f9b2fa00e33c7291c680f37c3dfc6a08adc38d93",
+      "version": "0.1.48",
+      "hash": "sha256-c1c51c34db8cb4c87c3437b3b0c1569dbabb60e327b3afdeaa5e0b9306efa0ba",
       "description": "Implement a specification in code."
     },
     {
@@ -103,6 +103,12 @@
       "version": "0.1.6",
       "hash": "sha256-cc46e2d40c52615a88a53f87c62f60ddc6944cacad55427a83f9191cd0900410",
       "description": "Mutation-guided test pruning: a fixer proposes deleting redundant tests and strengthening weak ones, an independent reviewer accepts or rejects each proposal, and prune.py applies the accepted batch behind a cold mutation run and the ratchet. Use when the user says \"prune tests\", \"test-prune\", \"mutation test pruning\" or \"strengthen weak tests\", or when a scheduled job runs it with `--unattended`."
+    },
+    {
+      "name": "test-weigh-in",
+      "version": "0.1.0",
+      "hash": "sha256-b121ea2a0c8d1f96aac95e5d3d45ebdf11f64d89ec71ef04c67bdeb12bfd1179",
+      "description": "Measure a Python/pytest suite and score it on five pillars (Protection against regressions, Resistance to refactoring, Fast feedback, Maintainability, Economy), writing a JSON snapshot and a static HTML dashboard. Read-only. Use when the user asks to weigh, measure or score their test suite."
     },
     {
       "name": "to-openspec",
