@@ -13,6 +13,7 @@ import pytest
 
 import driver
 import driver_agents
+import driver_fixloop
 import driver_report
 import driver_state
 
@@ -964,7 +965,7 @@ def test_a_rerun_after_an_interrupt_keeps_the_work_in_each_slot_and_reruns_the_r
     assert [line for line in ledger if "renamed the branch" in line] == (renamed if older_driver else [])
 
 
-def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(tmp_path, monkeypatch):
+def test_the_preflight_asks_each_entry_once_and_drops_each_entry_whose_cli_fails(tmp_path, monkeypatch):
     """claude answers; codex refuses gpt-astra, and the gpt-6.1-sol call never ends."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -978,15 +979,21 @@ def test_the_preflight_asks_each_used_entry_once_and_names_each_cli_that_fails(t
     monkeypatch.setattr(driver_agents, "PREFLIGHT_MINUTES", 0.02)
     models, _ = driver_agents.load_models(None)
     models["implementer"][1] = "openai/gpt-6.1-sol@medium"
-    models["reviewer"] = ["openai/gpt-astra@medium"]
-    assert driver_agents.used_entries(models) == ["claude-opus-5-5@medium", "claude-sonnet-5-5@medium",
-                                                  "openai/gpt-6-astra@medium", "openai/gpt-6.1-sol@medium",
-                                                  "openai/gpt-astra@medium"]
-    assert driver_agents.preflight(models) == [
-        "model entry openai/gpt-6.1-sol@medium: the codex CLI failed the preflight (no answer in 0.02 minutes): "
-        "no output",
-        "model entry openai/gpt-astra@medium: the codex CLI failed the preflight (exit 1): ERROR: not supported"]
-    assert len((bin_dir / "asked").read_text().splitlines()) == 5
+    models["final-reviewer"] = ["openai/gpt-astra@medium", "claude-opus-5-5@medium"]
+    kept, errors, skipped = driver_agents.preflight(models)
+    assert errors == [] and len((bin_dir / "asked").read_text().splitlines()) == 5
+    assert kept["implementer"] == ["claude-sonnet-5-5@medium"] and kept["final-reviewer"] == ["claude-opus-5-5@medium"]
+    assert kept["test-writer"] == ["claude-sonnet-5-5@medium"] and kept["reviewer"] == models["reviewer"]
+    assert skipped == [
+        "Model entry openai/gpt-6.1-sol@medium is skipped for this invocation: the codex CLI failed the preflight (no "
+        "answer in 0.02 minutes): no output; each role that lists it goes on with its next entry (test-writer, "
+        "implementer).",
+        "Model entry openai/gpt-astra@medium is skipped for this invocation: the codex CLI failed the preflight (exit "
+        "1): ERROR: not supported; each role that lists it goes on with its next entry (final-reviewer).",
+        "No final-reviewer entry on another provider than claude-sonnet-5-5@medium passed the preflight: the "
+        "correctness lens and the scoped review run on claude-opus-5-5@medium, the implementer's provider."]
+    assert driver_agents.lens_entries(kept, "final-correctness") == ["claude-opus-5-5@medium"]
+    assert driver_fixloop.entry(kept, 2) == "claude-sonnet-5-5@medium", "round 2 stays on the only entry left"
 
 
 def test_last_words_takes_the_result_of_a_stream_json_line(tmp_path):

@@ -496,7 +496,8 @@ def _exit_code(final: dict, args, end_blocked: bool) -> int:
     return code
 
 
-def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[str, int], pr: str) -> int:
+def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[str, int], pr: str,
+         skipped: list[str] = ()) -> int:
     state = driver_state.State(STATE)
     slots = 1 if args.only else min(args.parallel, len(tickets))
     errors = _resume(tickets, state, pr, slots, args, kept)
@@ -506,6 +507,9 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[s
     if errors:
         return 3
     run = Run(args, models, state, pr, kept)
+    for sentence in skipped:
+        ledger(sentence)
+    state.update(lambda state: state["run"].update(skipped=[*state["run"].get("skipped", []), *skipped]))
     if args.unattended and args.stage_json:
         Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
     end_blocked, lines = _work(tickets, slots, run)
@@ -692,12 +696,16 @@ def main(argv: list[str] | None = None) -> int:
         if not (valid := _validated(args)):
             return 3
         tickets, models, kept = valid
-        # The CLIs answer before the first agent, so a model that the account cannot use stops no ticket.
-        if not args.runner and (errors := driver_agents.preflight(models)):
-            print("".join(error + "\n" for error in errors), end="")
-            return 3
+        # The CLIs answer before the first agent. A model that the account cannot use stops no ticket: its roles go
+        # on with their next entry, and only a role with no entry left stops the run.
+        skipped: list[str] = []
+        if not args.runner:
+            models, errors, skipped = driver_agents.preflight(models)
+            if errors:
+                print("".join(error + "\n" for error in errors), end="")
+                return 3
         _print_width(tickets)
-        return _run(tickets, models, args, kept, pr)
+        return _run(tickets, models, args, kept, pr, skipped)
 
 
 if __name__ == "__main__":

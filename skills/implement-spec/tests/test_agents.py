@@ -311,14 +311,32 @@ def test_no_report_is_a_violation_with_one_rerun_then_blocked(env):
     assert any("01" in l and "BLOCKED" in l for l in w.ledger().splitlines()), w.ledger()
 
 
-def test_a_model_the_account_cannot_use_fails_the_preflight_with_exit_3_before_any_agent(env):
+def test_a_role_whose_every_entry_fails_the_preflight_exits_3_before_any_agent(env):
     w = World(env, reviewer=["openai/gpt-astra@medium"])
     proc = w.run({"test-writer": [tw()]}, runner=False)
     assert proc.returncode == 3, proc.stdout + proc.stderr
-    assert f"model entry openai/gpt-astra@medium: the codex CLI failed the preflight (exit 1): {REFUSED}" \
-        in proc.stdout.splitlines(), proc.stdout
+    assert (f"reviewer: every model entry failed the preflight: model entry openai/gpt-astra@medium: the codex CLI "
+            f"failed the preflight (exit 1): {REFUSED}") in proc.stdout.splitlines(), proc.stdout
     assert not launches(w.tmp, "claude") and not launches(w.tmp, "codex")
     assert "ticket/feat%2Fcsv/01" not in git(w.repo, "branch", "--list") and not w.ledger()
+
+
+def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_their_next_entry(env):
+    """The other provider is out of credits: the reviewer and the correctness lens go on with Anthropic."""
+    opus = "anthropic/claude-opus-5@medium"
+    w = World(env, reviewer=["openai/gpt-astra@medium", opus], **{"final-reviewer": [opus, "openai/gpt-astra@medium"]})
+    proc = w.run({}, runner=False)
+    assert proc.returncode != 3, proc.stdout + proc.stderr
+    skipped = [f"Model entry openai/gpt-astra@medium is skipped for this invocation: the codex CLI failed the "
+               f"preflight (exit 1): {REFUSED}; each role that lists it goes on with its next entry (reviewer, "
+               f"final-reviewer).",
+               f"No final-reviewer entry on another provider than {opus} passed the preflight: the correctness lens "
+               f"and the scoped review run on {opus}, the implementer's provider."]
+    assert w.ledger().splitlines()[:2] == skipped, w.ledger()
+    state = json.loads((w.repo / ".agent/implement/state.json").read_text())
+    assert state["run"]["skipped"] == skipped
+    assert not launches(w.tmp, "codex"), "no agent starts on the skipped entry"
+    assert launches(w.tmp, "claude"), "the first agent starts on Anthropic"
 
 
 def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
