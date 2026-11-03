@@ -119,18 +119,19 @@ def test_an_origin_that_climbs_out_of_the_snapshot_dir_is_refused(tmp_path, home
 
 
 @pytest.mark.parametrize("args", ["--junitxml=report.xml", "-q --junit-xml report.xml", "--log-file=report.log",
-                                  "--basetemp=tmp"])
-def test_file_writing_pytest_args_write_outside_the_repo(tmp_path, home, cache, args):
+                                  "--basetemp=tmp", "--debug"])
+def test_file_writing_pytest_args_leave_the_repo_as_it_was(tmp_path, home, cache, args):
     repo = build_repo(tmp_path / "demo")
     result = weigh(repo, home, f"--pytest-args={args}", cache=cache)
     assert result.returncode == 0, result.stdout + result.stderr
     assert git(repo, "status", "--porcelain") == ""
 
 
-def test_file_writers_configured_by_the_repo_write_outside_it(tmp_path, home, cache):
+@pytest.mark.parametrize("addopts", ["--junitxml=report.xml", "--debug"])
+def test_file_writers_configured_by_the_repo_leave_it_as_it_was(tmp_path, home, cache, addopts):
     repo = build_repo(tmp_path / "demo")
     pyproject = repo / "pyproject.toml"
-    pyproject.write_text(pyproject.read_text().replace('"-p fakeclock"', '"-p fakeclock --junitxml=report.xml"')
+    pyproject.write_text(pyproject.read_text().replace('"-p fakeclock"', f'"-p fakeclock {addopts}"')
                          + 'log_file = "report.log"\n')
     git(repo, "commit", "-q", "-am", "writers")
     result = weigh(repo, home, cache=cache)
@@ -138,19 +139,37 @@ def test_file_writers_configured_by_the_repo_write_outside_it(tmp_path, home, ca
     assert git(repo, "status", "--porcelain") == ""
 
 
-def test_debug_is_refused_before_it_writes(tmp_path, home, cache):
-    repo = build_repo(tmp_path / "demo")
-    result = weigh(repo, home, "--pytest-args=--debug", cache=cache)
-    assert result.returncode != 0
-    assert "writes files" in result.stderr
-    assert git(repo, "status", "--porcelain") == ""
-    assert snapshots(home, KEY) == []
-
-
-def test_a_run_that_changes_the_repo_anyway_is_refused(tmp_path, home, cache):
+def test_a_test_that_writes_where_it_runs_leaves_the_repo_as_it_was(tmp_path, home, cache):
     repo = committed(tmp_path, {"tests/test_leak.py": "from pathlib import Path\n\n\ndef test_leak():\n"
                                                       "    Path('leak.txt').write_text('x')\n"})
     result = weigh(repo, home, cache=cache)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert git(repo, "status", "--porcelain") == ""
+    assert "tests/test_leak.py::test_leak" in load(snapshots(home, KEY)[0])["tests"]
+
+
+@pytest.mark.parametrize("target", ["demo/board.py", "out.log"])
+def test_a_run_that_changes_the_repo_anyway_is_refused(tmp_path, home, cache, target):
+    """Written by absolute path, past the copy: an already-dirty tracked file or an ignored one, both invisible to git status."""
+    repo = tmp_path / "demo"
+    committed(tmp_path, {".gitignore": "*.log\n", "tests/test_leak.py": f"def test_leak():\n"
+                         f"    with open({str(repo / target)!r}, 'a') as f:\n        f.write('# leaked\\n')\n"})
+    with (repo / "demo/board.py").open("a") as f:
+        f.write("# dirty before the run\n")
+    result = weigh(repo, home, cache=cache)
     assert result.returncode != 0
-    assert "changed the target repo" in result.stderr and "leak.txt" in result.stderr
+    assert "changed the target repo" in result.stderr and target in result.stderr
     assert snapshots(home, KEY) == []
+
+
+def test_source_imported_from_the_repo_itself_is_measured(tmp_path, home, cache):
+    """An editable install points at the repo, not the copy the run uses: its code still counts, under its repo path."""
+    repo = committed(tmp_path, {"src/editable/__init__.py": "def double(n):\n    return 2 * n\n",
+                                "tests/test_editable.py": "from editable import double\n\n\ndef test_double():\n"
+                                                          "    assert double(2) == 4\n"})
+    site = next((repo / ".venv" / "lib").glob("python*/site-packages"))
+    (site / "editable.pth").write_text(str(repo / "src") + "\n")  # the venv ignores itself: the tree stays clean
+    result = weigh(repo, home, cache=cache)
+    assert result.returncode == 0, result.stdout + result.stderr
+    test = load(snapshots(home, KEY)[0])["tests"]["tests/test_editable.py::test_double"]
+    assert test["coverage"] == {"src/editable/__init__.py": [2]}
