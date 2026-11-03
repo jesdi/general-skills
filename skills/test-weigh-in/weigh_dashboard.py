@@ -18,6 +18,10 @@ def _failing(tests):
     return sum(t["outcome"] == "failed" for t in tests.values())
 
 
+def _failing_names(tests):
+    return [n for n, t in tests.items() if t["outcome"] == "failed"]
+
+
 def _flaky(tests):
     return sum(t.get("flaky", False) for t in tests.values())
 
@@ -27,10 +31,18 @@ def _slow(rules):
     return rules["pillars"]["feedback"]["metrics"]["p95_duration"]["target"]
 
 
+SECONDS, RATIO = {"total_runtime", "p95_duration"}, {"test_source_ratio"}
+
+
+def _unit(mid):
+    return "s" if mid in SECONDS else "" if mid in RATIO else "%"
+
+
 def write_dashboard(home, data, rules):
     failing = _failing(data["tests"])
     page = {
         "banner": f"{failing} tests are failing" if failing > 1 else "1 test is failing" if failing else None,
+        "failing": _failing_names(data["tests"]),
         "skipped": [n for n, t in data["tests"].items() if t["outcome"] == "skipped"],
         "insufficient": [n for n, t in data["tests"].items() if t.get("insufficient_evidence")],
         "overlaps": data.get("overlaps", []),
@@ -39,7 +51,10 @@ def write_dashboard(home, data, rules):
         "inventory": inventory_line(data["inventory"]),
         "pillars": [
             {"key": k, "name": p["name"], **data["pillars"][k],
-             "metrics": [{"name": m["name"], **data["metrics"][i]} for i, m in p["metrics"].items() if i in data["metrics"]],
+             "metrics": [{"name": m["name"], "unit": _unit(i), "target": m["target"], "bad": m["bad"], **data["metrics"][i]}
+                         for i, m in p["metrics"].items() if i in data["metrics"]],
+             # an entry the snapshot does not record (older data) has no known cause
+             "missing": [{"name": m["name"], "reason": data.get("unmeasured", {}).get(i)} for i, m in p["metrics"].items() if i not in data["metrics"]],
              "total": len(p["metrics"]),
              "worst": worst_tests(data["tests"], k, _slow(rules)),
              "smells": pillar_smells(data["tests"], PILLAR_SMELLS.get(k, ()))}
