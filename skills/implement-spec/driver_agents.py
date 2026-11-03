@@ -160,7 +160,7 @@ def preflight(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[
     errors = [f"{role}: every model entry failed the preflight: "
               + "; ".join(f"model entry {entry}: {failed[entry]}" for entry in models[role])
               for role, role_entries in kept.items() if not role_entries]
-    skipped = [f"Model entry {entry} is skipped for this invocation: {why}; each role that lists it goes on with its "
+    skipped = [f"Model entry {entry} is skipped for this invocation: {why.rstrip('.')}; each role that lists it goes on with its "
                f"next entry ({', '.join(role for role in models if entry in models[role])})."
                for entry, why in failed.items()]
     if not errors and other_provider_entry(models) and not other_provider_entry(kept):

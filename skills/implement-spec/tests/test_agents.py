@@ -328,7 +328,7 @@ def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_thei
     proc = w.run({}, runner=False)
     assert proc.returncode != 3, proc.stdout + proc.stderr
     skipped = [f"Model entry openai/gpt-astra@medium is skipped for this invocation: the codex CLI failed the "
-               f"preflight (exit 1): {REFUSED}; each role that lists it goes on with its next entry (reviewer, "
+               f"preflight (exit 1): {REFUSED.rstrip('.')}; each role that lists it goes on with its next entry (reviewer, "
                f"final-reviewer).",
                f"No final-reviewer entry on another provider than {opus} passed the preflight: the correctness lens "
                f"and the scoped review run on {opus}, the implementer's provider."]
