@@ -11,7 +11,7 @@ import pytest
 
 from fixture_repo import HERE, load, snapshots, weigh
 from kill_repo import replaced
-from test_mutation_score import SLOW, commit, start, wait_for_mutmut, worktrees
+from test_mutation_score import SLOW, commit, finish, start, wait_for_mutmut, worktrees
 
 sys.path.insert(0, str(HERE.parent))
 
@@ -46,7 +46,7 @@ def test_run_sigkilled_while_mutmut_runs_is_cleaned_up_by_the_next_run(tmp_path,
 
     repo = build_repo(tmp_path / "demo")
     commit(repo, {"tests/test_slow.py": SLOW})
-    first = start(repo, home, cache)
+    first = start(repo, home, cache, tmp_path / "first.err")
     second = None
     try:
         wait_for_mutmut(repo, first)
@@ -54,11 +54,11 @@ def test_run_sigkilled_while_mutmut_runs_is_cleaned_up_by_the_next_run(tmp_path,
         first.wait()
         stale = [l.removeprefix("worktree ") for l in worktrees(repo)[1:]]
         assert len(stale) == 1
-        second = start(repo, home, cache)
+        second = start(repo, home, cache, tmp_path / "second.err")
         fresh = wait_for_mutmut(repo, second, ignore=stale)
         assert [l.removeprefix("worktree ") for l in worktrees(repo)[1:]] == [fresh]
         assert not os.path.exists(stale[0])
-        assert second.wait(timeout=900) == 0
+        assert finish(second, tmp_path / "second.err", 900) == 0
     finally:
         kill_group(first.pid)
         if second:

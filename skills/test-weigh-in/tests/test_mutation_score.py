@@ -39,9 +39,25 @@ def worktrees(repo):
     return [l for l in git(repo, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
 
 
-def start(repo, home, cache):
-    return subprocess.Popen([sys.executable, str(WEIGH), str(repo), "--mutation", "--no-open"], env=env_for(home, cache),
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+def start(repo, home, cache, log):
+    """weigh.py --mutation in its own process group, stderr to the file log (where `finish` reads its stack dump)."""
+    with open(log, "w") as err:
+        return subprocess.Popen([sys.executable, str(WEIGH), str(repo), "--mutation", "--no-open"], env=env_for(home, cache),
+                                stdout=subprocess.DEVNULL, stderr=err, start_new_session=True)
+
+
+def finish(proc, log, timeout):
+    """proc's exit code. A run still going after timeout fails the test with weigh.py's Python stacks (faulthandler, on
+    SIGUSR1) and its process group, so a hang shows where it waits."""
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.kill(proc.pid, signal.SIGUSR1)
+        time.sleep(2)
+        ps = subprocess.run(["ps", "-A", "-o", "pid,ppid,pgid,stat,etime,args"], capture_output=True, text=True).stdout.splitlines()
+        group = [l for l in ps[1:] if l.split()[2] == str(proc.pid)]
+        pytest.fail(f"weigh.py still running {timeout} s on\n--- its stderr ---\n{open(log).read()}\n--- its process group ---\n"
+                    + "\n".join(ps[:1] + group))
 
 
 def wait_for_mutmut(repo, proc, ignore=()):
@@ -107,7 +123,7 @@ def test_clean_run_leaves_the_target_untouched(tmp_path, home, cache):
 def test_killed_run_is_cleaned_up_by_the_next_run(tmp_path, home, cache):
     repo = build_repo(tmp_path / "demo")
     commit(repo, {"tests/test_slow.py": SLOW})
-    proc = start(repo, home, cache)
+    proc = start(repo, home, cache, tmp_path / "first.err")
     try:
         wait_for_mutmut(repo, proc)
         proc.kill()
@@ -115,13 +131,13 @@ def test_killed_run_is_cleaned_up_by_the_next_run(tmp_path, home, cache):
         reap(proc)
     stale = [l.removeprefix("worktree ") for l in worktrees(repo)[1:]]
     assert len(stale) == 1
-    second = start(repo, home, cache)
+    second = start(repo, home, cache, tmp_path / "second.err")
     try:
         fresh = wait_for_mutmut(repo, second, ignore=stale)
         # the second mutation is under way: the interrupted run's worktree is already gone, registration and directory
         assert [l.removeprefix("worktree ") for l in worktrees(repo)[1:]] == [fresh]
         assert not os.path.exists(stale[0])
-        assert second.wait(timeout=900) == 0
+        assert finish(second, tmp_path / "second.err", 900) == 0
     finally:
         reap(second)
     assert len(worktrees(repo)) == 1
@@ -130,11 +146,11 @@ def test_killed_run_is_cleaned_up_by_the_next_run(tmp_path, home, cache):
 def test_ctrl_c_removes_the_worktree(tmp_path, home, cache):
     repo = build_repo(tmp_path / "demo")
     commit(repo, {"tests/test_slow.py": SLOW})
-    proc = start(repo, home, cache)
+    proc = start(repo, home, cache, tmp_path / "weigh.err")
     try:
         wait_for_mutmut(repo, proc)
         os.killpg(proc.pid, signal.SIGINT)
-        assert proc.wait(timeout=120) != 0
+        assert finish(proc, tmp_path / "weigh.err", 120) != 0
     finally:
         reap(proc)
     assert len(worktrees(repo)) == 1

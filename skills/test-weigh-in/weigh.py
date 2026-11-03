@@ -1,5 +1,6 @@
 """Weigh a repo's test suite: `weigh.py <repo-path> [--pytest-args "..."]`."""
 import argparse
+import faulthandler
 import signal
 import sys
 import webbrowser
@@ -127,6 +128,7 @@ def _terminate(signum, frame):
 
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _terminate)
+    faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1 <pid>` prints every thread's stack to stderr
     try:
         sys.exit(main())
     except KeyboardInterrupt:  # the temporary worktree is removed on the way out
