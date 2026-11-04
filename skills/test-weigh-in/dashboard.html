@@ -1,22 +1,26 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>test-weigh-in</title>
 <style>
-body{font:14px system-ui,sans-serif;margin:24px;color:#222}
+body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-word}
 #gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px;margin:16px 0}
 .gauge{grid-row:span 3;display:grid;grid-template-rows:subgrid;row-gap:4px;align-content:start;margin-bottom:12px;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
 .gauge>*{align-self:start}
 .gauge-status{font-size:12px;line-height:1.3}
-#details>button{font:inherit;padding:4px 12px;margin:0 4px 0 0;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer}
-#details>button[aria-pressed=true]{background:#2563eb;color:#fff;border-bottom-color:#1e40af;font-weight:600}
+/* one row of tabs on a rule; it scrolls sideways when the row is wider than the screen */
+.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #ccc;scrollbar-width:thin}
+.tabs>button{flex:none;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
+.tabs>button[aria-pressed=true]{background:#2563eb;color:#fff;border-bottom-color:#1e40af;font-weight:600}
+@media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 7px}}
 button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
 #details table{width:100%}
 #details svg{max-width:100%;height:auto}
-#details table td{overflow-wrap:anywhere}
 .gauge[aria-pressed=true]{border-color:#2563eb}
 .score{display:block;font-size:32px;font-weight:600}
 #banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px}
 .flag{display:block;color:#92400e}
 table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
+/* a test identity: breaks after / :: . _ (see ident), anywhere only when one part is wider than the line */
+.id{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 </style></head><body>
 <h1>test-weigh-in</h1>
 <p data-testid="inventory" id="inventory"></p>
@@ -29,6 +33,18 @@ const data = __DATA__;
 const shown = (s) => Math.min(99, Math.max(1, Math.round(s)));
 const el = (tag, text, parent) => { const e = document.createElement(tag); e.textContent = text; parent.appendChild(e); return e; };
 const fmt = (n) => String(Math.round(n * 100) / 100);
+// a test identity. A line may end after a / :: . or _ that is at least 16 characters past the previous break: the
+// identity wraps between its parts rather than mid-word, with few nodes on a page of 200 identities
+const ident = (text, parent) => {
+  const s = el('span', '', parent); s.className = 'id';
+  const add = (t) => { if (s.firstChild) s.appendChild(document.createElement('wbr')); s.appendChild(document.createTextNode(t)); };
+  let chunk = '';
+  for (const part of text.match(/[^]*?(?:\/|::|\.|_)|[^]+$/g) || []) if ((chunk += part).length >= 16) { add(chunk); chunk = ''; }
+  if (chunk) add(chunk);
+  return s;
+};
+// a block naming one test, optionally followed by a note such as "(skipped)" or "(Real sleep, 1.02 s)", whose numbers keep their units
+const testLine = (tag, test, parent, note) => { const e = el(tag, '', parent); ident(test, e); if (note) e.append(' ' + note.replace(/(\d) (?=s\b|%)/g, '$1\u00a0')); return e; };
 let selected = 0, tab = 'Metrics', picked = null;
 const NS = 'http://www.w3.org/2000/svg';
 // tests with the same or nearly the same coverage land on or near one place: push apart each pair of dots that
@@ -112,12 +128,15 @@ function drawOverlaps(parent) {
     ovPage = Math.min(ovPage, pages - 1);
     el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
     if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
+    // a page is built off the page and attached once: one insertion instead of thousands
+    const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
-      const row = el('div', '', out);
+      const row = el('div', '', rows);
       row.setAttribute('data-testid', 'overlap-pair'); row.style.cssText = 'padding:6px 0;border-bottom:1px solid #e5e7eb';
       const label = el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row); label.style.marginRight = '12px';
-      o.tests.forEach((t) => { const e = el('div', t, row); e.setAttribute('data-testid', 'overlap-test'); e.style.cssText = 'overflow-wrap:anywhere;font-family:monospace'; });
+      o.tests.forEach((t) => testLine('div', t, row).setAttribute('data-testid', 'overlap-test'));
     });
+    out.appendChild(rows);
     const nav = el('p', '', out);
     const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
     step('Previous', -1, 'overlap-prev');
@@ -132,7 +151,7 @@ function render() {
   const banner = document.getElementById('banner');
   if (banner) { if (data.banner) banner.textContent = data.banner; else banner.remove(); }
   const failing = document.getElementById('failing'); failing.replaceChildren();
-  data.failing.forEach((n) => el('p', n, failing).setAttribute('data-testid', 'failing-test'));
+  data.failing.forEach((n) => testLine('p', n, failing).setAttribute('data-testid', 'failing-test'));
   const gauges = document.getElementById('gauges'), details = document.getElementById('details');
   gauges.replaceChildren(); details.replaceChildren();
   data.pillars.forEach((p, i) => {
@@ -148,7 +167,8 @@ function render() {
   const p = data.pillars[selected];
   el('h2', p.name, details);
   const names = ['Metrics', 'Worst tests', 'Smells', ...(p.key === 'economy' ? ['Overlaps', 'Map'] : [])];
-  names.forEach((n) => { const b = el('button', n, details); b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
+  const tabs = el('div', '', details); tabs.className = 'tabs';
+  names.forEach((n) => { const b = el('button', n, tabs); b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
   el('h3', tab, details);
   if (tab === 'Metrics') {
     if (!p.metrics.length) el('p', 'No metrics were measured for this pillar.', details);
@@ -169,20 +189,20 @@ function render() {
     el('p', 'Scores are rounded and shown as 1 to 99, not 100 or 0. A metric at its target scores 90 and at its bad anchor 10; the logistic curve between them never reaches 0 or 100.', details);
     if (data.skipped.length) {
       el('h3', 'Skipped tests', details);
-      data.skipped.forEach((n) => el('p', n + ' (skipped)', details));
+      data.skipped.forEach((n) => testLine('p', n, details, '(skipped)'));
     }
     if (p.key === 'economy' && data.insufficient.length) {
       el('h3', 'Insufficient evidence (fewer than 2 sampled mutants on their lines)', details);
-      data.insufficient.forEach((n) => el('p', n, details));
+      data.insufficient.forEach((n) => testLine('p', n, details));
     }
   } else if (tab === 'Worst tests') {
-    p.worst.forEach((w) => el('p', w.test + ' (' + w.reason + ')', details).setAttribute('data-testid', 'worst-test'));
+    p.worst.forEach((w) => testLine('p', w.test, details, '(' + w.reason + ')').setAttribute('data-testid', 'worst-test'));
   } else if (tab === 'Smells') {
     const smells = Object.entries(p.smells);
     if (!smells.length) el('p', 'No test has a smell of this pillar.', details);
     smells.forEach(([smell, tests]) => {
       el('h4', smell + ' (' + tests.length + (tests.length === 1 ? ' test)' : ' tests)'), details).setAttribute('data-testid', 'smell');
-      tests.forEach((n) => el('p', n, details).setAttribute('data-testid', 'smell-test'));
+      tests.forEach((n) => testLine('p', n, details).setAttribute('data-testid', 'smell-test'));
     });
   } else if (tab === 'Overlaps') {
     drawOverlaps(details);
