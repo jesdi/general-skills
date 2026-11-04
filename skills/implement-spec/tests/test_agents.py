@@ -333,8 +333,7 @@ def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_thei
                f"No final-reviewer entry on another provider than {opus} passed the preflight: the correctness lens "
                f"and the scoped review run on {opus}, the implementer's provider."]
     assert w.ledger().splitlines()[:2] == skipped, w.ledger()
-    state = json.loads((w.repo / ".agent/implement/state.json").read_text())
-    assert state["run"]["skipped"] == skipped
+    assert proc.stdout.splitlines()[:2] == skipped, "the operator sees each skipped entry"
     assert not launches(w.tmp, "codex"), "no agent starts on the skipped entry"
     assert launches(w.tmp, "claude"), "the first agent starts on Anthropic"
 
