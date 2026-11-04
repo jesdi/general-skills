@@ -2,8 +2,16 @@
 <html lang="en"><head><meta charset="utf-8"><title>test-weigh-in</title>
 <style>
 body{font:14px system-ui,sans-serif;margin:24px;color:#222}
-#gauges{display:flex;gap:12px;margin:16px 0}
-.gauge{flex:1;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
+#gauges{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0 12px;margin:16px 0}
+.gauge{grid-row:span 3;display:grid;grid-template-rows:subgrid;row-gap:4px;align-content:start;margin-bottom:12px;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
+.gauge>*{align-self:start}
+.gauge-status{font-size:12px;line-height:1.3}
+#details>button{font:inherit;padding:4px 12px;margin:0 4px 0 0;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer}
+#details>button[aria-pressed=true]{background:#2563eb;color:#fff;border-bottom-color:#1e40af;font-weight:600}
+button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
+#details table{width:100%}
+#details svg{max-width:100%;height:auto}
+#details table td{overflow-wrap:anywhere}
 .gauge[aria-pressed=true]{border-color:#2563eb}
 .score{display:block;font-size:32px;font-weight:600}
 #banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px}
@@ -131,9 +139,10 @@ function render() {
     const g = el('button', '', gauges);
     g.className = 'gauge'; g.dataset.testid = 'gauge'; g.setAttribute('data-testid', 'gauge');
     g.setAttribute('aria-pressed', i === selected);
-    el('span', p.name, g);
+    el('span', p.name, g).setAttribute('data-testid', 'gauge-title');
     el('span', p.score === null ? '–' : shown(p.score), g).className = 'score';
-    if (p.partial) el('span', 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured', g).className = 'flag';
+    const status = el('span', p.partial ? 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured' : 'all ' + p.total + ' metrics measured', g);
+    status.className = 'gauge-status' + (p.partial ? ' flag' : ''); status.setAttribute('data-testid', 'gauge-status');
     g.onclick = () => { selected = i; tab = 'Metrics'; picked = null; render(); };
   });
   const p = data.pillars[selected];
