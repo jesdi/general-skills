@@ -14,7 +14,6 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-w
 button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
 #details table{width:100%}
 #details tr+tr{border-top:1px solid #e5e7eb}
-#details svg{max-width:100%;height:auto}
 .gauge[aria-pressed=true]{border-color:#2563eb}
 .score{display:block;font-size:32px;font-weight:600}
 #banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px;margin-bottom:0}
@@ -34,6 +33,16 @@ input[type=search]{font:inherit;padding:6px 10px;border:1px solid #ccc;border-ra
 .pair{display:grid;grid-template-columns:8em minmax(0,1fr);gap:4px 12px;padding:8px 0;border-bottom:1px solid #e5e7eb}
 .pair hr{border:0;border-top:1px dashed #d1d5db;margin:4px 0}
 @media (max-width:600px){.pair{grid-template-columns:minmax(0,1fr)}}
+.map{display:grid;gap:16px;align-items:start}
+.map svg{display:block;width:100%;height:auto}
+.map-side p{margin:0 0 8px}
+.similar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px}
+.similar>div{display:grid;grid-template-columns:subgrid;grid-column:1/-1}
+.similar>.head{font-weight:600}
+.similar>div+div+div{border-top:1px solid #f3f4f6;padding-top:4px}
+.similar .num{text-align:right;font-variant-numeric:tabular-nums}
+/* wide screens: the selection sits beside the map and stays in view while the map scrolls */
+@media (min-width:900px){.map{grid-template-columns:minmax(0,1fr) 22rem}.map-side{position:sticky;top:0;max-height:100vh;overflow-y:auto}}
 </style></head><body>
 <h1>test-weigh-in</h1>
 <p data-testid="inventory" id="inventory"></p>
@@ -81,7 +90,7 @@ function place() {
       moved = true;
     }));
   }
-  // the view grows to hold every ring, at one unit per pixel so sizes keep their meaning
+  // the view grows to hold every ring; the drawing then scales to the width it gets, dots and gaps alike
   const x0 = Math.min(0, ...dots.map((o) => o.cx - o.r - 2)), y0 = Math.min(0, ...dots.map((o) => o.cy - o.r - 2));
   const w = Math.max(400, ...dots.map((o) => o.cx + o.r + 2)) - x0, h = Math.max(300, ...dots.map((o) => o.cy + o.r + 2)) - y0;
   return { dots, x0, y0, w, h };
@@ -90,9 +99,10 @@ function drawMap(parent) {
   const { dots, x0, y0, w, h } = placed || (placed = place());
   const legend = el('p', 'Colour shows unique lines: grey 0, amber 1–3, green 4+. Dot size shows runtime: slower tests are larger. Hover a dot for its test; click it to select.', parent);
   legend.setAttribute('data-testid', 'map-legend');
+  const box = el('div', '', parent); box.className = 'map';
   const svg = document.createElementNS(NS, 'svg');
-  parent.appendChild(svg);
-  svg.setAttribute('viewBox', `${x0} ${y0} ${w} ${h}`); svg.setAttribute('width', w); svg.setAttribute('height', h);
+  box.appendChild(svg);
+  svg.setAttribute('viewBox', `${x0} ${y0} ${w} ${h}`);
   const circles = new Map();
   dots.forEach(({ d, cx, cy, r }) => {
     const c = document.createElementNS(NS, 'circle');
@@ -106,8 +116,10 @@ function drawMap(parent) {
     c.onclick = () => pick(d);
     svg.appendChild(c);
   });
-  const pickedName = el('p', '', parent); pickedName.setAttribute('data-testid', 'map-picked');
-  const list = el('div', '', parent); list.setAttribute('data-testid', 'map-similar');
+  const side = el('div', '', box); side.className = 'map-side';
+  const hint = el('p', 'Click a dot to see its test and the tests that cover nearly the same lines.', side);
+  const pickedName = el('p', '', side); pickedName.setAttribute('data-testid', 'map-picked');
+  const list = el('div', '', side); list.setAttribute('data-testid', 'map-similar');
   let lit = [];
   // selection touches only the previous and the new highlights and the neighbour list, never the placement
   const pick = (d) => {
@@ -116,10 +128,21 @@ function drawMap(parent) {
     const sims = d.similar.slice().sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
     lit = [d.test, ...sims.map(([n]) => n)].map((n) => circles.get(n)).filter(Boolean);
     lit.forEach((c) => { c.setAttribute('stroke', '#2563eb'); c.dataset.highlighted = 'true'; });
-    pickedName.textContent = 'Selected: ' + d.test;
+    hint.hidden = true;
+    pickedName.replaceChildren();
+    el('strong', 'Selected', pickedName); el('br', '', pickedName); ident(d.test, pickedName);
     list.replaceChildren();
-    if (sims.length) el('p', 'Similar tests, Jaccard similarity (1.00 = identical coverage), highest first', list);
-    sims.forEach(([n, s]) => el('p', n + ' ' + s.toFixed(2), list).setAttribute('data-testid', 'map-similar-item'));
+    if (!sims.length) { el('p', 'No test covers similar lines.', list); return; }
+    el('p', sims.length + (sims.length === 1 ? ' similar test' : ' similar tests') + ', highest Jaccard similarity first; 1.00 means identical coverage', list);
+    // built off the page and attached once: one insertion instead of thousands keeps a 148-neighbour selection fast
+    const table = document.createElement('div'); table.className = 'similar';
+    const head = el('div', '', table); head.className = 'head';
+    el('span', 'Test', head); el('span', 'Jaccard', head).className = 'num';
+    sims.forEach(([n, s]) => {
+      const row = el('div', '', table); row.setAttribute('data-testid', 'map-similar-item');
+      ident(n, row); row.append(' '); el('span', s.toFixed(2), row).className = 'num';
+    });
+    list.appendChild(table);
   };
   if (picked) pick(picked);
 }
