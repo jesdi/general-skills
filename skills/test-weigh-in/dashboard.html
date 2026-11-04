@@ -153,13 +153,15 @@ function drawMap(parent) {
     list.replaceChildren();
     if (!sims.length) { el('p', 'No test covers similar lines.', list); return; }
     el('p', sims.length + (sims.length === 1 ? ' similar test' : ' similar tests') + ', highest Jaccard similarity first; 1.00 means identical coverage', list);
-    const table = el('div', '', list); table.className = 'similar';
+    // built off the page and attached once: one insertion instead of hundreds keeps a 148-neighbour selection fast
+    const table = document.createElement('div'); table.className = 'similar';
     const head = el('div', '', table); head.className = 'head';
     el('span', 'Test', head); el('span', 'Jaccard', head).className = 'num';
     sims.forEach(([n, s]) => {
       const row = el('div', '', table); row.setAttribute('data-testid', 'map-similar-item');
       ident(el('span', n, row)); row.append(' '); el('span', s.toFixed(2), row).className = 'num';
     });
+    list.appendChild(table);
   };
   if (picked) pick(picked);
 }
@@ -183,13 +185,16 @@ function drawOverlaps(parent) {
     ovPage = Math.min(ovPage, pages - 1);
     el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
     if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
+    // a page is built off the page and attached once: one insertion instead of hundreds
+    const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
-      const row = el('div', '', out);
+      const row = el('div', '', rows);
       row.setAttribute('data-testid', 'overlap-pair'); row.className = 'pair';
       el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row);
       // the two tests on their own lines, a dashed rule between them
       o.tests.forEach((t, k) => { if (k) el('hr', '', row); testLine('div', t, row).setAttribute('data-testid', 'overlap-test'); });
     });
+    out.appendChild(rows);
     const nav = el('p', '', out);
     const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
     step('Previous', -1, 'overlap-prev');
