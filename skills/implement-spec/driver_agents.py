@@ -138,7 +138,16 @@ def preflight(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[
     entries whose CLI failed: a model the account cannot use or is out of credits for, a CLI that is not signed in;
     one error per role with no entry left; one sentence per skipped entry, and one more when no entry on another
     provider than the implementer's first one is left)."""
-    entries = sorted({entry for role in models.values() for entry in role})
+    failed = _failures(sorted({entry for role in models.values() for entry in role}))
+    kept = {role: [entry for entry in entries if entry not in failed] for role, entries in models.items()}
+    errors = [f"{role}: every model entry failed the preflight: "
+              + "; ".join(f"model entry {entry}: {failed[entry]}" for entry in models[role])
+              for role, entries in kept.items() if not entries]
+    return kept, errors, [] if errors else _skipped(models, kept, failed)
+
+
+def _failures(entries: list[str]) -> dict[str, str]:
+    """{entry: why} for each entry whose CLI fails the preflight prompt."""
     with tempfile.TemporaryDirectory(prefix="implement-spec-preflight-") as folder:
         def check(index: int, entry: str) -> str:
             cli = PROVIDERS[split(entry)[0]][0]
@@ -155,19 +164,19 @@ def preflight(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[
             return f"the {cli} CLI failed the preflight ({why}): {last_words(log)}"
 
         with ThreadPoolExecutor(len(entries)) as pool:
-            failed = {entry: why for entry, why in zip(entries, pool.map(check, range(len(entries)), entries)) if why}
-    kept = {role: [entry for entry in role_entries if entry not in failed] for role, role_entries in models.items()}
-    errors = [f"{role}: every model entry failed the preflight: "
-              + "; ".join(f"model entry {entry}: {failed[entry]}" for entry in models[role])
-              for role, role_entries in kept.items() if not role_entries]
-    skipped = [f"Model entry {entry} is skipped for this invocation: {why.rstrip('.')}; each role that lists it goes on with its "
-               f"next entry ({', '.join(role for role in models if entry in models[role])})."
+            return {entry: why for entry, why in zip(entries, pool.map(check, range(len(entries)), entries)) if why}
+
+
+def _skipped(models: dict[str, list[str]], kept: dict[str, list[str]], failed: dict[str, str]) -> list[str]:
+    """One ledger sentence per skipped entry, and one when the correctness lens lost its other provider."""
+    skipped = [f"Model entry {entry} is skipped for this invocation: {why.rstrip('.')}; each role that lists it "
+               f"goes on with its next entry ({', '.join(role for role in models if entry in models[role])})."
                for entry, why in failed.items()]
-    if not errors and other_provider_entry(models) and not other_provider_entry(kept):
+    if other_provider_entry(models) and not other_provider_entry(kept):
         skipped.append(f"No final-reviewer entry on another provider than {kept['implementer'][0]} passed the "
                        f"preflight: the correctness lens and the scoped review run on "
                        f"{', '.join(kept['final-reviewer'])}, the implementer's provider.")
-    return kept, errors, skipped
+    return skipped
 
 
 def last_words(log: Path) -> str:
