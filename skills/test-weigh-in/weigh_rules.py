@@ -9,6 +9,7 @@ from weigh_env import SetupError
 
 DEFAULT = Path(__file__).resolve().parent / "rules.toml"
 TABLE = re.compile(r"^\[([A-Za-z0-9_.]+)\]$")
+UNITS = ("%", "s", "")  # percent of all tests, seconds, plain ratio
 PILLARS = ("regression", "refactoring", "feedback", "maintainability", "economy")
 
 
@@ -58,6 +59,8 @@ def validate(rules):
         if not pillar or not pillar.get("metrics"):
             raise RulesError(f"rules.toml: pillar {key} is missing or has no metrics")
         for mid, m in pillar["metrics"].items():
+            if m.get("unit") not in UNITS:
+                raise RulesError(f"rules.toml: {pillar['name']}: {m['name']} needs a unit, one of {', '.join(map(repr, UNITS))}")
             if m["target"] == m["bad"]:
                 raise RulesError(f"rules.toml: {pillar['name']}: {m['name']} has target and bad anchors both {m['target']}")
         total = sum(m["weight"] for m in pillar["metrics"].values())

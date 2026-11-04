@@ -2,6 +2,7 @@
 
 Interface the tests pin (the spec leaves the TOML keys and the snapshot JSON keys open):
   rules.toml:  version = 1; [pillars.<key>] name = "..."; [pillars.<key>.metrics.<id>] name, weight,
+               unit ("%", "s" or ""),
                optional partial_weight, target, bad, optional log = true. Percentages are 0-100,
                durations are seconds. Pillar keys: regression, refactoring, feedback,
                maintainability, economy.
@@ -50,7 +51,8 @@ def write_rules(path, **overrides):
         lines += [f"[pillars.{key}]", f'name = "{name}"', ""]
         for mid, mname, weight, partial, target, bad, log in metrics:
             m = {**dict(weight=weight, target=target, bad=bad), **overrides.get(mid, {})}
-            lines += [f"[pillars.{key}.metrics.{mid}]", f'name = "{mname}"']
+            unit = "s" if mid in ("total_runtime", "p95_duration") else "" if mid == "test_source_ratio" else "%"
+            lines += [f"[pillars.{key}.metrics.{mid}]", f'name = "{mname}"', f'unit = "{unit}"']
             lines += [f"{k} = {v!r}" for k, v in m.items()]
             if partial is not None:
                 lines.append(f"partial_weight = {partial!r}")
