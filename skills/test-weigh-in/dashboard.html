@@ -23,13 +23,12 @@ const el = (tag, text, parent) => { const e = document.createElement(tag); e.tex
 const fmt = (n) => String(Math.round(n * 100) / 100);
 let selected = 0, tab = 'Metrics', picked = null;
 const NS = 'http://www.w3.org/2000/svg';
-function drawMap(parent) {
-  const near = picked ? new Map(picked.similar) : new Map();
-  const svg = document.createElementNS(NS, 'svg');
-  parent.appendChild(svg);
-  // tests with the same or nearly the same coverage land on or near one place: push apart each pair of dots that
-  // overlaps until none does, so every dot stays clickable; same data, same pushes, same map on every load
-  // ponytail: all pairs per pass, quadratic; a spatial grid if maps of thousands of dots get slow
+// tests with the same or nearly the same coverage land on or near one place: push apart each pair of dots that
+// overlaps until none does, so every dot stays clickable; same data, same pushes, same map on every load.
+// Computed once, on first opening: selecting a dot never moves one.
+// ponytail: all pairs per pass, quadratic; a spatial grid if maps of thousands of dots get slow
+let placed = null;
+function place() {
   const dots = data.map.map((d) => ({ d, cx: 20 + d.x * 360, cy: 20 + d.y * 260, r: 4 + Math.min(10, d.runtime * 4) }));
   for (let pass = 0, moved = true; moved && pass < 200; pass++) {
     moved = false;
@@ -46,21 +45,44 @@ function drawMap(parent) {
   // the view grows to hold every ring, at one unit per pixel so sizes keep their meaning
   const x0 = Math.min(0, ...dots.map((o) => o.cx - o.r - 2)), y0 = Math.min(0, ...dots.map((o) => o.cy - o.r - 2));
   const w = Math.max(400, ...dots.map((o) => o.cx + o.r + 2)) - x0, h = Math.max(300, ...dots.map((o) => o.cy + o.r + 2)) - y0;
+  return { dots, x0, y0, w, h };
+}
+function drawMap(parent) {
+  const { dots, x0, y0, w, h } = placed || (placed = place());
+  const legend = el('p', 'Colour shows unique lines: grey 0, amber 1–3, green 4+. Dot size shows runtime: slower tests are larger. Hover a dot for its test; click it to select.', parent);
+  legend.setAttribute('data-testid', 'map-legend');
+  const svg = document.createElementNS(NS, 'svg');
+  parent.appendChild(svg);
   svg.setAttribute('viewBox', `${x0} ${y0} ${w} ${h}`); svg.setAttribute('width', w); svg.setAttribute('height', h);
+  const circles = new Map();
   dots.forEach(({ d, cx, cy, r }) => {
     const c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', cx); c.setAttribute('cy', cy);
     c.setAttribute('r', r);
     c.setAttribute('fill', d.unique === 0 ? '#9ca3af' : d.unique < 4 ? '#f59e0b' : '#16a34a');
-    c.setAttribute('stroke', picked && (picked === d || near.has(d.test)) ? '#2563eb' : 'none');
     c.setAttribute('stroke-width', '3');
     c.setAttribute('data-testid', 'map-dot'); c.dataset.test = d.test;
-    if (picked && (picked === d || near.has(d.test))) c.dataset.highlighted = 'true';
-    c.onclick = () => { picked = d; render(); };
+    el('title', d.test, c);
+    circles.set(d.test, c);
+    c.onclick = () => pick(d);
     svg.appendChild(c);
   });
+  const pickedName = el('p', '', parent); pickedName.setAttribute('data-testid', 'map-picked');
   const list = el('div', '', parent); list.setAttribute('data-testid', 'map-similar');
-  if (picked) picked.similar.forEach(([n, s]) => el('p', n + ' ' + s.toFixed(2), list).setAttribute('data-testid', 'map-similar-item'));
+  let lit = [];
+  // selection touches only the previous and the new highlights and the neighbour list, never the placement
+  const pick = (d) => {
+    picked = d;
+    lit.forEach((c) => { c.setAttribute('stroke', 'none'); delete c.dataset.highlighted; });
+    const sims = d.similar.slice().sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    lit = [d.test, ...sims.map(([n]) => n)].map((n) => circles.get(n)).filter(Boolean);
+    lit.forEach((c) => { c.setAttribute('stroke', '#2563eb'); c.dataset.highlighted = 'true'; });
+    pickedName.textContent = 'Selected: ' + d.test;
+    list.replaceChildren();
+    if (sims.length) el('p', 'Similar tests, Jaccard similarity (1.00 = identical coverage), highest first', list);
+    sims.forEach(([n, s]) => el('p', n + ' ' + s.toFixed(2), list).setAttribute('data-testid', 'map-similar-item'));
+  };
+  if (picked) pick(picked);
 }
 const PAGE = 100;
 // highest similarity first; ties by identities, so the order does not depend on how the pairs arrive
