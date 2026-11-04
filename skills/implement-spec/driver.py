@@ -496,8 +496,15 @@ def _exit_code(final: dict, args, end_blocked: bool) -> int:
     return code
 
 
-def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[str, int], pr: str,
-         skipped: list[str] = ()) -> int:
+def _record_skipped(state: driver_state.State, skipped: list[str]) -> None:
+    """Each entry the preflight skipped: a ledger sentence, and in state.json for the PR body."""
+    for sentence in skipped:
+        ledger(sentence)
+    state.update(lambda record: record["run"].update(skipped=[*record["run"].get("skipped", []), *skipped]))
+
+
+def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str], args, kept: dict[str, int],
+         pr: str) -> int:
     state = driver_state.State(STATE)
     slots = 1 if args.only else min(args.parallel, len(tickets))
     errors = _resume(tickets, state, pr, slots, args, kept)
@@ -507,9 +514,7 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], args, kept: dict[s
     if errors:
         return 3
     run = Run(args, models, state, pr, kept)
-    for sentence in skipped:
-        ledger(sentence)
-    state.update(lambda state: state["run"].update(skipped=[*state["run"].get("skipped", []), *skipped]))
+    _record_skipped(state, skipped)
     if args.unattended and args.stage_json:
         Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
     end_blocked, lines = _work(tickets, slots, run)
@@ -674,6 +679,17 @@ def _hold(common: Path, pr: str) -> tuple[ExitStack | None, str]:
         return stack.pop_all(), ""
 
 
+def _preflight(args, models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[str]] | None:
+    """(the lists the run uses, the sentences of the skipped entries), or None with each error printed. The CLIs answer
+    before the first agent. A model that the account cannot use stops no ticket: its roles go on with their next
+    entry, and only a role with no entry left stops the run. A --runner run starts no CLI."""
+    if args.runner:
+        return models, []
+    models, errors, skipped = driver_agents.preflight(models)
+    print("".join(error + "\n" for error in errors), end="")
+    return None if errors else (models, skipped)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _arguments(argv)
     if args.dry_run:  # it changes nothing, so it needs no lock
@@ -696,16 +712,10 @@ def main(argv: list[str] | None = None) -> int:
         if not (valid := _validated(args)):
             return 3
         tickets, models, kept = valid
-        # The CLIs answer before the first agent. A model that the account cannot use stops no ticket: its roles go
-        # on with their next entry, and only a role with no entry left stops the run.
-        skipped: list[str] = []
-        if not args.runner:
-            models, errors, skipped = driver_agents.preflight(models)
-            if errors:
-                print("".join(error + "\n" for error in errors), end="")
-                return 3
+        if not (checked := _preflight(args, models)):
+            return 3
         _print_width(tickets)
-        return _run(tickets, models, args, kept, pr, skipped)
+        return _run(tickets, *checked, args, kept, pr)
 
 
 if __name__ == "__main__":
