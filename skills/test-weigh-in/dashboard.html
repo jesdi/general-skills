@@ -30,6 +30,10 @@ table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
 @media (min-width:601px){#details th:nth-child(-n+3),#details td:nth-child(-n+3):not([colspan]){width:1%;white-space:nowrap}}
 td:first-child,th:first-child{padding-left:0}
 @media (max-width:600px){td,th{padding:4px 6px}td:last-child,th:last-child{padding-right:0}#details td:first-child{min-width:7em}}
+input[type=search]{font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
+.pair{display:grid;grid-template-columns:8em minmax(0,1fr);gap:4px 12px;padding:8px 0;border-bottom:1px solid #e5e7eb}
+.pair hr{border:0;border-top:1px dashed #d1d5db;margin:4px 0}
+@media (max-width:600px){.pair{grid-template-columns:minmax(0,1fr)}}
 </style></head><body>
 <h1>test-weigh-in</h1>
 <p data-testid="inventory" id="inventory"></p>
@@ -143,9 +147,11 @@ function drawOverlaps(parent) {
     const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
       const row = el('div', '', rows);
-      row.setAttribute('data-testid', 'overlap-pair'); row.style.cssText = 'padding:6px 0;border-bottom:1px solid #e5e7eb';
-      const label = el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row); label.style.marginRight = '12px';
-      o.tests.forEach((t) => testLine('div', t, row).setAttribute('data-testid', 'overlap-test'));
+      row.setAttribute('data-testid', 'overlap-pair'); row.className = 'pair';
+      el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row);
+      // the two tests on their own lines, a dashed rule between them
+      const ids = el('div', '', row);
+      o.tests.forEach((t, k) => { if (k) el('hr', '', ids); testLine('div', t, ids).setAttribute('data-testid', 'overlap-test'); });
     });
     out.appendChild(rows);
     const nav = el('p', '', out);
