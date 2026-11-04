@@ -31,8 +31,9 @@ td:first-child,th:first-child{padding-left:0}
 @media (max-width:600px){td,th{padding:4px 6px}td:last-child,th:last-child{padding-right:0}#details td:first-child{min-width:7em}}
 input[type=search]{font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
 .pair{display:grid;grid-template-columns:8em minmax(0,1fr);gap:4px 12px;padding:8px 0;border-bottom:1px solid #e5e7eb}
-.pair hr{border:0;border-top:1px dashed #d1d5db;margin:4px 0}
-@media (max-width:600px){.pair{grid-template-columns:minmax(0,1fr)}}
+.pair>strong{grid-row:span 3}
+.pair hr{width:100%;border:0;border-top:1px dashed #d1d5db;margin:0}
+@media (max-width:600px){.pair{grid-template-columns:minmax(0,1fr)}.pair>strong{grid-row:auto}}
 .map{display:grid;gap:16px;align-items:start}
 .map svg{display:block;width:100%;height:auto}
 .map-side p{margin:0 0 8px}
@@ -57,18 +58,36 @@ const el = (tag, text, parent) => { const e = document.createElement(tag); e.tex
 const fmt = (n) => String(Math.round(n * 100) / 100);
 // words that belong together stay on one line: "71.3 %", "target ≤ 60 s"
 const nb = (...parts) => parts.filter((x) => x !== '').join('\u00a0');
-// a test identity. A line may end after a / :: . or _ that is at least 16 characters past the previous break: the
-// identity wraps between its parts rather than mid-word, with few nodes on a page of 200 identities
-const ident = (text, parent) => {
-  const s = el('span', '', parent); s.className = 'id';
-  const add = (t) => { if (s.firstChild) s.appendChild(document.createElement('wbr')); s.appendChild(document.createTextNode(t)); };
-  let chunk = '';
-  for (const part of text.match(/[^]*?(?:\/|::|\.|_)|[^]+$/g) || []) if ((chunk += part).length >= 16) { add(chunk); chunk = ''; }
-  if (chunk) add(chunk);
-  return s;
+// ident marks an element whose text is a test identity. It gets break opportunities after / :: . or _ (not inside
+// "name.py"), at least 12 characters apart, so it wraps between its parts; overflow-wrap breaks a part only when it is
+// wider than the line. The breaks are added just before the next paint, to the identities still on the page then:
+// paging through thousands of pairs in one go never builds the breaks of pages nobody saw.
+let unbroken = [];
+const addBreaks = () => {
+  const ids = unbroken; unbroken = [];
+  ids.forEach((s) => {
+    if (!s.isConnected) return;
+    const parts = [];
+    let chunk = '';
+    for (const part of s.textContent.split(/(?<=\/|::|\.(?!py\b)|_)/)) if ((chunk += part).length >= 12) { parts.push(chunk); chunk = ''; }
+    if (chunk) parts.push(chunk);
+    s.replaceChildren();
+    parts.forEach((part, i) => { if (i) s.appendChild(document.createElement('wbr')); s.appendChild(document.createTextNode(part)); });
+  });
+};
+const ident = (e) => {
+  e.className = 'id';
+  if (!unbroken.length) (window.requestAnimationFrame || setTimeout)(addBreaks);
+  unbroken.push(e);
+  return e;
 };
 // a block naming one test, optionally followed by a note such as "(skipped)" or "(Real sleep, 1.02 s)", whose numbers keep their units
-const testLine = (tag, test, parent, note) => { const e = el(tag, '', parent); ident(test, e); if (note) e.append(' ' + note.replace(/(\d) (?=s\b|%)/g, '$1\u00a0')); return e; };
+const testLine = (tag, test, parent, note) => {
+  if (!note) return ident(el(tag, test, parent));
+  const e = el(tag, '', parent); ident(el('span', test, e));
+  e.append(' ' + note.replace(/(\d) (?=s\b|%)/g, '$1\u00a0'));
+  return e;
+};
 let selected = 0, tab = 'Metrics', picked = null;
 const NS = 'http://www.w3.org/2000/svg';
 // tests with the same or nearly the same coverage land on or near one place: push apart each pair of dots that
@@ -130,19 +149,17 @@ function drawMap(parent) {
     lit.forEach((c) => { c.setAttribute('stroke', '#2563eb'); c.dataset.highlighted = 'true'; });
     hint.hidden = true;
     pickedName.replaceChildren();
-    el('strong', 'Selected', pickedName); el('br', '', pickedName); ident(d.test, pickedName);
+    el('strong', 'Selected', pickedName); el('br', '', pickedName); ident(el('span', d.test, pickedName));
     list.replaceChildren();
     if (!sims.length) { el('p', 'No test covers similar lines.', list); return; }
     el('p', sims.length + (sims.length === 1 ? ' similar test' : ' similar tests') + ', highest Jaccard similarity first; 1.00 means identical coverage', list);
-    // built off the page and attached once: one insertion instead of thousands keeps a 148-neighbour selection fast
-    const table = document.createElement('div'); table.className = 'similar';
+    const table = el('div', '', list); table.className = 'similar';
     const head = el('div', '', table); head.className = 'head';
     el('span', 'Test', head); el('span', 'Jaccard', head).className = 'num';
     sims.forEach(([n, s]) => {
       const row = el('div', '', table); row.setAttribute('data-testid', 'map-similar-item');
-      ident(n, row); row.append(' '); el('span', s.toFixed(2), row).className = 'num';
+      ident(el('span', n, row)); row.append(' '); el('span', s.toFixed(2), row).className = 'num';
     });
-    list.appendChild(table);
   };
   if (picked) pick(picked);
 }
@@ -166,17 +183,13 @@ function drawOverlaps(parent) {
     ovPage = Math.min(ovPage, pages - 1);
     el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
     if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
-    // a page is built off the page and attached once: one insertion instead of thousands
-    const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
-      const row = el('div', '', rows);
+      const row = el('div', '', out);
       row.setAttribute('data-testid', 'overlap-pair'); row.className = 'pair';
       el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row);
       // the two tests on their own lines, a dashed rule between them
-      const ids = el('div', '', row);
-      o.tests.forEach((t, k) => { if (k) el('hr', '', ids); testLine('div', t, ids).setAttribute('data-testid', 'overlap-test'); });
+      o.tests.forEach((t, k) => { if (k) el('hr', '', row); testLine('div', t, row).setAttribute('data-testid', 'overlap-test'); });
     });
-    out.appendChild(rows);
     const nav = el('p', '', out);
     const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
     step('Previous', -1, 'overlap-prev');
