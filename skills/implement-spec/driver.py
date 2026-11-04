@@ -690,12 +690,17 @@ def _preflight(args, models: dict[str, list[str]]) -> tuple[dict[str, list[str]]
     return None if errors else (models, skipped)
 
 
+def _dry_run(args) -> int:
+    """Validate the call and print the frontier width: 0 when it is valid, else 3."""
+    if valid := _validated(args):
+        _print_width(valid[0])
+    return 0 if valid else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _arguments(argv)
     if args.dry_run:  # it changes nothing, so it needs no lock
-        if valid := _validated(args):
-            _print_width(valid[0])
-        return 0 if valid else 3
+        return _dry_run(args)
     if not (locking := _common_dir_and_branch(args)):
         return 3
     common, pr = locking
