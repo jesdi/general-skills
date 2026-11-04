@@ -202,8 +202,8 @@ class Rig:
             proc = subprocess.Popen(["sh", str(RUN), *args], cwd=self.repo, env=self.env, text=True, stdout=o,
                                     stderr=e, start_new_session=True)
             self.snaps, self.torn = [], []
-            state, end = self.repo / ".agent/implement/state.json", time.time() + 120
-            while proc.poll() is None and time.time() < end:
+            state, end = self.repo / ".agent/implement/state.json", time.monotonic() + 120
+            while proc.poll() is None and time.monotonic() < end:
                 if watch:
                     try:
                         self.snaps.append(json.loads(state.read_text()))

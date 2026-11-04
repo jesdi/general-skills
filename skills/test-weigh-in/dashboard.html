@@ -62,6 +62,41 @@ function drawMap(parent) {
   const list = el('div', '', parent); list.setAttribute('data-testid', 'map-similar');
   if (picked) picked.similar.forEach(([n, s]) => el('p', n + ' ' + s.toFixed(2), list).setAttribute('data-testid', 'map-similar-item'));
 }
+const PAGE = 100;
+// highest similarity first; ties by identities, so the order does not depend on how the pairs arrive
+const byIdentity = (o) => o.tests.slice().sort().join('\n');
+const ranked = data.overlaps.slice().sort((a, b) => b.jaccard - a.jaccard || (byIdentity(a) < byIdentity(b) ? -1 : byIdentity(a) > byIdentity(b) ? 1 : 0));
+let ovQuery = '', ovPage = 0;
+function drawOverlaps(parent) {
+  const box = el('div', '', parent);
+  const input = document.createElement('input');
+  input.type = 'search'; input.placeholder = 'Search test identities'; input.value = ovQuery; input.setAttribute('aria-label', 'Search overlapping tests');
+  input.setAttribute('data-testid', 'overlap-search');
+  box.appendChild(input);
+  const out = el('div', '', box);
+  const draw = () => {
+    out.replaceChildren();
+    const q = ovQuery.toLowerCase();
+    const hits = q ? ranked.filter((o) => o.tests.some((t) => t.toLowerCase().includes(q))) : ranked;
+    const pages = Math.max(1, Math.ceil(hits.length / PAGE));
+    ovPage = Math.min(ovPage, pages - 1);
+    el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
+    if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
+    hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
+      const row = el('div', '', out);
+      row.setAttribute('data-testid', 'overlap-pair'); row.style.cssText = 'padding:6px 0;border-bottom:1px solid #e5e7eb';
+      const label = el('strong', 'Jaccard ' + o.jaccard.toFixed(2), row); label.style.marginRight = '12px';
+      o.tests.forEach((t) => { const e = el('div', t, row); e.setAttribute('data-testid', 'overlap-test'); e.style.cssText = 'overflow-wrap:anywhere;font-family:monospace'; });
+    });
+    const nav = el('p', '', out);
+    const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
+    step('Previous', -1, 'overlap-prev');
+    el('span', ' Page ' + (ovPage + 1) + ' of ' + pages + ' ', nav);
+    step('Next', 1, 'overlap-next');
+  };
+  input.oninput = () => { ovQuery = input.value; ovPage = 0; draw(); };
+  draw();
+}
 function render() {
   document.getElementById('inventory').textContent = data.inventory;
   const banner = document.getElementById('banner');
@@ -119,7 +154,7 @@ function render() {
       tests.forEach((n) => el('p', n, details).setAttribute('data-testid', 'smell-test'));
     });
   } else if (tab === 'Overlaps') {
-    data.overlaps.forEach((o) => el('p', o.tests.join(' ~ ') + ' ' + o.jaccard.toFixed(2), details));
+    drawOverlaps(details);
   } else if (tab === 'Map') drawMap(details);
 }
 render();

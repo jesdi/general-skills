@@ -186,7 +186,7 @@ describe('safe identities and offline evidence (risk)', () => {
     expect(doc.querySelector('[data-testid=worst-test]')).toBeTruthy();
     click(doc, 'Economy');
     click(doc, 'Overlaps');
-    expect(details(doc)).toContain('~');
+    expect(doc.querySelector('[data-testid=overlap-pair]')).toBeTruthy();
     click(doc, 'Map');
     const dot = doc.querySelector<SVGElement>('[data-testid=map-dot]');
     expect(dot).toBeTruthy();

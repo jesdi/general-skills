@@ -192,9 +192,9 @@ def ended(proc):
 
 
 def until(done, seconds=30):
-    end = time.time() + seconds
+    end = time.monotonic() + seconds
     while not done():
-        assert time.time() < end, "the first driver did not reach its agent"
+        assert time.monotonic() < end, "the first driver did not reach its agent"
         time.sleep(0.02)
 
 
