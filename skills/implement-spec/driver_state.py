@@ -1,14 +1,13 @@
 """state.json, the resume contract: one lock, every write a read-modify-write, published by rename.
 
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
-             landed: [[ticket, the PR tip its merge made]], final, skipped: [sentence]},
+             landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note,
                      landing, disputes, corrected}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
-full one. skipped holds one sentence per model entry that a preflight skipped, and one when the correctness lens lost
-its other provider; the PR body lists them. landing is the commit whose full gate was red at the landing while the
-fixer of the round it started has not reported, else None. disputes is {locked file: {test, requirement, ruling, reason}}, the reviewer's ruling on
+full one. landing is the commit whose full gate was red at the landing while the fixer of the round it started has
+not reported, else None. disputes is {locked file: {test, requirement, ruling, reason}}, the reviewer's ruling on
 the file; corrected is {locked file: {test, requirement, reason}}, the reading of its one correction. A locked file has
 at most one of each per ticket, and no answer writes them."""
 from __future__ import annotations

@@ -597,8 +597,25 @@ def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
         "tip": tip, "onto": final["onto"], "tidied": final["tidied"],
         "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed",
-        "skipped": "".join(f"\n  - {sentence}" for sentence in dict.fromkeys(run.state.read()["run"].get("skipped", [])))
-        or " none"})
+        "providers": _review_providers(run.state.read()["run"]["agents"])})
+
+
+# The roles that review code, with their line in the PR body, and the roles that write it.
+_REVIEWS = {"reviewer": "Ticket reviews", "final-correctness": "Correctness lens", "final-reviewer": "Scoped review"}
+_AUTHORS = ("implementer", "fixer", "conflict")
+
+
+def _review_providers(agents: list[dict]) -> str:
+    """One line per reviewing role that ran: the entries it ran on, and whether one of them shares a provider with an
+    entry that wrote code. It reads the agents that ran, so a preflight fallback of an earlier invocation that a later
+    one undid is not claimed."""
+    wrote = {driver_agents.split(agent["entry"])[0] for agent in agents if agent["role"] in _AUTHORS}
+    lines = []
+    for role, label in _REVIEWS.items():
+        if used := sorted({agent["entry"] for agent in agents if agent["role"] == role}):
+            same = any(driver_agents.split(entry)[0] in wrote for entry in used)
+            lines.append(f"- {label} ran on: {', '.join(used)}" + (", on a provider that also wrote code" * same))
+    return "\n".join(lines)
 
 
 def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:

@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+import driver
+import driver_agents
 import driver_final
 from test_final import Final, final, fixer, fn
 from test_fixloop import inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
@@ -74,6 +76,35 @@ def test_the_summary_counts_each_lens_under_its_role_and_has_no_correctness_row(
     assert f"| agents, final-correctness on {ASTRA} | 1 |" in summary
     assert f"| agents, final-structure on {OPUS} | 1 |" in summary
     assert "agents, correctness" not in summary
+
+
+def test_with_the_other_provider_out_of_credits_every_review_runs_on_the_entry_left_and_the_pr_says_so(
+        tmp_path, monkeypatch):
+    """The preflight of a real run skips ASTRA: the ticket reviews and the correctness lens run on OPUS."""
+    out = "the codex CLI failed the preflight (exit 1): ERROR: You've hit your usage limit."
+    monkeypatch.setattr(driver, "_preflight", lambda args, models: driver._checked(models))
+    monkeypatch.setattr(driver_agents, "_failures", lambda entries: {ASTRA: out} if ASTRA in entries else {})
+    rig = rig_of(tmp_path, models={**MODELS, "reviewer": [ASTRA, OPUS]}).run(plan())
+    assert rig.code == 0, rig.out
+    skipped = [f"Model entry {ASTRA} is skipped for this invocation: {out.rstrip('.')}; each role that lists it goes on "
+               f"with its next entry (reviewer, final-reviewer).",
+               f"No final-reviewer entry on another provider than {SONNET} passed the preflight: the correctness lens "
+               f"and the scoped review run on {OPUS}, the implementer's provider."]
+    assert rig.out.splitlines()[:2] == skipped and rig.ledger()[:2] == skipped
+    ran = {(agent["role"], agent["entry"]) for agent in rig.state()["run"]["agents"]}
+    assert {entry for role, entry in ran if role in ("reviewer", "final-correctness")} == {OPUS}, ran
+    assert driver_final._review_providers(rig.state()["run"]["agents"]).splitlines() == [
+        f"- Ticket reviews ran on: {OPUS}, on a provider that also wrote code",
+        f"- Correctness lens ran on: {OPUS}, on a provider that also wrote code"]
+
+
+def test_the_review_coverage_names_only_what_ran_so_an_undone_fallback_is_not_claimed():
+    agents = [{"role": "implementer", "entry": SONNET}, {"role": "reviewer", "entry": OPUS},
+              {"role": "reviewer", "entry": ASTRA}, {"role": "final-correctness", "entry": ASTRA},
+              {"role": "final-reviewer", "entry": ASTRA}]
+    assert driver_final._review_providers(agents).splitlines() == [
+        f"- Ticket reviews ran on: {OPUS}, {ASTRA}, on a provider that also wrote code",
+        f"- Correctness lens ran on: {ASTRA}", f"- Scoped review ran on: {ASTRA}"]
 
 
 # ---------------------------------------------------------------- input validation

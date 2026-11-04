@@ -183,7 +183,8 @@ def _fix(job: Job, findings: list[dict], landing: str = "") -> None:
     on = entry(run.models, job.round)
     run.state.ticket(number, phase="fix", round=job.round, landing=landing or None)
     if job.round == 2:
-        ledger(f"Ticket {number} round 2: escalated to {on}.")
+        ledger(f"Ticket {number} round 2: escalated to {on}." if on != run.models["implementer"][0] else
+               f"Ticket {number} round 2: stays on {on}: the preflight left no second implementer entry.")
     values, notes = job.pointers(job.round - 1), []
     if landing:
         record = driver_gate.record_path(OUT / number, driver_gate.FULL, landing)

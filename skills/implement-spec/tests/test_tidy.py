@@ -92,10 +92,6 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     assert (rig.code, len(rig.calls()), len(rig.gates()), rig.branch(), rig.ledger()) == (0, calls, gates, tip, ledger)
     assert all(stop_lines(rig.out)) and rig.pushes() == []
 
-    state = rig.repo / ".agent/implement/state.json"
-    record = json.loads(state.read_text())
-    record["run"]["skipped"] = ["Model entry openai/gpt-sol@medium is skipped for this invocation: out of credits."] * 2
-    state.write_text(json.dumps(record))
     rig.run(plan(), "--push")
     assert rig.code == 0 and rig.pushes() == [f"refs/heads/feat/csv {tip}"], rig.out
     (pr,) = rig.prs()
@@ -107,8 +103,8 @@ def test_a_local_run_stops_before_the_push_and_a_push_rerun_pushes_and_opens_the
     assert f"PR method: {pr_skill}\n" in writer["prompt"]
     assert "Facts of the run, which the driver puts after your body:\n## Tickets" in writer["prompt"]
     assert "## Rulings\n\nNone.\n" in pr["body"] and "Scoped review after the fix batch: not needed" in pr["body"]
-    assert pr["body"].rstrip().endswith("- Model entries skipped after a failed preflight:\n  - Model entry "
-                                         "openai/gpt-sol@medium is skipped for this invocation: out of credits."), pr["body"]
+    coverage = pr["body"].split("## Review coverage\n")[1]
+    assert "- Ticket reviews ran on: " in coverage and "- Correctness lens ran on: " in coverage, coverage
     assert f"Pushed feat/csv at {tip} to origin." in rig.out and "PR: https://github.example/pull/1" in rig.out
     assert f"feat/csv is pushed at {tip[:7]}; its PR is https://github.example/pull/1." in rig.out
     assert rig.led("The PR of feat/csv into main is open: https://github.example/pull/1.")

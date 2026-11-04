@@ -496,11 +496,10 @@ def _exit_code(final: dict, args, end_blocked: bool) -> int:
     return code
 
 
-def _record_skipped(state: driver_state.State, skipped: list[str]) -> None:
-    """Each entry the preflight skipped: a ledger sentence, and in state.json for the PR body."""
+def _record_skipped(skipped: list[str]) -> None:
+    """One ledger sentence per entry the preflight skipped. The PR body names the entries the reviews ran on."""
     for sentence in skipped:
         ledger(sentence)
-    state.update(lambda record: record["run"].update(skipped=[*record["run"].get("skipped", []), *skipped]))
 
 
 def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str], args, kept: dict[str, int],
@@ -514,7 +513,7 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str]
     if errors:
         return 3
     run = Run(args, models, state, pr, kept)
-    _record_skipped(state, skipped)
+    _record_skipped(skipped)
     if args.unattended and args.stage_json:
         Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
     end_blocked, lines = _work(tickets, slots, run)
@@ -680,13 +679,17 @@ def _hold(common: Path, pr: str) -> tuple[ExitStack | None, str]:
 
 
 def _preflight(args, models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[str]] | None:
-    """(the lists the run uses, the sentences of the skipped entries), or None with each error printed. The CLIs answer
-    before the first agent. A model that the account cannot use stops no ticket: its roles go on with their next
-    entry, and only a role with no entry left stops the run. A --runner run starts no CLI."""
-    if args.runner:
-        return models, []
+    """(the lists the run uses, the sentences of the skipped entries), or None with each error printed. A --runner
+    run starts no CLI, so it has no preflight."""
+    return (models, []) if args.runner else _checked(models)
+
+
+def _checked(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[str]] | None:
+    """The CLIs answer before the first agent. A model that the account cannot use stops no ticket: its roles go on
+    with their next entry, and the operator sees one line per skipped entry. Only a role with no entry left stops the
+    run."""
     models, errors, skipped = driver_agents.preflight(models)
-    print("".join(error + "\n" for error in errors), end="")
+    print("".join(line + "\n" for line in errors or skipped), end="")
     return None if errors else (models, skipped)
 
 
