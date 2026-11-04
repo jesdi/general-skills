@@ -2,6 +2,7 @@
 Interface: see brittle_repo.py."""
 from brittle_repo import CLAIMS, TEST, board_repo, claims_repo, commit, history, without_git
 from fixture_repo import build_repo, load, snapshots, weigh
+from weigh_rules import load as load_rules
 
 KEY = "github.com/jesdi/demo"
 
@@ -53,6 +54,10 @@ def test_a_target_that_is_not_a_git_repository_leaves_brittleness_unmeasured(tmp
     assert data["test_files"][TEST]["brittle"] is None
     assert "brittle_test_files" not in data["metrics"]
     assert data["pillars"]["refactoring"]["partial"] is True
+    assert data["unmeasured"]["brittle_test_files"] == "no git history"
+    # every metric is either measured or has the reason it is not, never both (hollow_tests is measured without mutation)
+    assert not data["unmeasured"].keys() & data["metrics"].keys()
+    assert data["unmeasured"].keys() | data["metrics"].keys() == {m for p in load_rules()["pillars"].values() for m in p["metrics"]}
 
 
 def test_two_runs_of_the_default_repo_are_equal_apart_from_durations(tmp_path, home, cache):
