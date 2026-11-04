@@ -130,6 +130,23 @@ describe('metrics tab context (R5, R6)', () => {
   });
 });
 
+describe('line breaks (R5, R9)', () => {
+  it('keeps each number with its unit and each anchor in one piece', async () => {
+    const doc = await open(pages.values);
+    click(doc, 'Fast feedback');
+    const cells = [...row(doc, 'Total runtime').querySelectorAll('td')].map((td) => td.textContent ?? '');
+    expect(cells[1]).toBe('64.16\u00a0s');
+    expect(cells[3]).toBe('target\u00a0≤\u00a030\u00a0s, bad\u00a0≥\u00a0300\u00a0s');
+  });
+
+  it('shows failing identities as wrapping ids attached to the banner', async () => {
+    const doc = await open(pages.red);
+    const failing = doc.querySelector('[data-testid=banner] + #failing')!;
+    expect(failing, 'failing list directly under the banner').toBeTruthy();
+    for (const f of failing.querySelectorAll('[data-testid=failing-test]')) expect(f.querySelector('.id')?.textContent).toBe(f.textContent);
+  });
+});
+
 describe('score bounds (R10)', () => {
   it('shows raw 0.2 and 100 as 1 and 99, keeps 90 for zero tests over 10 s, and explains rounding, bounds and anchors', async () => {
     const doc = await open(pages.scores);

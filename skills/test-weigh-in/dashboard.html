@@ -13,14 +13,23 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-w
 @media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 7px}}
 button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
 #details table{width:100%}
+#details tr+tr{border-top:1px solid #e5e7eb}
 #details svg{max-width:100%;height:auto}
 .gauge[aria-pressed=true]{border-color:#2563eb}
 .score{display:block;font-size:32px;font-weight:600}
-#banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px}
+#banner{background:#fef2f2;color:#991b1b;padding:8px 12px;border-radius:6px;margin-bottom:0}
+#failing{border:1px solid #fecaca;border-top:0;border-radius:0 0 6px 6px;padding:4px 12px;margin-bottom:16px}
+#failing p{margin:4px 0}
+#failing:empty{display:none}
+#banner:has(+#failing:not(:empty)){border-radius:6px 6px 0 0}
 .flag{display:block;color:#92400e}
 table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
 /* a test identity: breaks after / :: . _ (see ident), anywhere only when one part is wider than the line */
 .id{font:13px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+/* the anchors column takes the spare width, so a metric and its value stay side by side */
+@media (min-width:601px){#details th:nth-child(-n+3),#details td:nth-child(-n+3):not([colspan]){width:1%;white-space:nowrap}}
+td:first-child,th:first-child{padding-left:0}
+@media (max-width:600px){td,th{padding:4px 6px}td:last-child,th:last-child{padding-right:0}#details td:first-child{min-width:7em}}
 </style></head><body>
 <h1>test-weigh-in</h1>
 <p data-testid="inventory" id="inventory"></p>
@@ -33,6 +42,8 @@ const data = __DATA__;
 const shown = (s) => Math.min(99, Math.max(1, Math.round(s)));
 const el = (tag, text, parent) => { const e = document.createElement(tag); e.textContent = text; parent.appendChild(e); return e; };
 const fmt = (n) => String(Math.round(n * 100) / 100);
+// words that belong together stay on one line: "71.3 %", "target ≤ 60 s"
+const nb = (...parts) => parts.filter((x) => x !== '').join('\u00a0');
 // a test identity. A line may end after a / :: . or _ that is at least 16 characters past the previous break: the
 // identity wraps between its parts rather than mid-word, with few nodes on a page of 200 identities
 const ident = (text, parent) => {
@@ -176,15 +187,15 @@ function render() {
     const head = el('tr', '', t);
     ['Metric', 'Value', 'Score', 'Anchors'].forEach((h) => el('th', h, head));
     p.metrics.forEach((m) => {
-      const u = m.unit ? ' ' + m.unit : '', up = m.target < m.bad;
+      const u = m.unit || '', up = m.target < m.bad;
       const r = el('tr', '', t);
-      el('td', m.name, r); el('td', fmt(m.value) + u, r); el('td', String(shown(m.score)), r);
-      el('td', 'target ' + (up ? '≤ ' : '≥ ') + fmt(m.target) + u + ', bad ' + (up ? '≥ ' : '≤ ') + fmt(m.bad) + u, r);
+      el('td', m.name, r); el('td', nb(fmt(m.value), u), r); el('td', String(shown(m.score)), r);
+      el('td', nb('target', up ? '≤' : '≥', fmt(m.target), u) + ', ' + nb('bad', up ? '≥' : '≤', fmt(m.bad), u), r);
     });
     p.missing.forEach((m) => {
       const r = el('tr', '', t);
-      el('td', m.name, r); el('td', 'unmeasured', r); el('td', '–', r);
-      el('td', m.reason || 'unavailable (cause not recorded)', r);
+      // no value, so no score or anchors: the reason takes their place
+      el('td', m.name, r); el('td', 'unmeasured: ' + (m.reason || 'unavailable (cause not recorded)'), r).colSpan = 3;
     });
     el('p', 'Scores are rounded and shown as 1 to 99, not 100 or 0. A metric at its target scores 90 and at its bad anchor 10; the logistic curve between them never reaches 0 or 100.', details);
     if (data.skipped.length) {
