@@ -1,6 +1,13 @@
+import sys
+from pathlib import Path
+
+# The engine's modules sit one folder up. Set the path here, before any test module is collected, so a test file
+# needs no sys.path line of its own and collection order cannot hide a missing one.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 collect_ignore_glob = ["testdata/*"]
 
-import pytest
+import pytest  # noqa: E402
 
 from fixture_repo import build_repo, weigh
 
