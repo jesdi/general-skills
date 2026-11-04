@@ -147,6 +147,7 @@ describe('overlaps evidence (R1)', () => {
 describe('pair layout (R1, R9)', () => {
   it('sets the two identities apart with a divider between them and breaks them only between their parts', async () => {
     const { doc } = await open(fixture.forward.html);
+    await new Promise((resolve) => setTimeout(resolve, 50)); // the breaks are added before the next paint
     const row = rows(doc)[0];
     expect(row.querySelector('strong')?.textContent).toMatch(/^Jaccard \d\.\d\d$/);
     const [a, b] = [...row.querySelectorAll<HTMLElement>('[data-testid=overlap-test]')];
@@ -154,9 +155,10 @@ describe('pair layout (R1, R9)', () => {
     expect(a.nextElementSibling?.tagName, 'a divider between A and B').toBe('HR');
     expect(a.nextElementSibling?.nextElementSibling).toBe(b);
     for (const id of [a, b]) {
-      expect(id.querySelector('.id'), 'identity styled as a wrapping id').toBeTruthy();
+      expect(id.classList.contains('id'), 'identity styled as a wrapping id').toBe(true);
       // every break opportunity follows a separator, never the middle of a word
       for (const w of id.querySelectorAll('wbr')) expect(w.previousSibling?.textContent).toMatch(/(\/|::|\.|_)$/);
+      expect(id.innerHTML, 'a file name keeps its .py').not.toMatch(/\.<wbr>py/);
       expect(id.querySelectorAll('wbr').length).toBeGreaterThan(0);
     }
   });

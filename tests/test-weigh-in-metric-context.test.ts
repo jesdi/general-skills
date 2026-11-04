@@ -143,7 +143,7 @@ describe('line breaks (R5, R9)', () => {
     const doc = await open(pages.red);
     const failing = doc.querySelector('[data-testid=banner] + #failing')!;
     expect(failing, 'failing list directly under the banner').toBeTruthy();
-    for (const f of failing.querySelectorAll('[data-testid=failing-test]')) expect(f.querySelector('.id')?.textContent).toBe(f.textContent);
+    for (const f of failing.querySelectorAll('[data-testid=failing-test]')) expect(f.classList.contains('id')).toBe(true);
   });
 });
 
