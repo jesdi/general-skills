@@ -110,6 +110,23 @@ describe('sorted neighbours (R4)', () => {
   });
 });
 
+describe('selection panel layout (R4, R9)', () => {
+  const P = 'tests/test_pick.py::test_';
+  it('puts each neighbour and its Jaccard value on one row under a Jaccard column header, beside the map', async () => {
+    const m = await openMap(sortedHtml);
+    m.select(`${P}picked`);
+    const side = m.doc.querySelector('.map > svg + .map-side');
+    expect(side, 'selection panel next to the map').toBeTruthy();
+    expect(side!.querySelector('[data-testid=map-picked] .id')?.textContent).toBe(`${P}picked`);
+    const table = side!.querySelector('[data-testid=map-similar] .similar')!;
+    expect([...table.querySelector('.head')!.children].map((c) => c.textContent)).toEqual(['Test', 'Jaccard']);
+    const first = table.querySelector('[data-testid=map-similar-item]')!;
+    expect([...first.children].map((c) => c.textContent)).toEqual([`${P}sim_100`, '1.00']);
+    expect(first.querySelector('.id')).toBeTruthy();
+    expect(m.doc.querySelector('svg')!.hasAttribute('width'), 'the map scales to the width it gets').toBe(false);
+  });
+});
+
 describe('selection at scale (R3, R4)', () => {
   const N = 2172, HUB = 'tests/hub/test_hub.py::test_hub', NEAR = 148;
   const id = (i: number) => `tests/scale/test_module_${String(i).padStart(4, '0')}.py::test_case_${String(i).padStart(4, '0')}_${'x'.repeat(60)}`;
