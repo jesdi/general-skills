@@ -140,10 +140,14 @@ def preflight(models: dict[str, list[str]]) -> tuple[dict[str, list[str]], list[
     provider than the implementer's first one is left)."""
     failed = _failures(sorted({entry for role in models.values() for entry in role}))
     kept = {role: [entry for entry in entries if entry not in failed] for role, entries in models.items()}
-    errors = [f"{role}: every model entry failed the preflight: "
-              + "; ".join(f"model entry {entry}: {failed[entry]}" for entry in models[role])
-              for role, entries in kept.items() if not entries]
+    errors = [_no_entry_left(role, models[role], failed) for role, entries in kept.items() if not entries]
     return kept, errors, [] if errors else _skipped(models, kept, failed)
+
+
+def _no_entry_left(role: str, entries: list[str], failed: dict[str, str]) -> str:
+    """The error of a role whose every entry failed the preflight."""
+    return f"{role}: every model entry failed the preflight: " + "; ".join(
+        f"model entry {entry}: {failed[entry]}" for entry in entries)
 
 
 def _failures(entries: list[str]) -> dict[str, str]:
