@@ -65,14 +65,23 @@ def main(argv=None):
         "runtime_seconds": max(run["runtime_seconds"], sum(c["duration"] for c in run["cases"].values())),
     }
     values = feedback_values(tests, inventory["runtime_seconds"])
-    if mutation is not None:
-        values["mutation_score"] = mutation["score"]
-        values["pseudo_tested_functions"] = mutation["pseudo_tested"]
+    unmeasured = {}
+
+    def measure(mid, value, reason):
+        """An optional metric records its value, or the reason it has none, here and only here."""
+        if value is None:
+            unmeasured[mid] = reason
+        else:
+            values[mid] = value
+
+    tier = "the mutation tier did not run"
+    measure("mutation_score", None if mutation is None else mutation["score"], tier)
+    measure("pseudo_tested_functions", None if mutation is None else mutation["pseudo_tested"], tier)
     found, clusters = find_smells(repo, tests, violations(repo, rules.get("ruff", {}).get("pt", [])))
     for node, info in found.items():
         tests[node].update(info)
-    if inventory["source_lines"]:
-        values["test_source_ratio"] = inventory["test_lines"] / inventory["source_lines"]
+    measure("test_source_ratio", inventory["test_lines"] / inventory["source_lines"] if inventory["source_lines"] else None,
+            "no source lines found")
     # failing, erroring and skipped tests cost (runtime, lines, smells) but give no value: no coverage, overlap or uniqueness
     covered = per_test(cov["report"], cov["arcs"], repo)
     cov_tests = aggregate(cov["cases"])
@@ -84,22 +93,18 @@ def main(argv=None):
     unique = unique_coverage(passing)
     for node, test in tests.items():
         test["unique_coverage"] = unique.get(node, 0)
-    if branch_percent(cov["value_report"]) is not None:
-        values["branch_coverage"] = branch_percent(cov["value_report"])
-    if mutation is not None:  # flags tests before the metrics they change are computed
-        values.update(kill_matrix(tests, passing, mutation))
+    measure("branch_coverage", branch_percent(cov["value_report"]), "no branch data in the coverage report")
+    # flags tests before the metrics they change are computed
+    measure("subsumed_in_kill_matrix", None if mutation is None else kill_matrix(tests, passing, mutation)["subsumed_in_kill_matrix"], tier)
     values.update(smell_values(tests))
-    if passing:
-        # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage, and an
-        # insufficient-evidence test counts in no Economy metric
-        values["no_unique_coverage"] = 100 * sum(not u and not tests[n].get("insufficient_evidence") for n, u in unique.items()) / len(tests)
+    # a count-based metric is a percentage of all tests (req 17); only valued tests can lack unique coverage, and an
+    # insufficient-evidence test counts in no Economy metric
+    measure("no_unique_coverage",
+            100 * sum(not u and not tests[n].get("insufficient_evidence") for n, u in unique.items()) / len(tests) if passing else None,
+            "no test passed")
     test_files = brittleness(repo, test_file_sources(tests))
-    if (percent := brittle_percent(test_files)) is not None:
-        values["brittle_test_files"] = percent
-    tier = "the mutation tier did not run"
-    unmeasured = {} if mutation is not None else {m: tier for m in ("mutation_score", "pseudo_tested_functions", "hollow_tests", "subsumed_in_kill_matrix")}
-    if "brittle_test_files" not in values:
-        unmeasured["brittle_test_files"] = "no source file maps to a test file" if is_repo(repo) else "no git history"
+    measure("brittle_test_files", brittle_percent(test_files),
+            "no source file maps to a test file" if is_repo(repo) else "no git history")
     metrics, pillars = score(rules, values, red=len(passing) < len(tests))
     data = {
         "commit": commit,
