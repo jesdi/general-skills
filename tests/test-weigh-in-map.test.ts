@@ -60,7 +60,7 @@ describe('Overlaps tab', () => {
     const doc = await open();
     gauges(doc).find((g) => g.textContent?.includes('Economy'))!.click();
     tabs(doc).find((b) => b.textContent?.trim() === 'Overlaps')!.click();
-    const rows = [...doc.querySelectorAll('[data-testid=details] p')].map((r) => r.textContent ?? '');
+    const rows = [...doc.querySelectorAll('[data-testid=overlap-pair]')].map((r) => r.textContent ?? '');
     expect(rows).toHaveLength(12);
     for (const group of [[INTENT, ...TWINS], OTHERS]) {
       for (const [i, a] of group.entries()) {
