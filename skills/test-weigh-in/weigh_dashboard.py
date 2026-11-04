@@ -31,13 +31,6 @@ def _slow(rules):
     return rules["pillars"]["feedback"]["metrics"]["p95_duration"]["target"]
 
 
-SECONDS, RATIO = {"total_runtime", "p95_duration"}, {"test_source_ratio"}
-
-
-def _unit(mid):
-    return "s" if mid in SECONDS else "" if mid in RATIO else "%"
-
-
 def write_dashboard(home, data, rules):
     failing = _failing(data["tests"])
     page = {
@@ -51,7 +44,7 @@ def write_dashboard(home, data, rules):
         "inventory": inventory_line(data["inventory"]),
         "pillars": [
             {"key": k, "name": p["name"], **data["pillars"][k],
-             "metrics": [{"name": m["name"], "unit": _unit(i), "target": m["target"], "bad": m["bad"], **data["metrics"][i]}
+             "metrics": [{"name": m["name"], "unit": m["unit"], "target": m["target"], "bad": m["bad"], **data["metrics"][i]}
                          for i, m in p["metrics"].items() if i in data["metrics"]],
              # an entry the snapshot does not record (older data) has no known cause
              "missing": [{"name": m["name"], "reason": data.get("unmeasured", {}).get(i)} for i, m in p["metrics"].items() if i not in data["metrics"]],

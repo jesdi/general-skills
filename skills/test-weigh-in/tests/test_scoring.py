@@ -101,6 +101,16 @@ def test_equal_anchors_stop_the_run_naming_the_metric(tmp_path, home, cache):
     assert snapshots(home, KEY) == []
 
 
+def test_a_metric_with_an_unknown_unit_stops_the_run_naming_the_metric(tmp_path, home, cache):
+    repo = build_repo(tmp_path / "demo")
+    rules = write_rules(tmp_path / "rules.toml")
+    rules.write_text(rules.read_text().replace('unit = "s"', 'unit = "min"', 1))  # the first "s" metric is total_runtime
+    result = weigh(repo, home, cache=cache, rules=rules)
+    assert result.returncode == 2
+    assert "total runtime needs a unit" in (result.stdout + result.stderr).lower()
+    assert snapshots(home, KEY) == []
+
+
 def test_edited_rules_keep_the_version_and_change_the_hash(tmp_path, home, cache):
     repo = build_repo(tmp_path / "demo")
     before = write_rules(tmp_path / "before.toml", branch_coverage=dict(bad=50))

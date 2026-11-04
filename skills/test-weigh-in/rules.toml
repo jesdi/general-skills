@@ -9,12 +9,14 @@ name = "Protection against regressions"
 
 [pillars.regression.metrics.mutation_score]
 name = "Mutation score"
+unit = "%"
 weight = 0.45
 target = 80
 bad = 40
 
 [pillars.regression.metrics.branch_coverage]
 name = "Branch coverage"
+unit = "%"
 weight = 0.25
 target = 90
 bad = 50
@@ -22,6 +24,7 @@ partial_weight = 0.6
 
 [pillars.regression.metrics.hollow_tests]
 name = "Hollow tests"
+unit = "%"
 weight = 0.2
 target = 0
 bad = 10
@@ -29,6 +32,7 @@ partial_weight = 0.4
 
 [pillars.regression.metrics.pseudo_tested_functions]
 name = "Pseudo-tested functions"
+unit = "%"
 weight = 0.1
 target = 0
 bad = 15
@@ -38,24 +42,28 @@ name = "Resistance to refactoring"
 
 [pillars.refactoring.metrics.brittle_test_files]
 name = "Brittle test files"
+unit = "%"
 weight = 0.4
 target = 15
 bad = 60
 
 [pillars.refactoring.metrics.private_access]
 name = "Tests with private access"
+unit = "%"
 weight = 0.25
 target = 2
 bad = 30
 
 [pillars.refactoring.metrics.mock_heavy]
 name = "Mock-heavy tests"
+unit = "%"
 weight = 0.2
 target = 5
 bad = 30
 
 [pillars.refactoring.metrics.interaction_only]
 name = "Interaction-only tests"
+unit = "%"
 weight = 0.15
 target = 5
 bad = 30
@@ -65,6 +73,7 @@ name = "Fast feedback"
 
 [pillars.feedback.metrics.total_runtime]
 name = "Total runtime"
+unit = "s"
 weight = 0.4
 target = 60
 bad = 600
@@ -72,6 +81,7 @@ log = true
 
 [pillars.feedback.metrics.p95_duration]
 name = "p95 test duration"
+unit = "s"
 weight = 0.3
 target = 0.1
 bad = 2
@@ -79,12 +89,14 @@ log = true
 
 [pillars.feedback.metrics.slowest_decile_share]
 name = "Runtime share of slowest 10% of tests"
+unit = "%"
 weight = 0.15
 target = 40
 bad = 90
 
 [pillars.feedback.metrics.tests_over_10s]
 name = "Tests over 10 s"
+unit = "%"
 weight = 0.15
 target = 0
 bad = 2
@@ -94,18 +106,21 @@ name = "Maintainability"
 
 [pillars.maintainability.metrics.smelly_tests]
 name = "Tests with a maintainability smell"
+unit = "%"
 weight = 0.5
 target = 5
 bad = 40
 
 [pillars.maintainability.metrics.long_tests]
 name = "Tests longer than 50 lines"
+unit = "%"
 weight = 0.2
 target = 2
 bad = 20
 
 [pillars.maintainability.metrics.test_source_ratio]
 name = "Test : source lines-of-code ratio"
+unit = ""
 weight = 0.3
 target = 1.5
 bad = 4.0
@@ -115,6 +130,7 @@ name = "Economy"
 
 [pillars.economy.metrics.no_unique_coverage]
 name = "Tests with no unique coverage"
+unit = "%"
 weight = 0.35
 target = 10
 bad = 50
@@ -122,12 +138,14 @@ partial_weight = 0.6
 
 [pillars.economy.metrics.subsumed_in_kill_matrix]
 name = "Tests subsumed in the kill matrix"
+unit = "%"
 weight = 0.4
 target = 5
 bad = 35
 
 [pillars.economy.metrics.duplicate_clusters]
 name = "Tests in a duplicate-body cluster"
+unit = "%"
 weight = 0.25
 target = 2
 bad = 20
