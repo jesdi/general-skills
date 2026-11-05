@@ -145,13 +145,34 @@ function drawMap(parent) {
   const pickedName = el('p', '', side); pickedName.setAttribute('data-testid', 'map-picked');
   const list = el('div', '', side); list.setAttribute('data-testid', 'map-similar');
   let lit = [];
+  // the selected dot's own mark, unlike the blue rings of its similar dots: the dot again, then an ink ring on a white
+  // rim 5 px out from it (at least 18 px across on any screen), all drawn after every dot so no neighbour covers it;
+  // clicks pass through to the dots beneath
+  const mark = document.createElementNS(NS, 'g');
+  mark.setAttribute('data-testid', 'map-selected'); mark.setAttribute('pointer-events', 'none'); mark.setAttribute('display', 'none');
+  const copy = mark.appendChild(document.createElementNS(NS, 'circle'));
+  const rings = [['#fff', 5], ['#222', 2.5]].map(([stroke, width]) => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('fill', 'none'); c.setAttribute('stroke', stroke); c.setAttribute('stroke-width', width);
+    c.setAttribute('vector-effect', 'non-scaling-stroke');
+    return mark.appendChild(c);
+  });
+  svg.appendChild(mark);
   // selection touches only the previous and the new highlights and the neighbour list, never the placement
   const pick = (d) => {
     picked = d;
     lit.forEach((c) => { c.setAttribute('stroke', 'none'); delete c.dataset.highlighted; });
     const sims = d.similar.slice().sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    lit = [d.test, ...sims.map(([n]) => n)].map((n) => circles.get(n)).filter(Boolean);
+    // only the similar dots get a blue ring; the selected one shows through its own mark below
+    lit = sims.map(([n]) => circles.get(n)).filter(Boolean);
     lit.forEach((c) => { c.setAttribute('stroke', '#2563eb'); c.dataset.highlighted = 'true'; });
+    // the drawing's pixels per unit; 1 where nothing is laid out
+    const dot = circles.get(d.test), scale = svg.getBoundingClientRect().width / w || 1;
+    const r = Number(dot.getAttribute('r')), ring = Math.max(r + 5 / scale, 9 / scale);
+    [copy, ...rings].forEach((c) => { c.setAttribute('cx', dot.getAttribute('cx')); c.setAttribute('cy', dot.getAttribute('cy')); });
+    copy.setAttribute('r', r); copy.setAttribute('fill', dot.getAttribute('fill'));
+    rings.forEach((c) => c.setAttribute('r', ring));
+    mark.removeAttribute('display');
     hint.hidden = true;
     pickedName.replaceChildren();
     el('strong', 'Selected', pickedName); el('br', '', pickedName); ident(el('span', d.test, pickedName));

@@ -62,8 +62,17 @@ const openMap = async (html: string) => {
   const select = (test: string) => dot(test).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
   const text = (id: string) => doc.querySelector(`[data-testid=${id}]`)?.textContent ?? '';
   const items = () => [...doc.querySelectorAll('[data-testid=map-similar-item]')].map((r) => r.textContent ?? '');
+  // the blue-ringed similar dots; the selected dot is never one of them, it shows through [data-testid=map-selected]
   const highlighted = () => dots().filter((d) => d.getAttribute('data-highlighted') === 'true').map((d) => d.getAttribute('data-test'));
-  return { doc, dots, dot, select, text, items, highlighted, coldMs };
+  // the dot the selection mark sits on, null while the mark is hidden
+  const marked = () => {
+    const mark = doc.querySelector('[data-testid=map-selected]');
+    if (!mark || mark.getAttribute('display') === 'none') return null;
+    const at = mark.querySelector('circle')!;
+    const on = dots().filter((d) => d.getAttribute('cx') === at.getAttribute('cx') && d.getAttribute('cy') === at.getAttribute('cy'));
+    return on.length === 1 ? on[0].getAttribute('data-test') : on.map((d) => d.getAttribute('data-test')).join(',');
+  };
+  return { doc, dots, dot, select, text, items, highlighted, marked, coldMs };
 };
 
 describe('legend and hover identity (R2)', () => {
@@ -96,7 +105,8 @@ describe('sorted neighbours (R4)', () => {
     expect(rows.map((r) => /\d\.\d\d/.exec(r)?.[0])).toEqual(['1.00', '0.95', '0.91']);
     expect(rows.map((r) => ['sim_100', 'sim_095', 'sim_091'].find((n) => r.includes(n)))).toEqual(['sim_100', 'sim_095', 'sim_091']);
     expect(rows.some((r) => r.includes('test_below'))).toBe(false);
-    expect(m.highlighted().sort()).toEqual(['picked', 'sim_091', 'sim_095', 'sim_100'].map((n) => P + n).sort());
+    expect(m.highlighted().sort()).toEqual(['sim_091', 'sim_095', 'sim_100'].map((n) => P + n).sort());
+    expect(m.marked()).toBe(`${P}picked`);
   });
 
   it('leaves no stale highlight or neighbour row after selecting another test', async () => {
@@ -105,8 +115,45 @@ describe('sorted neighbours (R4)', () => {
     m.select(`${P}lonely`);
     expect(m.text('map-picked')).toContain(`${P}lonely`);
     expect(m.text('map-picked')).not.toContain('picked');
-    expect(m.highlighted()).toEqual([`${P}lonely`]);
+    expect(m.highlighted()).toEqual([]);
+    expect(m.marked()).toBe(`${P}lonely`);
     expect(m.items()).toEqual([]);
+  });
+});
+
+describe('selected dot stands out from its similar dots (R4)', () => {
+  const P = 'tests/test_pick.py::test_';
+  // the selected dot gets a marker of its own: an ink ring, wider than the dot, drawn after every dot so no neighbour
+  // covers it, and passing clicks through to the dots beneath; similar dots keep only their blue ring
+  const marker = (m: Awaited<ReturnType<typeof openMap>>) => {
+    const marks = [...m.doc.querySelectorAll<SVGElement>('[data-testid=map-selected]')];
+    expect(marks, 'one selection marker').toHaveLength(1);
+    return marks[0];
+  };
+  it('marks only the selected dot, with a ring that differs in colour and size, on top of every dot', async () => {
+    const m = await openMap(sortedHtml);
+    m.select(`${P}picked`);
+    const mark = marker(m), dot = m.dot(`${P}picked`);
+    const svg = m.doc.querySelector('.map svg')!;
+    expect(svg.lastElementChild, 'drawn after every dot').toBe(mark);
+    expect(mark.getAttribute('pointer-events')).toBe('none');
+    const rings = [...mark.querySelectorAll('circle')];
+    for (const ring of rings) {
+      expect([ring.getAttribute('cx'), ring.getAttribute('cy')]).toEqual([dot.getAttribute('cx'), dot.getAttribute('cy')]);
+    }
+    const ink = rings.map((r) => r.getAttribute('stroke'));
+    const similar = ['sim_100', 'sim_095', 'sim_091'].map((n) => m.dot(P + n).getAttribute('stroke'));
+    expect(new Set(similar)).toEqual(new Set(['#2563eb']));
+    expect(ink.some((s) => s && !similar.includes(s) && s !== 'none' && s !== '#fff'), `marker strokes ${ink}`).toBe(true);
+    expect(Math.max(...rings.map((r) => Number(r.getAttribute('r')))), 'ring wider than the dot').toBeGreaterThan(Number(dot.getAttribute('r')));
+  });
+
+  it('moves the marker to the next selection', async () => {
+    const m = await openMap(sortedHtml);
+    m.select(`${P}picked`);
+    m.select(`${P}lonely`);
+    const dot = m.dot(`${P}lonely`);
+    expect(marker(m).querySelector('circle')!.getAttribute('cx')).toBe(dot.getAttribute('cx'));
   });
 });
 
@@ -156,7 +203,8 @@ describe('selection at scale (R3, R4)', () => {
       m.select(target);
       const ms = performance.now() - start;
       expect(m.text('map-picked'), `selection ${i}`).toContain(target);
-      expect(m.highlighted().length, `selection ${i} highlights`).toBe(target === HUB ? NEAR + 1 : 2);
+      expect(m.highlighted().length, `selection ${i} highlights`).toBe(target === HUB ? NEAR : 1);
+      expect(m.marked(), `selection ${i} mark`).toBe(target);
       expect(ms, `selection ${i} took ${Math.round(ms)} ms`).toBeLessThan(200);
     }
     expect(positions(m.dots())).toEqual(before);

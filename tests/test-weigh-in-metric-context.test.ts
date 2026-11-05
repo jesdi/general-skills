@@ -208,7 +208,7 @@ describe('safe identities and offline evidence (risk)', () => {
     const dot = doc.querySelector<SVGElement>('[data-testid=map-dot]');
     expect(dot).toBeTruthy();
     dot!.dispatchEvent(new doc.defaultView!.MouseEvent('click', { bubbles: true }));
-    expect(doc.querySelector('[data-highlighted=true]')).toBeTruthy();
+    expect(doc.querySelector('[data-testid=map-selected]')?.getAttribute('display')).not.toBe('none');
     click(doc, 'Metrics');
     expect(details(doc)).toMatch(/rounded/i);
     expect([...doc.querySelectorAll('[data-testid=failing-test]')].map((el) => el.textContent)).toContain(hostileIdentity);
