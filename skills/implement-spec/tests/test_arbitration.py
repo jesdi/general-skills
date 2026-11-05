@@ -247,15 +247,15 @@ def test_a_review_finding_after_a_correction_of_another_test_gets_a_correction_w
                           "test-writer", "reviewer"]
 
 
-def test_the_ticket_asks_spec_ambiguous_once_its_locked_tests_were_settled_four_times(tmp_path):
+def test_the_ticket_asks_spec_ambiguous_once_its_locked_tests_were_settled_three_times(tmp_path):
     """A test added is never corrected twice, so a cap bounds the review that keeps asking for one more."""
-    steps = {"01/test-writer": [tw("01"), *[correction(f"# added {n}\n") for n in range(1, 5)]],
-             "01/reviewer": [review("01", [MISSING])] * 5 + [review("01")]}
+    steps = {"01/test-writer": [tw("01"), *[correction(f"# added {n}\n") for n in range(1, 4)]],
+             "01/reviewer": [review("01", [MISSING])] * 4 + [review("01")]}
     rig = run(tmp_path, steps)
-    assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 5, rig.ledger()
+    assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 4, rig.ledger()
     (question,) = asked(rig)
-    assert question["id"] == AMBIGUOUS and "4 times" in question["subject"] and "MISSING" in question["subject"]
-    assert rig.state()["tickets"]["01"]["settled"] == 4
+    assert question["id"] == AMBIGUOUS and "3 times" in question["subject"] and "MISSING" in question["subject"]
+    assert rig.state()["tickets"]["01"]["settled"] == 3
 
 
 # ---------------------------------------------------------------- the answers

@@ -22,7 +22,7 @@ from driver_decisions import Resume
 from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger, retry_point
 
-SETTLEMENTS = 4  # arbitrations and review corrections per ticket before one more asks: no new test dodges the bound
+SETTLEMENTS = 3  # arbitrations and review corrections per ticket before one more asks: no new test dodges the bound
 
 class Corrected(NamedTuple):
     """The reading a locked test is corrected to, which the ticket's `corrected` keeps: its one correction."""

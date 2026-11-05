@@ -204,7 +204,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   tests are the ones `keep-test` closes for later reviews (`driver_dispute.kept`, `driver_fixloop._still_to_correct`).
 - A renamed or added test has a new key, so the per-test rule alone does not bound the arbitrations and the review
   corrections of a ticket, and a review correction does not advance the round. `driver_dispute.settled` counts them
-  in the ticket's `settled`; at `driver_dispute.SETTLEMENTS` (4) the next one asks `spec-ambiguous`
+  in the ticket's `settled`; at `driver_dispute.SETTLEMENTS` (3) the next one asks `spec-ambiguous`
   (`driver_dispute.capped`), so each further one costs an answer. `driver_legacy._per_test` moves a schema 4 record to
   its test and seeds `settled` from the records.
 - `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
