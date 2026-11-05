@@ -4,6 +4,7 @@ gets a tree: `begin` opens it in the ticket's own slot for the conflict agent. T
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 
 from driver_slots import ancestor, git
@@ -22,18 +23,41 @@ def signs() -> bool:
     return git(".", "config", "--type=bool", "commit.gpgsign").stdout.strip() == "true"
 
 
-def commit_tree(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
-    """`git commit-tree` with `env` on top of os.environ, signed when commit.gpgsign is on: commit-tree ignores it."""
+CO_AUTHOR = re.compile(r"co-authored-by\s*:", re.IGNORECASE)
+
+
+def without_co_authors(message: str) -> str:
+    """`message` without the Co-authored-by trailers of its last paragraph, folded lines included: git reads
+    trailers only there, and the push refuses them."""
+    head, gap, last = message.strip().rpartition("\n\n")
+    kept, dropping = [], False
+    for line in last.splitlines():
+        dropping = bool(CO_AUTHOR.match(line)) or (dropping and line[:1].isspace())
+        if not dropping:
+            kept.append(line)
+    return f"{head}{gap}{chr(10).join(kept)}".strip() + "\n"
+
+
+def commit_tree(args: list[str], message: str, env: dict[str, str]) -> subprocess.CompletedProcess:
+    """`git commit-tree` with `env` on top of os.environ: signed when commit.gpgsign is on, which commit-tree
+    ignores, and with no Co-authored-by trailer, so every commit the driver makes is one the push takes."""
     sign = ["-S"] if signs() else []
-    return subprocess.run(["git", "commit-tree", *sign, *args], capture_output=True, text=True, env={**os.environ, **env})
+    return subprocess.run(["git", "commit-tree", *sign, *args, "-m", without_co_authors(message)], capture_output=True,
+                          text=True, env={**os.environ, **env})
 
 
-def unsigned(tip: str) -> list[str]:
-    """The commits of `tip` that origin does not have and that have no good signature, when commit.gpgsign is on."""
-    if not signs():
-        return []
-    rows = git(".", "log", "--format=%h %G?", tip, "--not", "--remotes=origin").stdout.splitlines()
-    return [row.split()[0] for row in rows if not row.endswith(" G")]
+def unpushable(tip: str) -> list[str]:
+    """Why each commit of `tip` that origin does not have may not be pushed: no good signature when commit.gpgsign
+    is on, or a Co-authored-by trailer."""
+    sign, found = signs(), []
+    log = git(".", "log", "-z", "--format=%h%x00%G?%x00%(trailers:key=Co-authored-by,valueonly,unfold,separator=;)",
+              tip, "--not", "--remotes=origin").stdout.split("\0")
+    for sha, status, co_author in zip(log[::3], log[1::3], log[2::3]):
+        if sign and status != "G":
+            found.append(f"{sha} has no good signature")
+        if co_author:
+            found.append(f"{sha} has a Co-authored-by trailer")
+    return found
 
 
 def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
@@ -47,7 +71,7 @@ def commit(pr_tip: str, tip: str, message: str) -> tuple[str, str]:
     if tree.returncode:
         files = ", ".join(tree.stdout.splitlines()[1:]) or tree.stderr.strip()
         return "", f"the merge into the PR branch conflicts in {files}"
-    made = commit_tree([tree.stdout.strip(), "-p", pr_tip, "-p", tip, "-m", message], identity(tip))
+    made = commit_tree([tree.stdout.strip(), "-p", pr_tip, "-p", tip], message, identity(tip))
     return (made.stdout.strip(), "") if made.returncode == 0 else ("", f"git commit-tree failed: {made.stderr.strip()}")
 
 
