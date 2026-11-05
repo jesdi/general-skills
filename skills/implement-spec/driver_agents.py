@@ -233,7 +233,8 @@ def command(role: str, entry: str, report: str) -> list[str]:
     if provider == "openai":
         # No --ephemeral: the rollout on disk is the trace. A read-only agent may not write its report, so -o saves
         # the last message next to it; settle_report picks one. -o on the report itself overwrites a written report.
-        # A role that commits needs full access: workspace-write keeps .git read-only, even under --add-dir.
+        # A role that commits needs full access: workspace-write keeps .git read-only, even as an --add-dir or a
+        # sandbox_workspace_write.writable_roots entry (codex 0.166.0).
         tail = ["--sandbox", "read-only", "-o", last_message(report)] if role in READ_ONLY else [
             "--sandbox", "danger-full-access"]
         # --json: the log carries the token usage of each turn, which prices the run.
@@ -325,7 +326,7 @@ def tokens(log: Path) -> dict[str, int]:
             event = json.loads(line)
             if event.get("type") == "turn.completed":
                 for name, key in _USAGE.items():
-                    used[name] = used.get(name, 0) + int(event["usage"].get(key, 0))
+                    used[name] = used.get(name, 0) + int((event.get("usage") or {}).get(key, 0))
     return used
 
 

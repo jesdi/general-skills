@@ -495,3 +495,11 @@ def test_the_last_words_of_a_codex_json_log_are_its_error_message(tmp_path, line
     log = tmp_path / "agent.log"
     log.write_text('{"type": "thread.started"}\n' + line + "\n")
     assert driver_agents.last_words(log) == "You've hit your usage limit."
+
+
+def test_a_turn_with_no_usage_counts_no_token(tmp_path):
+    sys.path.insert(0, str(SKILL))
+    import driver_agents
+    log = tmp_path / "agent.log"
+    log.write_text('{"type": "turn.completed"}\n' + turn(10, 4, 2) + "\n")
+    assert driver_agents.tokens(log) == {"input": 10, "cached_input": 4, "output": 2}
