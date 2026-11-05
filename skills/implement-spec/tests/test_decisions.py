@@ -231,9 +231,10 @@ def test_only_an_implementer_or_a_fixer_blocked_on_the_contradiction_concern_dis
                                                 f"{contra} test_01.py::test_x[a]: R3", f"{contra} b::c", contra]}
     locked = ["tests/test_01.py", "src/test_01.py", "tests/b"]
     assert driver_report.disputes("fixer", report, locked) == [
-        ("tests/test_01.py", "tests/test_01.py::test_x", "why"), ("", "test_01.py::test_x[a]", "R3"),
-        ("tests/b", "b::c", ""), ("", "", "")]
-    assert driver_report.disputes("fixer", report, locked[:1])[1] == ("tests/test_01.py", "test_01.py::test_x[a]", "R3")
+        ("tests/test_01.py", "tests/test_01.py::test_x", "why", "tests/test_01.py::test_x"),
+        ("", "test_01.py::test_x[a]", "R3", "::test_x"), ("tests/b", "b::c", "", "tests/b::c"), ("", "", "", "")]
+    assert driver_report.disputes("fixer", report, locked[:1])[1] == (
+        "tests/test_01.py", "test_01.py::test_x[a]", "R3", "tests/test_01.py::test_x")
     assert driver_report.disputes("reviewer", report, locked) == []
     assert driver_report.disputes("implementer", {**report, "status": "DONE"}, locked) == []
     assert driver_report.disputes("implementer", {}, locked) == [], "a rejected report is no report"

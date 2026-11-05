@@ -194,19 +194,23 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   the ticket. Other open findings go to the final must-fix list when the gate is green. A correction at the cap
   would add locked tests that no fix round could make green.
 - A locked test is arbitrated once and corrected once per ticket. The ticket record keeps them in `disputes` and
-  `corrected`, keyed by `driver_report.test_key`: `<locked file>::<test>`, the file resolved against the ticket's
-  `locked` by `driver_report._locked_file`, a parametrized case as its test. A per-file key made the operator rule on
-  every second test of a file, and on every missing test a review asked for, and answer `correct-test` each time. A
-  review finding names its test in `test`; one with no `test` asks for a test to be added and is no correction of a
-  locked test. Only `driver_dispute._settle` and `driver_dispute.correct` write them; no answer does, so no answer
-  resets them. A second dispute or a second correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its
-  evidence file is the findings file a `correct-test` correction reads (`driver_dispute.correct_as_answered`), and its
-  tests are the ones `keep-test` closes for later reviews (`driver_dispute.kept`, `driver_fixloop._still_to_correct`).
-- A renamed or added test has a new key, so the per-test rule alone does not bound the arbitrations and the review
-  corrections of a ticket, and a review correction does not advance the round. `driver_dispute.settled` counts them
-  in the ticket's `settled`; at `driver_dispute.SETTLEMENTS` (3) the next one asks `spec-ambiguous`
-  (`driver_dispute.capped`), so each further one costs an answer. `driver_legacy._per_test` moves a schema 4 record to
-  its test and seeds `settled` from the records.
+  `corrected`, by the `key` of each `driver_report.Dispute`, worked out once where it comes in. A dispute's key is
+  `driver_report.test_key`: `<locked file>::<test>`, the file resolved against the ticket's `locked` by
+  `driver_report._locked_file`, a parametrized case as its test. A review finding's key is
+  `driver_dispute.requested`: the test it names in `test`; the file for a `fixture` finding that names none; else
+  `<file>::+<title>`, a test to add. A per-file key made the operator rule on every second test of a file, and on
+  every missing test a review asked for, and answer `correct-test` each time. Only `driver_dispute._settle` and
+  `driver_dispute.correct` write them; no answer does, so no answer resets them. A second dispute or a second
+  correction asks `spec-ambiguous` (`driver_dispute.ambiguous`); its evidence file is the findings file a
+  `correct-test` correction reads (`driver_dispute.correct_as_answered`), and its `key`s are the ones `keep-test`
+  closes for later reviews (`driver_dispute.kept`, `driver_fixloop._still_to_correct`).
+- A renamed or added test has a new key, so the per-key rule alone does not bound the arbitrations and the review
+  corrections of a ticket, and a review correction does not advance the round. The ticket's `settled` counts them,
+  in the same `state.json` write as the record it counts (`_settle`'s `settle`, `correct`'s `settles`), so a resume
+  neither counts one twice nor drops one. `driver_dispute.admit` is the one gate before a settlement: a key already
+  in the record, or `settled` at `driver_dispute.SETTLEMENTS` (3), asks `spec-ambiguous`, so each further one costs
+  an answer. `driver_legacy._per_test` moves a schema 4 record, and the evidence of the ticket's questions, to the
+  new keys and seeds `settled`, so the live code knows one key shape.
 - `driver_run._attempts` treats a stop (BLOCKED or NEEDS_CONTEXT, not a dispute of a locked test) of any agent
   as a rejected attempt: the rerun runs on the next entry of the role's list (`_rerun_entry`; the ticket fixer's list
   is the implementer's), with the concerns or the driver's error in its prompt. A second stop or rejection asks a

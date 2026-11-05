@@ -11,6 +11,7 @@ once no older driver is left.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO
@@ -143,16 +144,20 @@ def _ruled(q: dict) -> str:
     return f"Ruling: {q['ticket'] or 'end of run'} {q['kind']} ({q['answer']}): {q['subject']}."
 
 
-def _per_test(entry: dict) -> None:
-    """Schema 5: `disputes` and `corrected` move from their locked file to the test each record names, and `settled`
-    counts one per record that is not the correction of a ruling. A review correction recorded only its file: it stays
-    under the file, where no test matches it."""
-    def key(file: str, record: dict) -> str:
-        return driver_report.test_key(file, record["test"]) if "::" in record["test"] else file
+def _per_test(entry: dict, evidence: list[Path]) -> None:
+    """Schema 5: `disputes` and `corrected` move from their locked file to the test each record names, a review
+    correction that named only its file to the file itself, and each finding of `evidence`, the files of the ticket's
+    `spec-ambiguous` questions, gets the key of its file's record. `settled` counts one per record that is not the
+    correction of a ruling, so an arbitration of two files counts two: the cap comes no later than it would."""
     disputes, corrected = entry.get("disputes", {}), entry.get("corrected", {})
-    entry["disputes"] = {key(file, record): record for file, record in disputes.items()}
-    entry["corrected"] = {key(file, record): record for file, record in corrected.items()}
-    entry.setdefault("settled", len(disputes) + len(corrected.keys() - disputes.keys()))
+    keys = {file: driver_report.test_key(file, record["test"]) for file, record in {**corrected, **disputes}.items()}
+    entry["disputes"] = {keys[file]: record for file, record in disputes.items()}
+    entry["corrected"] = {keys[file]: record for file, record in corrected.items()}
+    entry["settled"] = len(disputes) + len(corrected.keys() - disputes.keys())
+    for path in evidence:
+        findings = json.loads(path.read_text())
+        path.write_text(json.dumps([{"key": keys.get(one["file"], one["file"]), **one} for one in findings],
+                                   indent=1) + "\n")
 
 
 def _upgraded(state: dict) -> None:
@@ -165,9 +170,11 @@ def _upgraded(state: dict) -> None:
     for record in [run.get("final", {}), *state["tickets"].values()]:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
-    for entry in state["tickets"].values():
+    for number, entry in state["tickets"].items():
         if "settled" not in entry:  # schema 5 added it, so its presence marks a ticket already keyed per test
-            _per_test(entry)
+            asked = [Path(q["evidence"][0]) for q in run.get("questions", [])
+                     if (q["ticket"], q["kind"]) == (number, "spec-ambiguous")]
+            _per_test(entry, [path for path in asked if path.exists()])
     if isinstance(run.get("gates"), int):
         run["gates"] = {"fast": 0, "full": run["gates"]}
     run["schema"] = driver_state.SCHEMA

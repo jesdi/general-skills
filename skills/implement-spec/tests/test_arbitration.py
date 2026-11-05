@@ -218,7 +218,6 @@ def test_a_ruling_that_asks_spec_ambiguous_is_kept_so_a_dispute_after_keep_test_
 # ---------------------------------------------------------------- per test, not per file
 
 TEST_Y = "tests/test_01.py::test_y"
-MISSING = finding("MISSING", "critical", kind="test", file="tests/test_01.py")  # names no test: one to add
 
 
 def test_a_dispute_of_another_test_in_a_corrected_file_is_arbitrated_and_corrected_with_no_question(tmp_path):
@@ -234,8 +233,11 @@ def test_a_dispute_of_another_test_in_a_corrected_file_is_arbitrated_and_correct
     assert set(entry["disputes"]) == set(entry["corrected"]) == {TEST, TEST_Y}
 
 
-@pytest.mark.parametrize("found", [MISSING, {**finding("WEAK", "critical", kind="test", file="tests/test_01.py"),
-                                             "test": TEST_Y}], ids=["missing-test", "another-test"])
+WEAK_Y = {**finding("WEAK", "critical", kind="test", file="tests/test_01.py"), "test": TEST_Y}
+
+
+@pytest.mark.parametrize("found", [finding("MISSING", "critical", kind="test", file="tests/test_01.py"), WEAK_Y],
+                         ids=["missing-test", "another-test"])
 def test_a_review_finding_after_a_correction_of_another_test_gets_a_correction_with_no_question(tmp_path, found):
     """The cv-tailoring run asked 01-spec-ambiguous-2 here: a review asked for missing tests in a corrected file."""
     rig = run(tmp_path, {"01/implementer": [disputes(), impl("01")],
@@ -247,15 +249,61 @@ def test_a_review_finding_after_a_correction_of_another_test_gets_a_correction_w
                           "test-writer", "reviewer"]
 
 
+def missing(n):
+    """A review finding that asks for the missing test `n` of tests/test_01.py."""
+    return finding(f"MISSING-{n}", "critical", kind="test", file="tests/test_01.py")
+
+
 def test_the_ticket_asks_spec_ambiguous_once_its_locked_tests_were_settled_three_times(tmp_path):
     """A test added is never corrected twice, so a cap bounds the review that keeps asking for one more."""
     steps = {"01/test-writer": [tw("01"), *[correction(f"# added {n}\n") for n in range(1, 4)]],
-             "01/reviewer": [review("01", [MISSING])] * 4 + [review("01")]}
+             "01/reviewer": [review("01", [missing(n)]) for n in range(1, 5)] + [review("01")]}
     rig = run(tmp_path, steps)
     assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 4, rig.ledger()
     (question,) = asked(rig)
-    assert question["id"] == AMBIGUOUS and "3 times" in question["subject"] and "MISSING" in question["subject"]
+    assert question["id"] == AMBIGUOUS and "3 times" in question["subject"] and "MISSING-4" in question["subject"]
     assert rig.state()["tickets"]["01"]["settled"] == 3
+
+
+def test_disputes_of_new_tests_reach_the_cap_too_and_the_next_one_asks_with_no_arbitration(tmp_path):
+    names = ["test_x", "test_y", "test_z", "test_w"]
+    rig = run(tmp_path, {"01/implementer": [disputes((f"tests/test_01.py::{name}", "no")) for name in names],
+                         "01/reviewer": [ruling("code-wrong", "R3 holds", f"tests/test_01.py::{name}")
+                                         for name in names[:3]]})
+    assert rig.code == 2 and len(arbitrations(rig)) == 3, rig.ledger()
+    (question,) = asked(rig)
+    assert "tests/test_01.py::test_w" in question["subject"] and "3 times" in question["subject"]
+    assert rig.state()["tickets"]["01"]["settled"] == 3
+
+
+def test_a_missing_test_asked_for_again_after_its_correction_asks_spec_ambiguous(tmp_path):
+    rig = run(tmp_path, {"01/test-writer": [tw("01"), correction("# added\n")],
+                         "01/reviewer": [review("01", [missing(1)])] * 2})
+    assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 2, rig.ledger()
+    (question,) = asked(rig)
+    subject = question["subject"]
+    assert "the first reading: MISSING-1" in subject and "the second reading: MISSING-1" in subject
+
+
+def test_a_fixture_finding_that_names_no_test_is_corrected_once_per_file(tmp_path):
+    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    rig = run(tmp_path, {"01/test-writer": [tw("01"), correction("# fixed\n")],
+                         "01/reviewer": [review("01", [stale])] * 2})
+    assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 2, rig.ledger()
+    assert [q["id"] for q in asked(rig)] == [AMBIGUOUS]
+
+
+def test_keep_test_on_a_missing_test_closes_that_request_only(tmp_path):
+    steps = plan(**{"01/test-writer": [tw("01"), *[correction(f"# added {n}\n") for n in range(1, 4)]],
+                    "01/reviewer": [review("01", [missing(n)]) for n in range(1, 5)] +
+                                   [review("01", [missing(4), WEAK_Y])]})
+    rig = Inside(tmp_path, ONE).run(steps)
+    assert [q["id"] for q in asked(rig)] == [AMBIGUOUS], rig.ledger()
+    rig.run(steps, "--answer", f"{AMBIGUOUS}=keep-test")
+    assert rig.code == 2 and rig.led("MISSING-4", "closed as it is by the ruling (keep-test)"), rig.ledger()
+    (question,) = asked(rig)
+    assert question["id"] == "01-spec-ambiguous-2" and "WEAK" in question["subject"]
+    assert "MISSING-4" not in question["subject"]
 
 
 # ---------------------------------------------------------------- the answers

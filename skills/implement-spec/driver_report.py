@@ -162,21 +162,18 @@ def _locked_file(name: str, locked: list[str]) -> str:
 
 def test_key(file: str, test: str) -> str:
     """`<locked file>::<test>`, the key of a locked test in `disputes` and `corrected`: `test` is an id `<path>::<test>`
-    or a bare name, and a parametrized case is its test. "" for no test."""
+    or a bare name, and a parametrized case is its test. The file itself when `test` names no test."""
     name = re.sub(r"\[.*\]$", "", test.partition("::")[2] if "::" in test else test)
-    return f"{file}::{name}" if name else ""
+    return f"{file}::{name}" if name and name != file else file
 
 
 class Dispute(NamedTuple):
     """One concern `locked test contradicts spec: <file>::<test>: <reason>` of a BLOCKED implementer or fixer, or a
-    review finding on a locked file, whose `test` is "" when it asks for a test that does not exist yet."""
+    review finding on a locked file (driver_dispute.requested)."""
     file: str  # the locked file it names; "" when it names no file of the ticket's `locked`
-    test: str
+    test: str  # as the report gives it; "" for a review finding that names no test
     reason: str
-
-    @property
-    def key(self) -> str:
-        return test_key(self.file, self.test)
+    key: str  # what `disputes` and `corrected` key it by: one dispute or correction each
 
 
 def disputes(role: str, report: dict, locked: list[str]) -> list[Dispute]:
@@ -187,7 +184,8 @@ def disputes(role: str, report: dict, locked: list[str]) -> list[Dispute]:
     for concern in report["concerns"]:
         if concern.startswith(CONTRADICTS):
             test, _, reason = concern[len(CONTRADICTS):].strip().partition(": ")
-            found.append(Dispute(_locked_file(test.partition("::")[0], locked), test, reason))
+            file = _locked_file(test.partition("::")[0], locked)
+            found.append(Dispute(file, test, reason, test_key(file, test)))
     return found
 
 

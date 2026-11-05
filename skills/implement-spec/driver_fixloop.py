@@ -16,7 +16,6 @@ import driver_review
 import driver_slots
 from driver_decisions import Resume
 from driver_dispute import Corrected
-from driver_report import Dispute
 from driver_run import OUT, Blocked, Call, Run, during, ledger
 from driver_tickets import Ticket
 
@@ -134,24 +133,19 @@ def _review(job: Job) -> list[dict]:
 
 
 def _correct(job: Job, findings: list[dict]) -> list[dict]:
-    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. A finding on a
-    locked test corrected before in the ticket, or a ticket settled `SETTLEMENTS` times, asks `spec-ambiguous`
-    instead; a finding that names no test asks for one to be added, which is no second correction. A correction that
-    is rejected twice asks `ticket-blocked`, whose `retry` reviews the tip again. Returns the findings that it did not
-    correct, as findings of kind code for the fixer (issue #111)."""
+    """One test-writer correction for the findings on the locked tests. It is outside the fix rounds. A finding whose
+    key (driver_dispute.requested) was corrected before in the ticket, or a ticket settled `SETTLEMENTS` times, asks
+    `spec-ambiguous` instead. A correction that is rejected twice asks `ticket-blocked`, whose `retry` reviews the tip
+    again. Returns the findings that it did not correct, as findings of kind code for the fixer (issue #111)."""
     run, number = job.run, job.ticket.number
-    entry = run.state.read()["tickets"][number]
-    found = [Dispute(finding["file"], finding.get("test", ""), f"{finding['title']}: {finding['evidence']}")
-             for finding in findings]
-    if again := driver_dispute.second_readings(found, entry["corrected"]) or driver_dispute.capped(found, entry):
-        with during("the review"):
-            driver_dispute.ambiguous(run, number, again, Resume("review"))
+    found = {finding["title"]: driver_dispute.requested(finding) for finding in findings}
+    with during("the review"):
+        driver_dispute.admit(run, number, list(found.values()), "corrected", Resume("review"))
     call = Call("test-writer", number, job.slot, job.pointers(job.round), fix_round=job.round + 1, retry="reviewer")
+    readings = {title: (one.key, Corrected(one.test, "", one.reason)) for title, one in found.items()}
     with during("the test-writer correction"):
-        reasons = driver_dispute.correct(run, call, findings, {one.key: Corrected(one.test, "", one.reason)
-                                                               for one in found if one.key},
-                                         " It goes to the fixer as a finding of kind code.")
-    driver_dispute.settled(run, number)
+        reasons = driver_dispute.correct(run, call, findings, readings,
+                                         " It goes to the fixer as a finding of kind code.", settles=True)
     job.tip, job.previous = driver_slots.head(job.slot), ""
     return _uncorrected(job, findings, reasons)
 
@@ -211,7 +205,7 @@ def _still_to_correct(job: Job, state: dict, to_correct: list[dict]) -> list[dic
     `keep-test`."""
     number = job.ticket.number
     kept = driver_dispute.kept(state["run"]["questions"], number)
-    closed = [finding for finding in to_correct if {finding["file"], driver_dispute.finding_key(finding)} & kept]
+    closed = [finding for finding in to_correct if driver_dispute.requested(finding).key in kept]
     for finding in closed:
         ledger(f"Ticket {number}: {finding['kind']} finding in {finding['file']} closed as it is by the ruling "
                f"(keep-test), with no correction: {finding['title']}.")
