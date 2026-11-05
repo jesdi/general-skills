@@ -120,11 +120,15 @@ def _layer(models: dict[str, list[str]], file: Path, label: str, prefix: str) ->
         return [f"{prefix}: a JSON object of role names is required"]
     if unknown := _role_errors(given, models, label):
         return unknown
-    if wrong := [role for role, entries in given.items()
-                 if not isinstance(entries, list) or not entries or not all(isinstance(e, str) for e in entries)]:
+    if wrong := [role for role, entries in given.items() if not _is_list(entries)]:
         return [f"{prefix}: {', '.join(wrong)}: a role needs a non-empty list of model entries"]
     models.update(given)
     return []
+
+
+def _is_list(entries: object) -> bool:
+    """True for a non-empty list of strings: the shape of one role's model entries."""
+    return isinstance(entries, list) and bool(entries) and all(isinstance(entry, str) for entry in entries)
 
 
 def other_provider_entries(models: dict[str, list[str]]) -> list[str]:
