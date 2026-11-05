@@ -484,7 +484,7 @@ def test_a_codex_model_with_no_list_price_keeps_its_tokens_and_the_ledger_says_i
     assert ", 1000 input tokens (200 cached) and 30 output tokens, not priced: report accepted." in line, line
     (agent,) = [a for a in json.loads((w.repo / ".agent/implement/state.json").read_text())["run"]["agents"]
                 if a["role"] == "implementer"]
-    assert agent["cost"] == 0 and agent["tokens"] == {"input": 1_000, "cached_input": 200, "output": 30}
+    assert agent["cost"] is None and agent["tokens"] == {"input": 1_000, "cached_input": 200, "output": 30}
 
 
 @pytest.mark.parametrize("line", ['{"type": "error", "message": "You\'ve hit your usage limit."}',

@@ -342,11 +342,13 @@ def _first_prompt(template: str, values: dict[str, str], notes: tuple | list, re
 
 
 def _record_attempt(run: Run, role: str, number: str, entry: str, seconds: float, log: Path, error: str) -> None:
-    cost, tokens = driver_agents.cost(log, entry), driver_agents.tokens(log)
-    used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": float(cost or 0),
+    tokens = driver_agents.tokens(log)
+    cost = driver_agents.cost(log, entry, tokens)
+    # cost None: not priced, a codex model with no list price or a CLI that reported none.
+    used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": cost,
             "tokens": tokens}
     run.state.update(lambda state: state["run"]["agents"].append(used))
-    spent = f", cost {cost} USD" if cost else _unpriced(tokens)
+    spent = f", cost {cost:g} USD" if cost is not None else _unpriced(tokens)
     ledger(f"{_owner(number)}: {role} ran on {entry} for {seconds:.1f}s{spent}: {error or 'report accepted'}.")
 
 

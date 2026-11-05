@@ -43,7 +43,7 @@ TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "
             **dict.fromkeys(LENSES, 60), "conflict": 30, "pr-writer": 20}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
-# USD per million tokens at the API list price; `input` counts the cached input too, which costs `cached_input`. A
+# USD per million tokens at the API list price; the cached part of the input costs `cached_input`. A
 # codex model that is not here keeps its tokens, and the ledger says it is not priced. Update when a price changes.
 PRICES = {"gpt-6-astra": {"input": 10.0, "cached_input": 1.0, "output": 50.0},
           "gpt-6.1-sol": {"input": 2.0, "cached_input": 0.10, "output": 10.0}}
@@ -103,24 +103,28 @@ def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
     """The skill's default lists, then the roles of each config file and of the --models file `path` on top, each
     replacing whole lists, and every role and entry error."""
     models = json.loads((SKILL / "models.json").read_text())
-    layers = [(file, str(file)) for file in config_files()] + ([(Path(path), "the --models file")] if path else [])
-    errors = [error for file, label in layers for error in _layer(models, file, label)]
+    # (the file, how a role error names it, the prefix of its other errors)
+    layers = [(file, str(file), str(file)) for file in config_files()]
+    layers += [(Path(path), "the --models file", f"--models {path}")] if path else []
+    errors = [error for layer in layers for error in _layer(models, *layer)]
     return ({}, errors) if errors else (models, _entry_errors(models))
 
 
-def _layer(models: dict[str, list[str]], file: Path, label: str) -> list[str]:
+def _layer(models: dict[str, list[str]], file: Path, label: str, prefix: str) -> list[str]:
     """Put the roles of one config file on top of `models`; its errors, or []."""
-    named = f"{'--models ' if label != str(file) else ''}{file}"
     try:
         given = json.loads(file.read_text())
-        if unknown := _role_errors(given, models, label):
-            return unknown
-        if empty := [role for role, entries in given.items() if not entries]:  # a list is an AttributeError
-            return [f"{named}: {', '.join(empty)}: the list has no entry"]
-        models.update(given)
-        return []
-    except (OSError, ValueError, AttributeError, TypeError) as exc:
-        return [f"{named}: {exc!r}"]
+    except (OSError, ValueError) as exc:
+        return [f"{prefix}: {exc!r}"]
+    if not isinstance(given, dict):
+        return [f"{prefix}: a JSON object of role names is required"]
+    if unknown := _role_errors(given, models, label):
+        return unknown
+    if wrong := [role for role, entries in given.items()
+                 if not isinstance(entries, list) or not entries or not all(isinstance(e, str) for e in entries)]:
+        return [f"{prefix}: {', '.join(wrong)}: a role needs a non-empty list of model entries"]
+    models.update(given)
+    return []
 
 
 def other_provider_entries(models: dict[str, list[str]]) -> list[str]:
@@ -148,7 +152,7 @@ def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:
     """Every entry error of the merged lists."""
-    # The entries whose CLI must be on PATH; entries[0]: an empty list is an error.
+    # The entries whose CLI must be on PATH; `_layer` gave each role a non-empty list.
     first = {(role, entries[0]) for role, entries in models.items()} | {
         ("final-reviewer", other_provider_entry(models))}
     found = [_entry_error(role, entry, (role, entry) in first) for role, entries in models.items() for entry in entries]
@@ -325,15 +329,15 @@ def tokens(log: Path) -> dict[str, int]:
     return used
 
 
-def cost(log: Path, entry: str) -> str | None:
-    """The dollar cost of an agent: the one the claude CLI reported, or the tokens of a codex agent at the list price
-    of its model; None when there is neither."""
+def cost(log: Path, entry: str, used: dict[str, int]) -> float | None:
+    """The dollar cost of an agent: the one the claude CLI reported, or the tokens `used` of a codex agent at the list
+    price of its model; None when there is neither."""
     provider, model, _ = split(entry)
     if provider == "openai":
-        used, price = tokens(log), PRICES.get(model)
-        if not used or not price:
+        if not used or not (price := PRICES.get(model)):
             return None
-        usd = sum(used[name] * price[name] for name in price) - used["cached_input"] * price["input"]
-        return f"{round(usd / 1e6, 4):g}"
+        uncached = used["input"] - used["cached_input"]
+        return round((uncached * price["input"] + used["cached_input"] * price["cached_input"]
+                      + used["output"] * price["output"]) / 1e6, 4)
     found = re.findall(r'"total_cost_usd":\s*([0-9.]+)', log.read_text(errors="replace"))
-    return found[-1] if found else None
+    return float(found[-1]) if found else None

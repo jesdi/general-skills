@@ -149,3 +149,22 @@ def test_an_error_in_a_config_file_names_that_file(layers):
     (tmp / ".implement-spec/models.json").write_text("{not json")
     _, errors = driver_agents.load_models(None)
     assert errors[1].startswith(".implement-spec/models.json: JSONDecodeError("), errors
+
+
+def test_a_removed_role_in_the_repo_file_exits_3_naming_the_file_before_the_preflight(env, tmp_path):
+    repo = make_repo(tmp_path / "demo", three())
+    (repo / ".implement-spec").mkdir()
+    (repo / ".implement-spec/models.json").write_text(json.dumps({"correctness": [ASTRA]}))
+    proc = drive(env, repo, *RUNS)
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert ("correctness: the role was removed; delete its key from .implement-spec/models.json"
+            in proc.stdout.splitlines()), proc.stdout
+    assert not (tmp_path / "launched").exists(), "no preflight and no agent"
+
+
+@pytest.mark.parametrize("content", ['{"reviewer": "openai/gpt-6-astra@medium"}', '{"reviewer": [1]}', "[]"])
+def test_a_config_file_of_the_wrong_shape_is_an_error_naming_the_file(layers, content):
+    driver_agents, _, repo, _ = layers
+    repo({}).write_text(content)
+    _, errors = driver_agents.load_models(None)
+    assert len(errors) == 1 and errors[0].startswith(".implement-spec/models.json: "), errors
