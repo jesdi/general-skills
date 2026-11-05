@@ -149,7 +149,9 @@ def test_the_summary_keeps_its_table_and_counts_an_arbitration_as_a_reviewer_age
     rows = (rig.repo / ".agent/implement/summary.md").read_text().split("| Measure | Value |\n|---|---|\n")[1]
     names = re.findall(r"^\| (.+?) \|", rows, re.M)
     assert {f"wall time, {role}" for role in ("test-writer", "implementer", "reviewer", "fixer")} < set(names), rows
-    assert names[-3:] == ["fix rounds per ticket", "human stops", "cost"] and rows.endswith(" USD |\n"), rows
+    # Most fake agents report no cost, so they are counted as not priced.
+    assert names[-4:] == ["fix rounds per ticket", "human stops", "cost", "agents not priced"], rows
+    assert re.search(r"^\| cost \| \d+\.\d\d USD \|$", rows, re.M), rows
     for row in ("| fast gates run | 2 |", "| full gates run | 1 |", "| agents, reviewer on anthropic/claude-opus-5@medium | 3 |",
                 "| fix rounds per ticket | 01: 1, 02: 0 |", "| human stops | 1 |"):
         assert row in rows, rows

@@ -15,7 +15,14 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
             *((f"wall time, {role}", f"{total:.1f} s") for role, total in seconds.items()),
             ("fix rounds per ticket", rounds),
             ("human stops", run["stops"]),
-            ("cost", f"{sum(agent['cost'] for agent in run['agents']):.2f} USD")]
+            *_cost(run["agents"])]
+
+
+def _cost(agents: list[dict]) -> list[tuple[str, object]]:
+    """The cost row, and a row that counts the agents with no price (cost None), which the cost leaves out."""
+    unpriced = sum(agent["cost"] is None for agent in agents)
+    return [("cost", f"{sum(agent['cost'] or 0 for agent in agents):.2f} USD"),
+            *([("agents not priced", unpriced)] if unpriced else [])]
 
 
 def _end(run: dict) -> list[str]:

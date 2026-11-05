@@ -109,12 +109,17 @@ def test_the_review_coverage_names_only_what_ran_so_an_undone_fallback_is_not_cl
 
 # ---------------------------------------------------------------- input validation
 
-def test_a_final_reviewer_list_with_no_entry_on_another_provider_exits_3_before_any_agent(tmp_path):
+def test_a_final_reviewer_list_with_no_entry_on_another_provider_runs_every_review_on_it_and_says_so(
+        tmp_path, monkeypatch):
+    """Another provider for correctness is a preference: a config on one provider runs, and the ledger says so."""
+    monkeypatch.setattr(driver, "_preflight", lambda args, models: driver._checked(models))
+    monkeypatch.setattr(driver_agents, "_failures", lambda entries: {})
     rig = rig_of(tmp_path, models={"implementer": [SONNET], "final-reviewer": [OPUS]}).run(plan())
-    assert rig.code == 3 and not rig.calls(), rig.out
-    assert rig.out == (f"final-reviewer: no entry of its list ({OPUS}) is on another provider than the implementer's "
-                       f"first entry {SONNET}; its other-provider entry serves the correctness lens of the final "
-                       "review and the scoped review, which never run on the implementer's provider\n")
+    assert rig.code == 0, rig.out
+    said = (f"No final-reviewer entry is on another provider than {SONNET}: the correctness lens and the scoped review "
+            f"run on {OPUS}, the implementer's provider.")
+    assert rig.out.splitlines()[0] == said and rig.ledger()[0] == said
+    assert rig.led("End of run: final-correctness ran on", OPUS)
 
 
 def test_without_the_deep_quality_review_skill_the_run_exits_3_before_any_agent(tmp_path, monkeypatch):

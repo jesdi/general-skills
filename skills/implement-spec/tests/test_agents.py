@@ -192,14 +192,16 @@ def test_help_lists_the_timeout_flag_and_default_minutes():
 
 
 @pytest.mark.parametrize("entry", ["openai/gpt-sol@medium"])
-def test_openai_implementer_launches_codex_exec_in_workspace_write(env, entry):
+def test_openai_implementer_launches_codex_exec_with_full_access_so_it_can_commit(env, entry):
+    # workspace-write keeps .git read-only, even with --add-dir on the git directory: git commit fails there.
     w = World(env, refactor=True, implementer=[entry, entry])  # the rerun after no report is on the next entry
     w.run(runner=False)
     argv = launches(w.tmp, "codex")[0]
     assert argv[0] == "exec" and "--ephemeral" not in argv
     assert value_after(argv, "--model", "-m") == "gpt-sol"
     assert any("model_reasoning_effort" in a and "medium" in a for a in argv)
-    assert value_after(argv, "--sandbox", "-s") == "workspace-write"
+    assert value_after(argv, "--sandbox", "-s") == "danger-full-access"
+    assert "--json" in argv, "the log carries the token usage that prices the run"
     assert not launches(w.tmp, "claude")
 
 
@@ -210,6 +212,7 @@ def test_the_reviewer_launches_codex_exec_read_only(env):
     assert argv[0] == "exec" and "--ephemeral" not in argv
     assert value_after(argv, "--sandbox", "-s") == "read-only"
     assert value_after(argv, "--model", "-m") == "gpt-sol"
+    assert "--json" in argv
 
 
 @pytest.mark.parametrize("writes", ["file", "message"])
@@ -339,16 +342,18 @@ def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_thei
 
 
 def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
+    """Stop and ask: the first CLI failure stops the run, with no rerun on another entry of the list."""
     w = World(env, refactor=True)
-    plan = {"implementer": [{"stderr": REFUSED + "\n", "exit": 1}] * 2 + [impl()]}
+    plan = {"implementer": [{"stderr": REFUSED + "\n", "exit": 1}, impl()]}
     proc = w.run(plan)
+    assert len(w.calls("implementer")) == 1, "no rerun after a CLI failure"
     assert proc.returncode == 4, proc.stdout + proc.stderr
-    assert f"implement-spec: the run stopped: the implementer on openai/gpt-sol@medium exited 1 with no " \
+    assert f"implement-spec: the run stopped: the implementer on anthropic/claude-opus-5@medium exited 1 with no " \
         f"report: {REFUSED}" in proc.stdout.splitlines(), proc.stdout
     assert "BLOCKED" not in w.ledger() and "Ticket 01: the run stops and the phase stays for the next run: the implementer" in w.ledger()
     assert json.loads((w.repo / ".agent/implement/state.json").read_text())["tickets"]["01"]["phase"] == "implement"
     ok(w.run(plan))
-    assert len(w.calls("implementer")) == 3
+    assert len(w.calls("implementer")) == 2
 
 
 def test_finished_status_reruns_the_implementer_once_with_the_error_appended(env):
@@ -452,3 +457,49 @@ def test_log_next_to_report_and_ledger_records_role_entry_duration_and_cost(env)
     assert "OUT-MARK" in log and "ERR-MARK" in log and (folder / "implementer-0.json").exists()
     (line,) = [l for l in w.ledger().splitlines() if "implementer" in l and "claude-opus-5@medium" in l]
     assert re.search(r"\d+(\.\d+)?s\b", line) and "0.4242" in line, line
+
+
+def turn(used, cached, out):
+    return json.dumps({"type": "turn.completed", "usage": {"input_tokens": used, "cached_input_tokens": cached,
+                                                            "output_tokens": out, "reasoning_output_tokens": 0}})
+
+
+def test_a_codex_agent_is_priced_from_its_token_usage_at_the_list_price_of_its_model(env):
+    astra = "openai/gpt-6-astra@medium"
+    w = World(env, refactor=True, implementer=[astra])
+    # Two turns: 1.2M input of which 0.4M cached, 10k output. At 10 / 1 / 50 USD per million: 8 + 0.4 + 0.5.
+    ok(w.run({"implementer": [impl(stdout=turn(700_000, 300_000, 4_000) + "\n" + turn(500_000, 100_000, 6_000) + "\n")]}))
+    (line,) = [l for l in w.ledger().splitlines() if "implementer ran on" in l]
+    assert f"implementer ran on {astra} for " in line and ", cost 8.9 USD: report accepted." in line, line
+    (agent,) = [a for a in json.loads((w.repo / ".agent/implement/state.json").read_text())["run"]["agents"]
+                if a["role"] == "implementer"]
+    assert agent["cost"] == 8.9
+    assert agent["tokens"] == {"input": 1_200_000, "cached_input": 400_000, "output": 10_000}
+
+
+def test_a_codex_model_with_no_list_price_keeps_its_tokens_and_the_ledger_says_it_is_not_priced(env):
+    w = World(env, refactor=True, implementer=["openai/gpt-sol@medium"])
+    ok(w.run({"implementer": [impl(stdout=turn(1_000, 200, 30) + "\n")]}))
+    (line,) = [l for l in w.ledger().splitlines() if "implementer ran on" in l]
+    assert ", 1000 input tokens (200 cached) and 30 output tokens, not priced: report accepted." in line, line
+    (agent,) = [a for a in json.loads((w.repo / ".agent/implement/state.json").read_text())["run"]["agents"]
+                if a["role"] == "implementer"]
+    assert agent["cost"] is None and agent["tokens"] == {"input": 1_000, "cached_input": 200, "output": 30}
+
+
+@pytest.mark.parametrize("line", ['{"type": "error", "message": "You\'ve hit your usage limit."}',
+                                  '{"type": "turn.failed", "error": {"message": "You\'ve hit your usage limit."}}'])
+def test_the_last_words_of_a_codex_json_log_are_its_error_message(tmp_path, line):
+    sys.path.insert(0, str(SKILL))
+    import driver_agents
+    log = tmp_path / "agent.log"
+    log.write_text('{"type": "thread.started"}\n' + line + "\n")
+    assert driver_agents.last_words(log) == "You've hit your usage limit."
+
+
+def test_a_turn_with_no_usage_counts_no_token(tmp_path):
+    sys.path.insert(0, str(SKILL))
+    import driver_agents
+    log = tmp_path / "agent.log"
+    log.write_text('{"type": "turn.completed"}\n' + turn(10, 4, 2) + "\n")
+    assert driver_agents.tokens(log) == {"input": 10, "cached_input": 4, "output": 2}

@@ -7,8 +7,10 @@ SESSION_ID is the Claude Code session that drove the run (or did the work by
 hand). Its transcript and its subagents' transcripts are read from
 ~/.claude/projects/<project-dir>/. --since/--until cut the window (UTC ISO,
 e.g. the PR's createdAt). Each --ledger is a driver ledger
-(.agent/implement/ledger.md); its "cost N USD" lines are summed and its Codex
-runs counted (the driver doesn't price them).
+(.agent/implement/ledger.md); its "cost N USD" lines are summed, Codex runs
+included: the driver prices them at list price since its Codex cost change. A
+Codex run of an older driver, or of a model it has no price for, is counted
+as not priced.
 
 Prices are Claude Opus 5.5 per million tokens (claude-api skill, cached
 2026-10-06); Claude Code writes the cache with a 1 h TTL, billed at 2x input.
@@ -51,7 +53,8 @@ def tally(paths, since=None, until=None):
 def ledger(path):
     text = open(path).read()
     usd = sum(float(x) for x in re.findall(r"cost ([0-9.]+) USD", text))
-    return usd, len(re.findall(r"ran on openai/", text))
+    unpriced = [line for line in text.splitlines() if "ran on openai/" in line and " USD" not in line]
+    return usd, len(unpriced)
 
 
 def main():
@@ -70,7 +73,7 @@ def main():
               f"output {t['output']:>8,}  {first} .. {last}")
     for path in a.ledger:
         usd, codex = ledger(path)
-        print(f"driver     ${usd:7.2f}  {codex} Codex runs (not priced)  {path}")
+        print(f"driver     ${usd:7.2f}  {codex} Codex runs not priced  {path}")
 
 
 if __name__ == "__main__":

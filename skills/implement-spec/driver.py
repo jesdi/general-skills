@@ -475,8 +475,9 @@ def _halted_exit(halted: list[str], final: dict) -> int:
     """Exit 4 after a CLI failure: no ticket is BLOCKED by it, and the same command resumes the run."""
     for why in halted:
         print(f"implement-spec: the run stopped: {why}")
-    print("implement-spec: fix the CLI or the model entry (--models FILE), then run the same command again to "
-          "resume; no ticket is BLOCKED by this.")
+    print("implement-spec: fix the CLI, or move the role to another model entry in a provider config file (the "
+          "home or the repo models.json, or --models FILE), then run the same command again to resume; no ticket is "
+          "BLOCKED by this.")
     if error := _publish_questions(final["run"]):
         print(error)
     return 4

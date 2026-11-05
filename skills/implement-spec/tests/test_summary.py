@@ -27,3 +27,11 @@ Ticket 03 is not merged: its phase is blocked.
 | human stops | 1 |
 | cost | 1.75 USD |
 """
+
+
+def test_an_agent_with_no_price_is_counted_apart_from_the_cost():
+    agents = [{"role": "reviewer", "entry": "openai/gpt-x@low", "seconds": 1, "cost": None},
+              {"role": "implementer", "entry": "opus@medium", "seconds": 1, "cost": 0.5}]
+    state = {"run": {"pr_branch": "feat/csv", "gates": {"fast": 0, "full": 0}, "stops": 0, "final": driver_state._final(),
+                     "agents": agents}, "tickets": {}}
+    assert driver_summary.render(state).endswith("| cost | 0.50 USD |\n| agents not priced | 1 |\n")

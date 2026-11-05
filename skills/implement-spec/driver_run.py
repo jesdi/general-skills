@@ -44,8 +44,8 @@ class Blocked(Exception):
 
 
 class Halted(Exception):
-    """The CLI of an agent failed with no report, two times: a model the account cannot use, a CLI that is not
-    signed in. The run starts no other agent and ends with exit 4; the ticket keeps its phase for the next run."""
+    """The CLI of an agent failed with no report: a model the account cannot use or has no usage left for, a CLI
+    that is not signed in. The run starts no other agent and ends with exit 4; the ticket keeps its phase for the next run."""
 
 
 @contextmanager
@@ -319,11 +319,9 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
     run.ask(call.number, "ticket-blocked", [f"the {call.role}: {error}"], str(report), resume)
 
 
-def _give_up(run: Run, call: Call, report: Path, error: str, failed: str, same: bool) -> NoReturn:
-    """After the rerun failed too: Halted for a CLI that wrote no report, else Blocked, with a `ticket-blocked`
-    question when the agent stopped or was rejected."""
-    if failed:
-        raise Halted(failed)
+def _give_up(run: Run, call: Call, report: Path, error: str, same: bool) -> NoReturn:
+    """After the rerun failed too: Blocked, with a `ticket-blocked` question when the agent stopped or was
+    rejected."""
     if not same:
         _ask_blocked(run, call, report, error)
     raise Blocked(error)
@@ -344,11 +342,22 @@ def _first_prompt(template: str, values: dict[str, str], notes: tuple | list, re
 
 
 def _record_attempt(run: Run, role: str, number: str, entry: str, seconds: float, log: Path, error: str) -> None:
-    cost = driver_agents.cost(log)
-    used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": float(cost or 0)}
+    tokens = driver_agents.tokens(log)
+    cost = driver_agents.cost(log, entry, tokens)
+    # cost None: not priced, a codex model with no list price or a CLI that reported none.
+    used = {"ticket": number, "role": role, "entry": entry, "seconds": round(seconds, 1), "cost": cost,
+            "tokens": tokens}
     run.state.update(lambda state: state["run"]["agents"].append(used))
-    spent = f", cost {cost} USD" if cost else ""
+    spent = f", cost {cost:g} USD" if cost is not None else _unpriced(tokens)
     ledger(f"{_owner(number)}: {role} ran on {entry} for {seconds:.1f}s{spent}: {error or 'report accepted'}.")
+
+
+def _unpriced(tokens: dict[str, int]) -> str:
+    """The ledger words of a codex agent whose model has no list price: its tokens; "" when it has none."""
+    if not tokens:
+        return ""
+    return (f", {tokens['input']} input tokens ({tokens['cached_input']} cached) and {tokens['output']} output tokens, "
+            "not priced")
 
 
 def _command(run: Run, role: str, entry: str, prompt: str, report: str) -> list[str]:
@@ -370,7 +379,7 @@ def _attempts(run: Run, call: Call) -> dict:
                "template": call.template or role, **call.check}
     text = _first_prompt(context["template"], values, call.notes, report_in_slot)
     rerun_on = _rerun_entry(run, role, entry, call.entries)
-    minutes, error, failed, same = run.args.timeout[role], "", "", True
+    minutes, error, same = run.args.timeout[role], "", True
     for _ in range(2):
         argv = _command(run, role, entry, os.path.relpath(prompt, slot), report_in_slot)
         prompt.write_text(text)
@@ -386,10 +395,11 @@ def _attempts(run: Run, call: Call) -> dict:
         _record_attempt(run, role, number, entry, seconds, log, error)
         if not error:
             return json.loads(report.read_text())
-        failed = _cli_failure(role, entry, code, report, log)
+        if failed := _cli_failure(role, entry, code, report, log):
+            raise Halted(failed)  # the operator changes the config: the run moves to no other entry on its own
         # The rerun prompt is the first prompt, the rejection, then the same ending again.
         text += rerun_lines + driver_agents.tail(text, report_in_slot)
         if code is None:
             minutes *= 2
         entry = entry if same else rerun_on
-    _give_up(run, call, report, error, failed, same)
+    _give_up(run, call, report, error, same)
