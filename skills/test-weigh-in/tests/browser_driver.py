@@ -84,6 +84,8 @@ def layout(browser, width, height):
     click_gauge(page, "Economy")
     click_tab(page, "Overlaps")
     out["overlaps"] = page.evaluate(OVERFLOW)
+    out["pager_heights"] = page.evaluate("""() => Object.fromEntries(['overlap-next', 'overlap-next-bottom'].map((id) =>
+      [id, document.querySelector(`[data-testid=${id}]`).getBoundingClientRect().height]))""")
     out["overlap_ids"] = page.evaluate("""() => [...document.querySelectorAll('[data-testid=overlap-test]')].map((e) => {
       const r = e.getBoundingClientRect(), s = getComputedStyle(e);
       return {text: e.textContent, right: Math.round(r.right), clipped: e.scrollWidth > e.clientWidth + 1 && s.overflowX !== 'visible',

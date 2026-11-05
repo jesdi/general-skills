@@ -103,6 +103,12 @@ def test_a_red_suite_status_naming_both_reasons_stays_readable(red_report, view)
         assert all(n == 1 for n in g["reasons"]), f"a reason breaks across lines at {view}: {g['status']['text']} {g['reasons']}"
 
 
+@pytest.mark.parametrize("view, least", [("desktop", 32), ("narrow", 44)])
+def test_the_overlap_pager_buttons_are_tall_enough_to_tap(report, view, least):
+    for button, height in report[view]["pager_heights"].items():
+        assert height >= least, f"{button} is {height} px tall at {view}, under {least}"
+
+
 @pytest.mark.parametrize("view", ["desktop", "narrow"])
 def test_details_use_the_available_width_and_keep_full_identities(report, view):
     r = report[view]

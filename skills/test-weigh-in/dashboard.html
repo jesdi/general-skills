@@ -34,7 +34,15 @@ table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
 @media (min-width:601px){#details th:nth-child(-n+3),#details td:nth-child(-n+3):not([colspan]){width:1%;white-space:nowrap}}
 td:first-child,th:first-child{padding-left:0}
 @media (max-width:600px){td,th{padding:4px 6px}td:last-child,th:last-child{padding-right:0}#details td:first-child{min-width:7em}}
-input[type=search]{font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
+input[type=search]{scroll-margin-top:16px;font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
+/* the pair count and a pager above the list, the same pager again below it; the pager keeps to the right */
+.ov-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:12px 0}
+.ov-bar>p{margin:0}
+.pager{display:flex;align-items:center;gap:8px;margin-left:auto}
+.pager>span{white-space:nowrap;font-variant-numeric:tabular-nums}
+.pager>button{font:inherit;min-height:32px;padding:0 12px;border:1px solid #ccc;border-radius:6px;background:#f3f4f6;color:#222;cursor:pointer}
+.pager>button:disabled{color:#9ca3af;cursor:default}
+@media (max-width:600px){.pager>button{min-height:44px;padding:0 14px}}
 .pair{display:grid;grid-template-columns:8em minmax(0,1fr);gap:4px 12px;padding:8px 0;border-bottom:1px solid #e5e7eb}
 .pair>strong{grid-row:span 3}
 .pair hr{width:100%;border:0;border-top:1px dashed #d1d5db;margin:0}
@@ -202,15 +210,35 @@ function drawOverlaps(parent) {
   input.type = 'search'; input.placeholder = 'Search test identities'; input.value = ovQuery; input.setAttribute('aria-label', 'Search overlapping tests');
   input.setAttribute('data-testid', 'overlap-search');
   box.appendChild(input);
-  const out = el('div', '', box);
+  const bar = el('div', '', box); bar.className = 'ov-bar';
+  const count = el('p', '', bar); count.setAttribute('data-testid', 'overlap-count');
+  const empty = el('p', 'No pair matches this search.', box); empty.setAttribute('data-testid', 'overlap-empty');
+  const list = el('div', '', box);
+  const foot = el('div', '', box); foot.className = 'ov-bar';
+  // the same pager above and below the list; after a page turn focus is on the top one, so paging from the bottom
+  // brings the reader back to the start of the new page instead of leaving them 100 rows down
+  const pager = (parent, label, suffix) => {
+    const nav = el('nav', '', parent); nav.className = 'pager'; nav.setAttribute('aria-label', label);
+    const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id + suffix); b.onclick = () => turn(d, suffix !== ''); return b; };
+    // the counter before the buttons, so its width changing (page 9 to 10) never moves a button
+    const at = el('span', '', nav); at.setAttribute('data-testid', 'overlap-page' + suffix);
+    return { at, prev: step('Previous', -1, 'overlap-prev'), next: step('Next', 1, 'overlap-next') };
+  };
+  const top = pager(bar, 'Pages of pairs', ''), bottom = pager(foot, 'Pages of pairs, end of list', '-bottom');
+  top.at.setAttribute('aria-live', 'polite');
+  const turn = (d, fromBottom) => {
+    ovPage += d; draw();
+    if (fromBottom) input.scrollIntoView?.({ block: 'start' }); // jsdom has no scrollIntoView
+    const [ahead, back] = d < 0 ? [top.prev, top.next] : [top.next, top.prev];
+    (ahead.disabled ? back : ahead).focus({ preventScroll: true });
+  };
   const draw = () => {
-    out.replaceChildren();
     const q = ovQuery.toLowerCase();
     const hits = q ? ranked.filter((o) => o.tests.some((t) => t.toLowerCase().includes(q))) : ranked;
     const pages = Math.max(1, Math.ceil(hits.length / PAGE));
     ovPage = Math.min(ovPage, pages - 1);
-    el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
-    if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
+    count.textContent = hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs');
+    if (hits.length) empty.remove(); else bar.after(empty);
     // a page is built off the page and attached once: one insertion instead of hundreds
     const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
@@ -220,12 +248,8 @@ function drawOverlaps(parent) {
       // the two tests on their own lines, a dashed rule between them
       o.tests.forEach((t, k) => { if (k) el('hr', '', row); testLine('div', t, row).setAttribute('data-testid', 'overlap-test'); });
     });
-    out.appendChild(rows);
-    const nav = el('p', '', out);
-    const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
-    step('Previous', -1, 'overlap-prev');
-    el('span', ' Page ' + (ovPage + 1) + ' of ' + pages + ' ', nav);
-    step('Next', 1, 'overlap-next');
+    list.replaceChildren(rows);
+    [top, bottom].forEach((p) => { p.at.textContent = 'Page ' + (ovPage + 1) + ' of ' + pages; p.prev.disabled = ovPage === 0; p.next.disabled = ovPage === pages - 1; });
   };
   input.oninput = () => { ovQuery = input.value; ovPage = 0; draw(); };
   draw();

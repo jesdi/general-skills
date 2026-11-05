@@ -10,6 +10,9 @@ Interface the acceptance tests pin (the spec leaves the markup open), inside the
                                 [data-testid=overlap-test] identities and a label naming "Jaccard" with the value
   [data-testid=overlap-empty]   shown only when no pair matches, with an explanation
   [data-testid=overlap-next]    pages forward; disabled on the last page
+  [data-testid=overlap-prev]    pages back; disabled on the first page
+  [data-testid=overlap-page]    "Page <n> of <pages>"; these three form the pager above the list, the same three with
+                                a -bottom suffix (overlap-next-bottom, ...) the pager below it
 """
 import json
 import sys
