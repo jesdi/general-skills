@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from weigh_env import SetupError, build_overlay, check_versions, find_interpreter
-from weigh_coverage import branch_percent, overlaps, per_test, test_file_sources, unique_coverage, valued
+from weigh_coverage import branch_percent, left_out, overlaps, per_test, test_file_sources, unique_coverage, valued
 from weigh_git import brittle_percent, brittleness, is_repo
 from weigh_dashboard import summary, write_dashboard
 from weigh_inventory import count_lines
@@ -105,7 +105,7 @@ def main(argv=None):
     test_files = brittleness(repo, test_file_sources(tests))
     measure("brittle_test_files", brittle_percent(test_files),
             "no source file maps to a test file" if is_repo(repo) else "no git history")
-    metrics, pillars = score(rules, values, red=len(passing) < len(tests))
+    metrics, pillars = score(rules, values, red=bool(left_out(tests)))
     data = {
         "commit": commit,
         "dirty": dirty,

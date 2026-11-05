@@ -3,6 +3,7 @@ import ast
 import copy
 import hashlib
 
+from weigh_coverage import value_kind
 from weigh_inventory import is_test
 
 MOCK_ASSERTS = ("assert_called", "assert_any_call", "assert_has_calls", "assert_not_called", "assert_awaited", "assert_not_awaited")
@@ -337,8 +338,8 @@ def _measured(test, pillar, slow):
         return [f"{test['lines']} lines"], test["lines"]
     if pillar == "feedback" and test["duration"] > slow:
         return [f"{test['duration']:.2f} s"], test["duration"]
-    # unique coverage is measured only for tests that passed unflaky
-    if pillar == "economy" and test["outcome"] == "passed" and not test["flaky"] and not test.get("unique_coverage", 0):
+    # unique coverage is measured only for the tests that give value
+    if pillar == "economy" and value_kind(test) == "valued" and not test.get("unique_coverage", 0):
         return ["No unique coverage"], 0
     return [], 0
 

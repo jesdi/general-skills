@@ -6,6 +6,9 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-w
 .gauge{grid-row:span 3;display:grid;grid-template-rows:subgrid;row-gap:4px;align-content:start;margin-bottom:12px;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
 .gauge>*{align-self:start}
 .gauge-status{font-size:12px;line-height:1.3}
+/* with a red suite, each short reason wraps inside only when it alone is wider than the card, so a line never splits
+   "172 tests not green"; a lone "0 of 4 metrics measured" flows as text */
+.gauge-status.red>span{display:inline-block}
 /* one row of tabs on a rule; it scrolls sideways when the row is wider than the screen */
 .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #ccc;scrollbar-width:thin}
 .tabs>button{flex:none;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
@@ -218,8 +221,10 @@ function render() {
     g.setAttribute('aria-pressed', i === selected);
     el('span', p.name, g).setAttribute('data-testid', 'gauge-title');
     el('span', p.score === null ? '–' : shown(p.score), g).className = 'score';
-    const status = el('span', p.partial ? 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured' : 'all ' + p.total + ' metrics measured', g);
-    status.className = 'gauge-status' + (p.partial ? ' flag' : ''); status.setAttribute('data-testid', 'gauge-status');
+    const { head, reasons } = p.status;
+    const status = el('span', head, g);
+    reasons.forEach((r, k) => { status.append(' '); el('span', r + (k < reasons.length - 1 ? ';' : ''), status); });
+    status.className = 'gauge-status' + (reasons.length ? ' flag' : '') + (p.red_suite ? ' red' : ''); status.setAttribute('data-testid', 'gauge-status');
     g.onclick = () => { selected = i; tab = 'Metrics'; picked = null; render(); };
   });
   const p = data.pillars[selected];
@@ -230,6 +235,7 @@ function render() {
   el('h3', tab, details);
   if (tab === 'Metrics') {
     if (!p.metrics.length) el('p', 'No metrics were measured for this pillar.', details);
+    if (p.status.note) el('p', p.status.note, details).setAttribute('data-testid', 'partial-reason');
     const t = el('table', '', details);
     const head = el('tr', '', t);
     ['Metric', 'Value', 'Score', 'Anchors'].forEach((h) => el('th', h, head));

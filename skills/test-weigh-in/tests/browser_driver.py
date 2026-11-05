@@ -1,6 +1,7 @@
-"""Ticket 04 browser driver: `uv run --with playwright python browser_driver.py <dashboard.html>` opens the standalone
-report from disk in Chrome with the network switched off, drives the visible controls and prints one JSON document of
-measurements on stdout. It asserts nothing: test_dashboard_layout.py reads the measurements.
+"""Ticket 04 browser driver: `uv run --with playwright python browser_driver.py <dashboard.html> [--gauges]` opens the
+standalone report from disk in Chrome with the network switched off, drives the visible controls and prints one JSON
+document of measurements on stdout; with --gauges it measures only the overview gauges at both viewports. It asserts
+nothing: test_dashboard_layout.py reads the measurements.
 
 Page interface the acceptance tests pin, on top of the earlier tickets' markup (metric/overlap/map tabs):
   [data-testid=gauge-title]   inside every [data-testid=gauge]: the pillar title
@@ -25,8 +26,11 @@ GAUGES = """() => [...document.querySelectorAll('[data-testid=gauge]')].map((g) 
     return {top: Math.round(r.top), left: Math.round(r.left), width: Math.round(r.width), height: Math.round(r.height),
             lines: Math.round(r.height / (parseFloat(s.lineHeight) || 1.2 * parseFloat(s.fontSize))), font: parseFloat(s.fontSize),
             clipped: e.scrollWidth > e.clientWidth + 1 || e.scrollHeight > e.clientHeight + 1, text: e.textContent.trim()}; };
+  const status = g.querySelector('[data-testid=gauge-status]'), lh = (e) => parseFloat(getComputedStyle(e).lineHeight);
+  // the lines each reason of the status spans: an inline one breaks into rects, an inline-block one grows taller
+  const reasons = status ? [...status.children].map((s) => Math.max(s.getClientRects().length, Math.round(s.getBoundingClientRect().height / lh(s)))) : [];
   return {card: box(g), title: box(g.querySelector('[data-testid=gauge-title]')), score: box(g.querySelector('.score')),
-          status: box(g.querySelector('[data-testid=gauge-status]'))};
+          status: box(status), reasons};
 })"""
 
 SIG = """(el) => { const s = getComputedStyle(el);
@@ -56,6 +60,15 @@ def tabs(page):
 def table_share(page):
     return page.evaluate("""() => { const t = document.querySelector('[data-testid=details] table'), d = document.querySelector('[data-testid=details]');
       return t ? t.getBoundingClientRect().width / d.getBoundingClientRect().width : null; }""")
+
+
+def overview(browser, width, height):
+    page = browser.new_page(viewport={"width": width, "height": height})
+    page.goto(URL)
+    page.wait_for_selector(GAUGE)
+    out = {"gauges": page.evaluate(GAUGES), "overview": page.evaluate(OVERFLOW)}
+    page.close()
+    return out
 
 
 def layout(browser, width, height):
@@ -156,6 +169,10 @@ with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
     except Exception:
         browser = p.chromium.launch()
-    result = {"desktop": layout(browser, 1440, 900), "narrow": layout(browser, 390, 844), "tabs": tab_styles(browser), "journey": journey(browser)}
+    if sys.argv[2:] == ["--gauges"]:
+        result = {"desktop": overview(browser, 1440, 900), "narrow": overview(browser, 390, 844)}
+    else:
+        result = {"desktop": layout(browser, 1440, 900), "narrow": layout(browser, 390, 844), "tabs": tab_styles(browser),
+                  "journey": journey(browser)}
     browser.close()
 print(json.dumps(result))

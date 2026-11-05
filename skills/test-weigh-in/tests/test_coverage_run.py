@@ -7,8 +7,9 @@ Snapshot interface the tests pin (the spec leaves the JSON keys open), on top of
   tests[node].unique_coverage number of lines the test covers that no other passing test covers
   overlaps                    [{"tests": [node, node], "jaccard": float}] for passing pairs with jaccard >= 0.9
   metrics.branch_coverage / metrics.no_unique_coverage   {value, score}; value in percent
-Stdout: "<n> flaky test(s)" and "<n> tests are failing" warnings.
+Stdout: "<n> flaky test(s)" and "<n> tests are failing" warnings; a partial pillar's line ends "(partial: <reasons>)", its gauge status.
 """
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -112,6 +113,9 @@ def test_a_red_suite_is_measured_without_the_failing_tests_value(tmp_path, home,
         100 * sum(not t["unique_coverage"] for t in passed) / 40)
     assert data["pillars"]["regression"]["partial"] and data["pillars"]["economy"]["partial"]
     assert "3 tests are failing" in result.stdout
+    # the chat summary says why each pillar is partial, the same words as its gauge
+    assert re.search(r"^Protection against regressions: \d+ \(partial: 2 of 4 measured; 3 tests failing\)$", result.stdout, re.M)
+    assert re.search(r"^Fast feedback: \d+$", result.stdout, re.M)
 
 
 def test_skipped_tests_cost_without_value(tmp_path, home, cache):
