@@ -114,6 +114,27 @@ def tab_styles(browser):
     return {"steps": steps, "focus": focus}
 
 
+TAB_BOXES = """() => { const row = document.querySelector('[data-testid=details] .tabs'), o = row.getBoundingClientRect();
+  return [...row.querySelectorAll('button')].map((b) => { const r = b.getBoundingClientRect();
+    return {text: b.textContent.trim(), left: r.left - o.left + row.scrollLeft, width: r.width}; }); }"""
+
+
+def tab_boxes(browser, width, height):
+    """Each tab's unrounded box in its row (scroll-independent) after every tab of Economy is selected in turn."""
+    page = browser.new_page(viewport={"width": width, "height": height})
+    page.goto(URL)
+    page.wait_for_selector(GAUGE)
+    click_gauge(page, "Economy")
+    labels = [b["text"] for b in page.evaluate(TAB_BOXES)]
+    steps = {}
+    for label in labels:
+        click_tab(page, label)
+        steps[label] = page.evaluate(TAB_BOXES)
+    out = {"steps": steps, "overview": page.evaluate(OVERFLOW)}
+    page.close()
+    return out
+
+
 def journey(browser):
     context = browser.new_context(viewport={"width": 1440, "height": 900}, offline=True)
     requests = []
@@ -173,6 +194,7 @@ with sync_playwright() as p:
         result = {"desktop": overview(browser, 1440, 900), "narrow": overview(browser, 390, 844)}
     else:
         result = {"desktop": layout(browser, 1440, 900), "narrow": layout(browser, 390, 844), "tabs": tab_styles(browser),
+                  "tab_boxes": {"desktop": tab_boxes(browser, 1440, 900), "narrow": tab_boxes(browser, 390, 844)},
                   "journey": journey(browser)}
     browser.close()
 print(json.dumps(result))

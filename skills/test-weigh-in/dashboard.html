@@ -11,9 +11,11 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-w
 .gauge-status.red>span{display:inline-block}
 /* one row of tabs on a rule; it scrolls sideways when the row is wider than the screen */
 .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #ccc;scrollbar-width:thin}
-.tabs>button{flex:none;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
+.tabs>button{flex:none;display:inline-flex;flex-direction:column;align-items:center;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
 .tabs>button[aria-pressed=true]{background:#2563eb;color:#fff;border-bottom-color:#1e40af;font-weight:600}
-@media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 7px}}
+/* every tab is as wide as its bold label, so selecting one moves no other; hidden, so screen readers skip it */
+.tabs>button::after{content:attr(data-label);content:attr(data-label)/"";font-weight:600;height:0;overflow:hidden;visibility:hidden;pointer-events:none}
+@media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 6px}}
 button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
 #details table{width:100%}
 #details tr+tr{border-top:1px solid #e5e7eb}
@@ -231,7 +233,7 @@ function render() {
   el('h2', p.name, details);
   const names = ['Metrics', 'Worst tests', 'Smells', ...(p.key === 'economy' ? ['Overlaps', 'Map'] : [])];
   const tabs = el('div', '', details); tabs.className = 'tabs';
-  names.forEach((n) => { const b = el('button', n, tabs); b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
+  names.forEach((n) => { const b = el('button', n, tabs); b.dataset.label = n; b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
   el('h3', tab, details);
   if (tab === 'Metrics') {
     if (!p.metrics.length) el('p', 'No metrics were measured for this pillar.', details);

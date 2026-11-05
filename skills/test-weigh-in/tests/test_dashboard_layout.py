@@ -58,6 +58,15 @@ def test_the_active_tab_follows_selection_and_keyboard_focus_shows(report):
     assert ring or focus["sig_focused"] != focus["sig_unfocused"], f"no visible focus state: {focus}"
 
 
+@pytest.mark.parametrize("view", ["desktop", "narrow"])
+def test_selecting_a_tab_moves_no_tab(report, view):
+    steps = report["tab_boxes"][view]["steps"]
+    assert len(steps) == 5, f"Economy shows every tab: {list(steps)}"
+    first = next(iter(steps.values()))
+    for label, boxes in steps.items():
+        assert boxes == first, f"selecting {label} at {view} moves the tabs: {boxes} vs {first}"
+
+
 def gauges_readable(r, view, max_lines=2):
     gauges = r[view]["gauges"]
     assert len(gauges) == 5
