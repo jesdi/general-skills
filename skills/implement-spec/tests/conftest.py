@@ -25,6 +25,8 @@ def pr_skill(tmp_path_factory):
     (home / "skills/pr/SKILL.md").write_text("---\nname: pr\n---\n")
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("CLAUDE_CONFIG_DIR", str(home))
+        # No test reads the operator's own provider config (driver_agents.load_models).
+        patch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config-home")))
         yield home / "skills/pr/SKILL.md"
 
 

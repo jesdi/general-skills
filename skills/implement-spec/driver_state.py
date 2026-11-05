@@ -1,6 +1,6 @@
 """state.json, the resume contract: one lock, every write a read-modify-write, published by rename.
 
-    {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost}], questions, start,
+    {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost, tokens}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note,
                      landing, disputes, corrected}}}

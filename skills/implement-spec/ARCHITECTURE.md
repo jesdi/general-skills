@@ -142,8 +142,14 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - Fix rounds stop at 2, and round 2 goes to the next implementer entry.
 - A ticket review runs one agent, the reviewer. Its prompt carries the ticket's Risk line as one more criterion
   (`driver._risk`), so a risk that the diff does not handle is an unmet criterion under the usual round and cap rules.
-- A `--models` file may name only the roles of the skill's `models.json` (`driver_agents.load_models`): a removed
-  role (`correctness`, `explorer`) or an unknown one stops the run before the preflight.
+- `driver_agents.load_models` puts the provider config files (`config_files`: the home file, then the repo file
+  `.implement-spec/models.json`) and then the `--models` file on top of the skill's `models.json`, each replacing
+  whole role lists. Each may name only the roles of the skill's `models.json`: a removed role (`correctness`,
+  `explorer`) or an unknown one stops the run before the preflight, and the error names the file.
+- `driver_agents.command` runs a `codex` agent with `--json`, and one of a role that commits with
+  `--sandbox danger-full-access`, since `workspace-write` keeps `.git` read-only. `driver_agents.cost` prices a
+  `codex` agent from the token usage of its log at `PRICES`; `driver_run._record_attempt` keeps the tokens in the
+  agent record.
 - The preflight asks every entry of every list on each invocation and returns the lists without the entries that
   failed. A role keeps going on what is left, so a provider out of credits stops no run; a role with no entry left
   exits 3. Round 2 stays on the only implementer entry left (`driver_fixloop.entry`), and the ledger says it
@@ -154,9 +160,10 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   provider. Its lines are `prompts/lens-<source>.md`, with `prompts/lens-copy.md` as `{copy}`. The entry, the
   prompt values (`driver_final._lens_values`), the precondition errors and the source tags read it, and `TIMEOUTS` and
   `READ_ONLY` take its roles. `driver_agents.lens_entries` takes the entries from `final-reviewer`, and
-  `correctness_entries` keeps a lens, its rerun too, on another provider than the first implementer entry;
-  `load_models` refuses a list with none. When the preflight (`driver_agents.preflight`) leaves none, because each
-  such entry failed it, the lens falls back to the `final-reviewer` entries that are left. The ledger says so, and the
+  `correctness_entries` keeps a lens, its rerun too, on another provider than the first implementer entry when the
+  lists have one: it is a preference, not a check. When the config has none, or the preflight
+  (`driver_agents.preflight`) leaves none because each such entry failed it, the lens falls back to the
+  `final-reviewer` entries that are left. The ledger says so, and the
   PR body's Review coverage (`driver_final._review_providers`) names the entries each review ran on, read from
   `run.agents`, so a fallback that a later invocation undid is not claimed. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
@@ -167,7 +174,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   findings of the scoped review get the source `final-reviewer`; a findings file of an older driver, with no
   `source`, is read only by the scoped review agent. The lens reports go to
   `run.final.lenses` only once `Run.read_only` returns, so a report of a slot that a lens changed is never kept.
-- The scoped review after the fix batch is one `final-reviewer` agent on `other_provider_entries`, never the three
+- The scoped review after the fix batch is one `final-reviewer` agent on `correctness_entries`, never the three
   lenses again. Each finding it leaves open asks one `final-ticket-blocked` question (`driver_final._settle_review`);
   only a `retry` runs another fix batch and scoped review, and `edit` keeps the end of run BLOCKED
   (`driver_final._parked`).

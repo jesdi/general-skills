@@ -343,7 +343,8 @@ def test_a_timeout_for_an_unknown_role_is_a_usage_error(repo):
 
 def test_command_lines_per_provider():
     assert driver_agents.command("implementer", "openai/gpt-sol@high", "r.json") == [
-        "codex", "exec", "--model", "gpt-sol", "-c", 'model_reasoning_effort="high"', "--sandbox", "workspace-write"]
+        "codex", "exec", "--json", "--model", "gpt-sol", "-c", 'model_reasoning_effort="high"', "--sandbox",
+        "danger-full-access"]
     assert driver_agents.command("reviewer", "openai/gpt-sol@high", "r.json")[-4:] == [
         "--sandbox", "read-only", "-o", "r.json.last"]
     assert driver_agents.command("reviewer", "opus@low", "r.json")[:6] == [

@@ -43,6 +43,12 @@ TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "
             **dict.fromkeys(LENSES, 60), "conflict": 30, "pr-writer": 20}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
+# USD per million tokens at the API list price; `input` counts the cached input too, which costs `cached_input`. A
+# codex model that is not here keeps its tokens, and the ledger says it is not priced. Update when a price changes.
+PRICES = {"gpt-6-astra": {"input": 10.0, "cached_input": 1.0, "output": 50.0},
+          "gpt-6.1-sol": {"input": 2.0, "cached_input": 0.10, "output": 10.0}}
+# The name of each token count in the agent record, and its key in the `usage` of a codex turn.
+_USAGE = {"input": "input_tokens", "cached_input": "cached_input_tokens", "output": "output_tokens"}
 READ_ONLY = ("reviewer", "final-reviewer", *LENSES, "pr-writer")
 PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
 # The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
@@ -75,28 +81,51 @@ def _entry_error(role: str, entry: str, first: bool) -> str | None:
 REMOVED = ("correctness", "explorer")
 
 
-def _role_errors(given: dict, known: dict) -> list[str]:
-    """One error per role of the --models file that the skill's models.json does not define."""
-    return [f"{role}: the role was removed; delete its key from the --models file" if role in REMOVED else
-            f"{role}: unknown role (known: {', '.join(known)})" for role in given if role not in known]
+def _role_errors(given: dict, known: dict, label: str) -> list[str]:
+    """One error per role of the config file `label` that the skill's models.json does not define."""
+    return [f"{role}: the role was removed; delete its key from {label}" if role in REMOVED else
+            f"{role}: unknown role (known: {', '.join(known)}); delete its key from {label}"
+            for role in given if role not in known]
+
+
+# The provider config files, in the order they apply; the --models file applies after them. The repo file is read
+# from the worktree the driver runs in.
+REPO_CONFIG = Path(".implement-spec/models.json")
+
+
+def config_files() -> list[Path]:
+    """The provider config files that exist: the home file, then the repo file, which wins."""
+    home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "implement-spec/models.json"
+    return [path for path in (home, REPO_CONFIG) if path.is_file()]
 
 
 def load_models(path: str | None) -> tuple[dict[str, list[str]], list[str]]:
-    """The skill's default lists with the roles of `path` on top, and every role and entry error."""
-    defaults = json.loads((SKILL / "models.json").read_text())
+    """The skill's default lists, then the roles of each config file and of the --models file `path` on top, each
+    replacing whole lists, and every role and entry error."""
+    models = json.loads((SKILL / "models.json").read_text())
+    layers = [(file, str(file)) for file in config_files()] + ([(Path(path), "the --models file")] if path else [])
+    errors = [error for file, label in layers for error in _layer(models, file, label)]
+    return ({}, errors) if errors else (models, _entry_errors(models))
+
+
+def _layer(models: dict[str, list[str]], file: Path, label: str) -> list[str]:
+    """Put the roles of one config file on top of `models`; its errors, or []."""
+    named = f"{'--models ' if label != str(file) else ''}{file}"
     try:
-        given = json.loads(Path(path).read_text()) if path else {}
-        models = {**defaults, **given}  # a list is a TypeError
-        if unknown := _role_errors(given, defaults):
-            return {}, unknown
-        return models, _entry_errors(models)
-    except (OSError, ValueError, AttributeError, LookupError, TypeError) as exc:
-        return {}, [f"--models {path}: {exc!r}"]
+        given = json.loads(file.read_text())
+        if unknown := _role_errors(given, models, label):
+            return unknown
+        if empty := [role for role, entries in given.items() if not entries]:  # a list is an AttributeError
+            return [f"{named}: {', '.join(empty)}: the list has no entry"]
+        models.update(given)
+        return []
+    except (OSError, ValueError, AttributeError, TypeError) as exc:
+        return [f"{named}: {exc!r}"]
 
 
 def other_provider_entries(models: dict[str, list[str]]) -> list[str]:
     """The entries of the `final-reviewer` list on another provider than the implementer's first entry: the correctness
-    lens and the scoped review run and rerun only on these."""
+    lens and the scoped review run and rerun on these when there is one."""
     own = split(models["implementer"][0])[0]
     return [entry for entry in models["final-reviewer"] if split(entry)[0] != own]
 
@@ -107,8 +136,8 @@ def other_provider_entry(models: dict[str, list[str]]) -> str:
 
 
 def correctness_entries(models: dict[str, list[str]]) -> list[str]:
-    """The entries of the correctness lens and the scoped review: the other-provider ones, or, when none passed the
-    preflight, the whole `final-reviewer` list, so a provider out of credits stops no run (the PR body says so)."""
+    """The entries of the correctness lens and the scoped review: the other-provider ones, or, when the config has none
+    or none passed the preflight, the whole `final-reviewer` list (the ledger and the PR body say so)."""
     return other_provider_entries(models) or models["final-reviewer"]
 
 
@@ -125,11 +154,6 @@ def _entry_errors(models: dict[str, list[str]]) -> list[str]:
     found = [_entry_error(role, entry, (role, entry) in first) for role, entries in models.items() for entry in entries]
     if len(models["implementer"]) < 2:
         found.append("implementer: a second implementer model entry is required for fix round 2")
-    if not other_provider_entry(models):
-        found.append(f"final-reviewer: no entry of its list ({', '.join(models['final-reviewer'])}) is on another "
-                     f"provider than the implementer's first entry {models['implementer'][0]}; its other-provider "
-                     "entry serves the correctness lens of the final review and the scoped review, which never run on "
-                     "the implementer's provider")
     return [error for error in found if error]
 
 
@@ -176,20 +200,26 @@ def _skipped(models: dict[str, list[str]], kept: dict[str, list[str]], failed: d
     skipped = [f"Model entry {entry} is skipped for this invocation: {why.rstrip('.')}; each role that lists it "
                f"goes on with its next entry ({', '.join(role for role in models if entry in models[role])})."
                for entry, why in failed.items()]
-    if other_provider_entry(models) and not other_provider_entry(kept):
-        skipped.append(f"No final-reviewer entry on another provider than {kept['implementer'][0]} passed the "
-                       f"preflight: the correctness lens and the scoped review run on "
+    if not other_provider_entry(kept):
+        # Another provider for correctness is a preference: a config with none runs, and says so.
+        other = f"on another provider than {kept['implementer'][0]}"
+        why = f"{other} passed the preflight" if other_provider_entry(models) else f"is {other}"
+        skipped.append(f"No final-reviewer entry {why}: the correctness lens and the scoped review run on "
                        f"{', '.join(kept['final-reviewer'])}, the implementer's provider.")
     return skipped
 
 
 def last_words(log: Path) -> str:
-    """The last line of an agent log, or the `result` of the last stream-json line: the error a failed CLI gave."""
+    """The last line of an agent log, or the `result` of the last claude stream-json line or the error `message` of
+    the last codex --json line: the error a failed CLI gave."""
     lines = [line for line in log.read_text(errors="replace").splitlines() if line.strip()] if log.exists() else []
     if not lines:
         return "no output"
     with contextlib.suppress(ValueError, AttributeError):
-        return str(json.loads(lines[-1]).get("result") or lines[-1])[-500:]
+        event = json.loads(lines[-1])
+        error = event.get("error")
+        return str(event.get("result") or event.get("message") or (isinstance(error, dict) and error.get("message"))
+                   or lines[-1])[-500:]
     return lines[-1][-500:]
 
 
@@ -199,9 +229,11 @@ def command(role: str, entry: str, report: str) -> list[str]:
     if provider == "openai":
         # No --ephemeral: the rollout on disk is the trace. A read-only agent may not write its report, so -o saves
         # the last message next to it; settle_report picks one. -o on the report itself overwrites a written report.
+        # A role that commits needs full access: workspace-write keeps .git read-only, even under --add-dir.
         tail = ["--sandbox", "read-only", "-o", last_message(report)] if role in READ_ONLY else [
-            "--sandbox", "workspace-write"]
-        return ["codex", "exec", "--model", model, "-c", f'model_reasoning_effort="{effort}"', *tail]
+            "--sandbox", "danger-full-access"]
+        # --json: the log carries the token usage of each turn, which prices the run.
+        return ["codex", "exec", "--json", "--model", model, "-c", f'model_reasoning_effort="{effort}"', *tail]
     # stream-json keeps tool output in the log and ends with a result that has total_cost_usd.
     return ["claude", "-p", "--model", model, "--effort", effort, "--permission-mode", "auto",
             "--output-format", "stream-json", "--verbose"]
@@ -281,7 +313,27 @@ def stop() -> None:
             _kill(group)
 
 
-def cost(log: Path) -> str | None:
-    """The dollar cost the CLI reported; None for codex, which reports tokens only."""
+def tokens(log: Path) -> dict[str, int]:
+    """The tokens a codex agent used, summed over the turns of its --json log; {} for a log with no turn."""
+    used: dict[str, int] = {}
+    for line in log.read_text(errors="replace").splitlines():
+        with contextlib.suppress(ValueError, AttributeError, TypeError):
+            event = json.loads(line)
+            if event.get("type") == "turn.completed":
+                for name, key in _USAGE.items():
+                    used[name] = used.get(name, 0) + int(event["usage"].get(key, 0))
+    return used
+
+
+def cost(log: Path, entry: str) -> str | None:
+    """The dollar cost of an agent: the one the claude CLI reported, or the tokens of a codex agent at the list price
+    of its model; None when there is neither."""
+    provider, model, _ = split(entry)
+    if provider == "openai":
+        used, price = tokens(log), PRICES.get(model)
+        if not used or not price:
+            return None
+        usd = sum(used[name] * price[name] for name in price) - used["cached_input"] * price["input"]
+        return f"{round(usd / 1e6, 4):g}"
     found = re.findall(r'"total_cost_usd":\s*([0-9.]+)', log.read_text(errors="replace"))
     return found[-1] if found else None
