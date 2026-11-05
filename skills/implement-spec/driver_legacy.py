@@ -160,6 +160,15 @@ def _per_test(entry: dict, evidence: list[Path]) -> None:
                                    indent=1) + "\n")
 
 
+def _all_per_test(state: dict) -> None:
+    """Schema 5 for each ticket not keyed per test yet, with the evidence of its `spec-ambiguous` questions."""
+    for number, entry in state["tickets"].items():
+        if "settled" not in entry:  # schema 5 added it, so its presence marks a ticket already keyed per test
+            asked = [Path(q["evidence"][0]) for q in state["run"].get("questions", [])
+                     if (q["ticket"], q["kind"]) == (number, "spec-ambiguous")]
+            _per_test(entry, [path for path in asked if path.exists()])
+
+
 def _upgraded(state: dict) -> None:
     """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier.
     Schema 4: an answered question keeps its ruling sentence. Schema 5: see `_per_test`."""
@@ -170,11 +179,7 @@ def _upgraded(state: dict) -> None:
     for record in [run.get("final", {}), *state["tickets"].values()]:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
-    for number, entry in state["tickets"].items():
-        if "settled" not in entry:  # schema 5 added it, so its presence marks a ticket already keyed per test
-            asked = [Path(q["evidence"][0]) for q in run.get("questions", [])
-                     if (q["ticket"], q["kind"]) == (number, "spec-ambiguous")]
-            _per_test(entry, [path for path in asked if path.exists()])
+    _all_per_test(state)
     if isinstance(run.get("gates"), int):
         run["gates"] = {"fast": 0, "full": run["gates"]}
     run["schema"] = driver_state.SCHEMA
