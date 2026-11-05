@@ -132,7 +132,7 @@ def test_capped_regression_is_carried_through_the_final_fix_batch(tmp_path):
 
 # ---------------------------------------------------------------- the locked files
 
-STALE = finding("STALE", kind="fixture", file="tests/test_01.py")
+STALE = {**finding("STALE", kind="fixture", file="tests/test_01.py"), "test": "tests/test_01.py::test_x"}
 AMBIGUOUS_1 = "01-spec-ambiguous-1"
 
 
@@ -154,8 +154,8 @@ def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_spec_am
                     "01/reviewer": [review("01", [STALE])] * 2 + [review("01")]})
     rig = Inside(tmp_path).run(steps)
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
-    assert rig.led("BLOCKED at the review: the spec reads two ways on a locked test: tests/test_01.py: the first "
-                   "reading: STALE: STALE; the second reading: STALE: STALE.")
+    assert rig.led("BLOCKED at the review: the spec reads two ways on a locked test: tests/test_01.py::test_x: the "
+                   "first reading: STALE: STALE; the second reading: STALE: STALE.")
     assert asked(rig) == {AMBIGUOUS_1: ["keep-test", "correct-test", "edit-spec"]}
     (question,) = rig.state()["run"]["questions"]
     assert question["recommended"] == "" and question["evidence"][0] == ".agent/implement/01/spec-ambiguous-1.json"

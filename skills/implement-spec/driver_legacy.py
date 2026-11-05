@@ -4,7 +4,8 @@
 Every run of a newer driver holds `lock` (driver._hold), so a newer and an older driver never run in one repository
 at the same time. The driver calls `resume` once, after the locks and before any check reads a ref: a run with no
 `schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier; a run
-before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops.
+before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops;
+a run before schema 5 gets its rulings and corrections keyed by their test.
 ponytail: delete this module, tests/test_legacy.py and its one line in driver._hold and in driver._start_errors
 once no older driver is left.
 """
@@ -15,6 +16,7 @@ from types import MappingProxyType
 from typing import IO
 
 import driver_decisions
+import driver_report
 import driver_slots
 import driver_state
 from driver_names import Names
@@ -141,9 +143,21 @@ def _ruled(q: dict) -> str:
     return f"Ruling: {q['ticket'] or 'end of run'} {q['kind']} ({q['answer']}): {q['subject']}."
 
 
+def _per_test(entry: dict) -> None:
+    """Schema 5: `disputes` and `corrected` move from their locked file to the test each record names, and `settled`
+    counts one per record that is not the correction of a ruling. A review correction recorded only its file: it stays
+    under the file, where no test matches it."""
+    def key(file: str, record: dict) -> str:
+        return driver_report.test_key(file, record["test"]) if "::" in record["test"] else file
+    disputes, corrected = entry.get("disputes", {}), entry.get("corrected", {})
+    entry["disputes"] = {key(file, record): record for file, record in disputes.items()}
+    entry["corrected"] = {key(file, record): record for file, record in corrected.items()}
+    entry.setdefault("settled", len(disputes) + len(corrected.keys() - disputes.keys()))
+
+
 def _upgraded(state: dict) -> None:
     """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier.
-    Schema 4: an answered question keeps its ruling sentence."""
+    Schema 4: an answered question keeps its ruling sentence. Schema 5: see `_per_test`."""
     run = state["run"]
     for q in run.get("questions", []):
         if q["answer"] is not None:
@@ -151,6 +165,9 @@ def _upgraded(state: dict) -> None:
     for record in [run.get("final", {}), *state["tickets"].values()]:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
+    for entry in state["tickets"].values():
+        if "settled" not in entry:  # schema 5 added it, so its presence marks a ticket already keyed per test
+            _per_test(entry)
     if isinstance(run.get("gates"), int):
         run["gates"] = {"fast": 0, "full": run["gates"]}
     run["schema"] = driver_state.SCHEMA

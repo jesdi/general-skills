@@ -3,6 +3,7 @@ This call is a correction of the locked tests, not a new test set. Read in {find
 A `ruling` finding: a ruling says that a locked test contradicts the spec, and its `evidence` gives the reading of the spec that the test must assert. Change what the test asserts to that reading.
 A `fixture` finding: a locked test encodes a stale path, format, fixture layout or setup detail. Correct only that detail and keep what each test asserts.
 A `test` finding: a locked test is too weak, for example it stays green when the production line it protects is broken. Make the test assert the behavior of its criterion so that it fails on that break. Do not remove an assertion.
+A `test` finding with no `test` field: a test that the ticket asks for is missing. Add it to the finding's file.
 A finding on a locked file of another ticket, of any kind: only this correction may change that file. When the ticket must change it, as one that its Touches line names, make the change, keep what each test of the other ticket asserts, and list the file in `locked`.
 For this you may read the implementation. Keep each test that no finding names as it is, and commit only the test files you correct.
 When a finding needs a production change first, so that no correct test can be green, leave the test as it is and add the finding to `not_addressed`: `finding` is its `title` as the findings file gives it, `reason` is the production change it needs. The driver sends it to the fixer as a finding of kind `code`. A correction whose findings are all in `not_addressed` may report DONE with no commit.

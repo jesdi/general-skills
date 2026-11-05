@@ -10,6 +10,7 @@ import driver_answers
 import driver_decisions
 import driver_report
 import driver_review_page
+import driver_state
 from test_cli import git, ticket
 from test_fixloop import Inside, inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_tidy import Inside as Pushing, tools  # noqa: F401  (an unattended run pushes: the rig with an origin and a fake gh)
@@ -141,7 +142,7 @@ def as_schema_3(rig, **question):
     """Make the run of `rig` one that a schema 3 driver left, its one question changed by `question`."""
     path = rig.repo / ".agent/implement/state.json"
     state = json.loads(path.read_text())
-    assert state["run"]["schema"] == 4, "a new run writes schema 4"
+    assert state["run"]["schema"] == driver_state.SCHEMA, "a new run writes the current schema"
     state["run"]["schema"] = 3
     state["run"]["questions"][0].update(question)
     path.write_text(json.dumps(state))
@@ -167,7 +168,7 @@ def test_an_older_run_keeps_the_ruling_of_an_answered_question_of_a_removed_kind
     state["tickets"]["01"]["phase"] = "implement"  # what the older driver's `retry` did
     (rig.repo / ".agent/implement/state.json").write_text(json.dumps(state))
     rig.run(run, *UNATTENDED)
-    assert rig.code == 0 and rig.state()["run"]["schema"] == 4, rig.ledger()
+    assert rig.code == 0 and rig.state()["run"]["schema"] == driver_state.SCHEMA, rig.ledger()
     sentence = f"Ruling: 01 review runs again (retry): the implementer: it reported BLOCKED: {STOP}."  # the older driver's
     assert f"## Rulings\n\n- {sentence}\n" in rig.prs()[0]["body"]
     assert rig.state()["run"]["questions"][0]["ruling"] == sentence

@@ -73,9 +73,9 @@ def test_a_test_ruled_wrong_gets_one_correction_with_the_ruling_then_the_impleme
     assert ".agent/implement/01/ruled-1.json" in fixed["prompt"] and again["head"] == fixed["sha"]
     assert "R3 says single quotes" in again["prompt"]
     entry = rig.state()["tickets"]["01"]
-    assert entry["disputes"]["tests/test_01.py"]["ruling"] == "test-wrong" and entry["test_writer_sha"] == fixed["sha"]
-    assert entry["corrected"] == {"tests/test_01.py": {"test": TEST, "requirement": "R3",
-                                                       "reason": "R3 says single quotes"}}
+    assert entry["disputes"][TEST]["ruling"] == "test-wrong" and entry["test_writer_sha"] == fixed["sha"]
+    assert entry["corrected"] == {TEST: {"test": TEST, "requirement": "R3", "reason": "R3 says single quotes"}}
+    assert entry["settled"] == 1
     assert rig.led("the reviewer ruled test-wrong on the locked test tests/test_01.py::test_x, R3")
 
 
@@ -116,7 +116,7 @@ def test_a_dispute_on_another_locked_file_is_arbitrated_too(tmp_path):
                                          ruling("code-wrong", "R4 says y is a column", f"{OTHER}::test_y", "R4"),
                                          review("01")]})
     assert rig.code == 0 and not rig.state()["run"]["questions"], rig.ledger()
-    assert len(arbitrations(rig)) == 2 and set(rig.state()["tickets"]["01"]["disputes"]) == {"tests/test_01.py", OTHER}
+    assert len(arbitrations(rig)) == 2 and set(rig.state()["tickets"]["01"]["disputes"]) == {TEST, f"{OTHER}::test_y"}
     assert (rig.folder() / "arbitration-2.json").exists()
 
 
@@ -182,7 +182,7 @@ def test_a_second_dispute_on_the_same_test_asks_spec_ambiguous_with_both_reading
 
 
 def test_after_a_correction_a_review_finding_on_the_test_asks_spec_ambiguous(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    stale = {**finding("STALE", kind="fixture", file="tests/test_01.py"), "test": TEST}
     rig = run(tmp_path, {"01/implementer": [disputes(), impl("01")], "01/test-writer": [tw("01"), correction()],
                          "01/reviewer": [ruling("test-wrong", "R3 says single quotes"), review("01", [stale])]})
     assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 2, rig.ledger()
@@ -192,7 +192,7 @@ def test_after_a_correction_a_review_finding_on_the_test_asks_spec_ambiguous(tmp
 
 
 def test_a_test_ruled_wrong_that_a_review_corrected_before_asks_spec_ambiguous(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    stale = {**finding("STALE", kind="fixture", file="tests/test_01.py"), "test": TEST}
     rig = run(tmp_path, {"01/test-writer": [tw("01"), correction()],
                          "01/reviewer": [review("01", [stale, STUCK]), ruling("test-wrong", "R3 says single quotes")],
                          "01/fixer": [disputes(role="fixer")]})
@@ -203,16 +203,59 @@ def test_a_test_ruled_wrong_that_a_review_corrected_before_asks_spec_ambiguous(t
 
 
 def test_a_ruling_that_asks_spec_ambiguous_is_kept_so_a_dispute_after_keep_test_is_not_arbitrated_again(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    stale = {**finding("STALE", kind="fixture", file="tests/test_01.py"), "test": TEST}
     steps = plan(**{"01/test-writer": [tw("01"), correction()],
                     "01/reviewer": [review("01", [stale, STUCK]), ruling("test-wrong", "R3 says single quotes"),
                                     review("01", [STUCK]), ruling("test-wrong", "R3 says single quotes")],
                     "01/fixer": [disputes(role="fixer"), disputes(role="fixer")]})
     rig = Inside(tmp_path, ONE).run(steps)
-    assert rig.state()["tickets"]["01"]["disputes"]["tests/test_01.py"]["ruling"] == "test-wrong", rig.ledger()
+    assert rig.state()["tickets"]["01"]["disputes"][TEST]["ruling"] == "test-wrong", rig.ledger()
     rig.run(steps, "--answer", f"{AMBIGUOUS}=keep-test")
     assert rig.code == 2 and len(arbitrations(rig)) == 1, rig.ledger()
     assert [q["id"] for q in asked(rig)] == ["01-spec-ambiguous-2"]
+
+
+# ---------------------------------------------------------------- per test, not per file
+
+TEST_Y = "tests/test_01.py::test_y"
+MISSING = finding("MISSING", "critical", kind="test", file="tests/test_01.py")  # names no test: one to add
+
+
+def test_a_dispute_of_another_test_in_a_corrected_file_is_arbitrated_and_corrected_with_no_question(tmp_path):
+    """The cv-tailoring run asked 02-spec-ambiguous-1 here: test_x was corrected, then test_y of its file disputed."""
+    rig = run(tmp_path, {"01/implementer": [disputes(), disputes((TEST_Y, "a dict has no .body")), impl("01")],
+                         "01/test-writer": [tw("01"), correction(), correction(CORRECTED + "def test_y():\n    pass\n")],
+                         "01/reviewer": [ruling("test-wrong", "R3 says single quotes"),
+                                         ruling("test-wrong", "a dict has no .body", TEST_Y, "R5"), review("01")]})
+    assert rig.code == 0 and not rig.state()["run"]["questions"], rig.ledger()
+    assert roles(rig) == ["test-writer", "implementer", "arbitration", "test-writer", "implementer", "arbitration",
+                          "test-writer", "implementer", "reviewer"]
+    entry = rig.state()["tickets"]["01"]
+    assert set(entry["disputes"]) == set(entry["corrected"]) == {TEST, TEST_Y}
+
+
+@pytest.mark.parametrize("found", [MISSING, {**finding("WEAK", "critical", kind="test", file="tests/test_01.py"),
+                                             "test": TEST_Y}], ids=["missing-test", "another-test"])
+def test_a_review_finding_after_a_correction_of_another_test_gets_a_correction_with_no_question(tmp_path, found):
+    """The cv-tailoring run asked 01-spec-ambiguous-2 here: a review asked for missing tests in a corrected file."""
+    rig = run(tmp_path, {"01/implementer": [disputes(), impl("01")],
+                         "01/test-writer": [tw("01"), correction(), correction(CORRECTED + "def test_z():\n    pass\n")],
+                         "01/reviewer": [ruling("test-wrong", "R3 says single quotes"), review("01", [found]),
+                                         review("01")]})
+    assert rig.code == 0 and not rig.state()["run"]["questions"], rig.ledger()
+    assert roles(rig) == ["test-writer", "implementer", "arbitration", "test-writer", "implementer", "reviewer",
+                          "test-writer", "reviewer"]
+
+
+def test_the_ticket_asks_spec_ambiguous_once_its_locked_tests_were_settled_four_times(tmp_path):
+    """A test added is never corrected twice, so a cap bounds the review that keeps asking for one more."""
+    steps = {"01/test-writer": [tw("01"), *[correction(f"# added {n}\n") for n in range(1, 5)]],
+             "01/reviewer": [review("01", [MISSING])] * 5 + [review("01")]}
+    rig = run(tmp_path, steps)
+    assert rig.code == 2 and len(rig.calls("01", "test-writer")) == 5, rig.ledger()
+    (question,) = asked(rig)
+    assert question["id"] == AMBIGUOUS and "4 times" in question["subject"] and "MISSING" in question["subject"]
+    assert rig.state()["tickets"]["01"]["settled"] == 4
 
 
 # ---------------------------------------------------------------- the answers
@@ -243,7 +286,7 @@ def test_correct_test_corrects_to_the_second_reading_then_the_implementer_runs_a
     assert wanted["evidence"] == "correct the test to the second reading: the example in R3 uses '"
     assert rig.calls("01", "implementer")[2]["head"] == fixed["sha"]
     assert [q["id"] for q in asked(rig)] == ["01-spec-ambiguous-2"]
-    assert set(rig.state()["tickets"]["01"]["disputes"]) == {"tests/test_01.py"}
+    assert set(rig.state()["tickets"]["01"]["disputes"]) == {TEST}
 
 
 def test_correct_test_after_a_fixer_s_dispute_runs_the_fixer_of_that_round_again_after_the_correction(tmp_path):
@@ -271,7 +314,7 @@ def test_edit_spec_keeps_the_ticket_blocked_with_the_ruling_and_runs_no_agent(tm
 
 
 def test_keep_test_on_a_review_finding_closes_it_and_the_ticket_goes_on(tmp_path):
-    stale = finding("STALE", kind="fixture", file="tests/test_01.py")
+    stale = {**finding("STALE", kind="fixture", file="tests/test_01.py"), "test": TEST}
     steps = plan(**{"01/test-writer": [tw("01"), correction()], "01/fixer": [fix("01", 1)],
                     "01/reviewer": [review("01", [stale]), review("01", [stale]), review("01", [stale, STUCK]),
                                     review("01")]})

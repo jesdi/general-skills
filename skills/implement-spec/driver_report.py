@@ -160,11 +160,23 @@ def _locked_file(name: str, locked: list[str]) -> str:
     return found[0] if len(found) == 1 else ""
 
 
+def test_key(file: str, test: str) -> str:
+    """`<locked file>::<test>`, the key of a locked test in `disputes` and `corrected`: `test` is an id `<path>::<test>`
+    or a bare name, and a parametrized case is its test. "" for no test."""
+    name = re.sub(r"\[.*\]$", "", test.partition("::")[2] if "::" in test else test)
+    return f"{file}::{name}" if name else ""
+
+
 class Dispute(NamedTuple):
-    """One concern `locked test contradicts spec: <file>::<test>: <reason>` of a BLOCKED implementer or fixer."""
+    """One concern `locked test contradicts spec: <file>::<test>: <reason>` of a BLOCKED implementer or fixer, or a
+    review finding on a locked file, whose `test` is "" when it asks for a test that does not exist yet."""
     file: str  # the locked file it names; "" when it names no file of the ticket's `locked`
     test: str
     reason: str
+
+    @property
+    def key(self) -> str:
+        return test_key(self.file, self.test)
 
 
 def disputes(role: str, report: dict, locked: list[str]) -> list[Dispute]:

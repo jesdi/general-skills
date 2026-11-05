@@ -137,3 +137,18 @@ def test_the_lock_of_an_older_driver_is_shared_by_newer_drivers_and_excludes_an_
         f"a driver of an older version runs in this repository: it holds the lock {tmp_path / 'implement-spec.lock'}. "
         "Wait until it ends, then run the driver again."))
     older.close()
+
+
+def test_resume_keys_the_rulings_and_corrections_of_a_schema_4_run_by_their_test(repo, tmp_path):
+    """Schema 4 keyed them by the locked file; each record names its test, so the key moves to that test. A review
+    correction recorded only its file (no `::`) and stays under it, where no test matches it."""
+    state, _, _ = older_run(repo, tmp_path)
+    ruled = {"test": "test_01.py::test_x[a]", "requirement": "R3", "ruling": "test-wrong", "reason": "r"}
+    by_file = {"test": "tests/test_02.py", "requirement": "", "reason": "STALE"}
+    edit(state, {"disputes": {"tests/test_01.py": ruled},
+                 "corrected": {"tests/test_01.py": ruled, "tests/test_02.py": by_file}})
+    assert resume(state, tmp_path)[0] == []
+    entry = state.read()["tickets"]["01"]
+    assert entry["disputes"] == {"tests/test_01.py::test_x": ruled}
+    assert entry["corrected"] == {"tests/test_01.py::test_x": ruled, "tests/test_02.py": by_file}
+    assert entry["settled"] == 2  # one per record of schema 4: each was an arbitration or a correction
