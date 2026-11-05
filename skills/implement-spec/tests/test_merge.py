@@ -1,6 +1,8 @@
 """Plumbing merges: fast-forward, merge commit, conflict, the guarded ref move and the guarded branch delete."""
 import subprocess
 
+import pytest
+
 import driver_merge
 from conftest import GIT
 
@@ -101,9 +103,31 @@ def test_begin_opens_the_conflicting_merge_on_a_machine_with_no_git_identity(rep
     assert driver_merge.begin(".", pr_tip) == ["a.txt"]
 
 
-def test_unsigned_lists_the_commits_origin_lacks_only_when_commit_gpgsign_is_on(repo, monkeypatch):
+def test_unpushable_names_the_commits_origin_lacks_with_no_good_signature_when_commit_gpgsign_is_on(repo, monkeypatch):
     repo()
     tip = sh("git", "rev-parse", "--short", "HEAD")
-    assert driver_merge.unsigned("HEAD") == []
+    assert driver_merge.unpushable("HEAD") == []
     monkeypatch.setenv("GIT_CONFIG_VALUE_2", "true")  # the fixture's commit.gpgsign
-    assert driver_merge.unsigned("HEAD") == [tip]
+    assert driver_merge.unpushable("HEAD") == [f"{tip} has no good signature"]
+
+
+@pytest.mark.parametrize("trailer", ["Co-Authored-By: C <c@x>", "co-authored-by: C <c@x>", "Co-authored-by : C <c@x>",
+                                     "Co-authored-by: C\n  <c@x> folded\n x"])
+def test_unpushable_names_a_commit_whose_trailers_hold_a_co_author_in_any_form_git_reads(repo, monkeypatch, trailer):
+    repo()
+    monkeypatch.setenv("GIT_CONFIG_VALUE_2", "true")
+    sh(*GIT, "commit", "-q", "--allow-empty", "-m", f"fix\n\n{trailer}")
+    co, base = sh("git", "rev-parse", "--short", "HEAD"), sh("git", "rev-parse", "--short", "HEAD~1")
+    assert driver_merge.unpushable("HEAD") == [f"{co} has no good signature", f"{co} has a Co-authored-by trailer",
+                                               f"{base} has no good signature"]
+
+
+def test_a_commit_the_driver_makes_has_no_co_author_trailer_and_keeps_a_body_line_that_only_names_one(repo):
+    repo()
+    base = sh("git", "rev-parse", "HEAD")
+    message = ("fix: x\n\nCo-authored-by: is a trailer only at the end.\n\nWhy.\nSigned-off-by: A <a@x>\n"
+               "Co-Authored-By: C <c@x>\nco-authored-by : D\n  <d@x>\n")
+    made = driver_merge.commit_tree([f"{base}^{{tree}}", "-p", base], message, {}).stdout.strip()
+    assert sh("git", "log", "-1", "--format=%B", made) == (
+        "fix: x\n\nCo-authored-by: is a trailer only at the end.\n\nWhy.\nSigned-off-by: A <a@x>")
+    assert driver_merge.unpushable(made) == []

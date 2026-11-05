@@ -211,6 +211,14 @@ def test_a_ticket_whose_merge_left_the_tree_as_it_was_gets_the_commit_before_it(
     assert git(rig.repo, "log", "-1", "--format=%an %ae", commits["02"]) == "t t@example.com\n"
 
 
+def test_a_rewritten_commit_drops_its_co_author_trailers_and_keeps_the_rest_of_its_message(repo):
+    repo()
+    git(".", "commit", "-q", "--allow-empty", "-m",
+        "fix(01): quote commas\n\nWhy.\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nco-authored-by: B <b@x>\n")
+    (made,) = driver_tidy.rewrite("HEAD~1", [("HEAD", driver_tidy.text("HEAD"))])
+    assert driver_tidy.text(made) == "fix(01): quote commas\n\nWhy.\n\n"  # %B ends in a blank line
+
+
 # ---------------------------------------------------------------- the fix batch and its report
 
 def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violation(tmp_path):
@@ -249,7 +257,9 @@ def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violati
     assert rig.led("End of run: BLOCKED at the tip", f"is not a tip the driver made: only {reviewed[:7]} gets a review")
 
     git(rig.repo, "reset", "-q", "--hard", reviewed)
-    rig.run(plan(**{"final/fixer": [{}, {}, fixer(fn("02"), "quote commas")]}), "--push")
+    # The fixer's Co-authored-by trailer would block the push: the fix(NN) commit drops it.
+    trailer = "quote commas\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
+    rig.run(plan(**{"final/fixer": [{}, {}, fixer(fn("02"), trailer)]}), "--push")
     assert rig.code == 0 and [r["subject"] for r in rig.commits(reviewed)] == ["fix(02): quote commas"], rig.out
     assert rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"] and rig.final()["batch"] == rig.branch()
 
@@ -565,6 +575,19 @@ def test_a_history_that_origin_already_has_is_not_rebased_and_not_tidied(tmp_pat
     assert len(rig.final_calls("final-spec")) == 1 and rig.led("End of run: the full gate is green on " + rig.branch()[:7])
     assert rig.pushes()[-1] == f"refs/heads/feat/csv {rig.branch()}" and ref(rig.origin, "refs/heads/feat/csv") == rig.branch()
     assert f"- 01: {rig.branch()[:7]} Export rows" in rig.prs()[0]["body"] and stage(rig)["status"] == "done"
+
+
+def test_a_co_authored_commit_in_a_history_that_origin_already_has_blocks_the_push(tmp_path):
+    rig = Inside(tmp_path, ONE)
+    stray(rig, "published before the run")
+    published = rig.branch()
+    git(rig.repo, "push", "-q", "origin", "feat/csv")
+    stray(rig, "by hand\n\nCo-Authored-By: C <c@x>")  # kept as it is: the history is not tidied
+    co_authored = rig.branch()[:7]
+    rig.run(plan(), *UNATTENDED)
+    assert rig.code == 1 and ref(rig.origin, "refs/heads/feat/csv") == published, rig.out
+    assert rig.led(f"End of run: BLOCKED at commits of feat/csv may not be pushed: {co_authored} has a Co-authored-by "
+                   "trailer: nothing is pushed; sign or reword them, then run with --push again")
 
 
 def weak(nn="01"):

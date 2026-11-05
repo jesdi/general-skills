@@ -238,9 +238,12 @@ def command(role: str, entry: str, report: str) -> list[str]:
             "--sandbox", "danger-full-access"]
         # --json: the log carries the token usage of each turn, which prices the run.
         return ["codex", "exec", "--json", "--model", model, "-c", f'model_reasoning_effort="{effort}"', *tail]
-    # stream-json keeps tool output in the log and ends with a result that has total_cost_usd.
+    # stream-json keeps tool output in the log and ends with a result that has total_cost_usd. The empty
+    # attribution keeps Claude Code's Co-authored-by trailer off the agent's commits (includeCoAuthoredBy on a
+    # CLI older than attribution): the push refuses it.
     return ["claude", "-p", "--model", model, "--effort", effort, "--permission-mode", "auto",
-            "--output-format", "stream-json", "--verbose"]
+            "--output-format", "stream-json", "--verbose",
+            "--settings", json.dumps({"attribution": {"commit": "", "pr": ""}, "includeCoAuthoredBy": False})]
 
 
 def last_message(report: str | Path) -> str:
