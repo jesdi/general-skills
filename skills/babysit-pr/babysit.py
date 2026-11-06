@@ -124,7 +124,8 @@ class CommentIdentities:
         return path.read_text() if path.exists() else None
 
     def remember(self, cid, body):
-        kind = "lease" if LEASE.match(body) else "handoff" if HANDOFF.match(body) else None
+        kind = ("lease" if LEASE.match(body) else "handoff" if HANDOFF.match(body)
+                else "seen" if body.startswith(SEEN) else None)
         if kind:
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             try:
@@ -556,13 +557,14 @@ def owner_comments(repo, number):
         author = login_of(c)
         editor = (c.get("editor") or {}).get("login")
         kind = kinds[c["databaseId"]]
-        if author == owner and kind == "lease":
-            continue  # creation receipt, independent of the lease's current body
+        if author == owner and kind in ("lease", "seen"):
+            continue  # creation receipt of the babysitter's own state, independent of its current body
         if author == owner and not c["body"].startswith(MENTION):
-            # An unknown edited lease may be a handoff with its heading removed.
-            # Without a receipt it is safe to ignore only if no earlier instruction
-            # could be replayed. This also supports leases from another host.
-            if c.get("lastEditedAt") and (kind == "handoff" or not LEASE.match(c["body"])
+            # An unknown edited lease or seen comment may be a handoff with its heading
+            # removed. Without a receipt it is safe to ignore only if no earlier instruction
+            # could be replayed. This also supports state comments from another host.
+            own_state = LEASE.match(c["body"]) or c["body"].startswith(SEEN)
+            if c.get("lastEditedAt") and (kind == "handoff" or not own_state
                                           or editor != owner or instructions):
                 handoff = handoff or "handoff comment edited, boundary unverifiable"
             continue  # the babysitter's own lease comments and the owner's plain chatter
