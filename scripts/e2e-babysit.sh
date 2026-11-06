@@ -175,7 +175,7 @@ door: $door
 blast_radius: isolated
 touches: $touches
 rollback: revert
-verdict: $([ "$door" = one-way ] && echo human || echo auto)
+risk: 1
 reasons:
   - "Sandbox change for the $scenario e2e scenario"
 \`\`\`

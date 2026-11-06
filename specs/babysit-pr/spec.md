@@ -21,7 +21,7 @@ Terms:
 - The **owner** is the login of `gh api user --jq .login`.
 
 Unless a scenario says otherwise: the repo is `jesdi/demo` on GitHub; the owner is `jesdi`; the
-base is `main`; the policy file is `{"agentMerge": true}`; CI has the jobs `test` (`pytest`) and
+base is `main`; the policy file is `{"maxAutoRisk": 5}`; the repo is private; CI has the jobs `test` (`pytest`) and
 `lint` (`ruff check .`); the repo allows rebase and merge commits; the agent is Claude Code with
 both skills installed globally; `codex` is installed.
 
@@ -68,25 +68,31 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
 4. The parser accepts only this subset: one `key: value` per line, inline lists `[a, b]`, a
    `- item` list only under `reasons`, `#` comments. Fields: `door` (`one-way | two-way`),
    `blast_radius` (`isolated | module | service | consumers`), `touches` (categories),
-   `rollback` (`revert | revert+redeploy | data-fix | impossible`), `verdict` (`auto | human`),
-   `reasons` (one or more). Each other form, an unknown key, a missing key, or a second block is
+   `rollback` (`revert | revert+redeploy | data-fix | impossible`), `risk` (a whole number from
+   1 to 10), `reasons` (one or more). Each other form, an unknown key, a missing key, or a second block is
    invalid.
-5. The policy has these keys: `agentMerge` (default `false`), `alwaysHuman` (default
-   `schema/migration, auth/security, money, data-delete, infra`; the repo list replaces it),
+5. The policy has these keys: `maxAutoRisk` (0 to 10, default 3; 0 turns agent merges off),
+   `categoryRisk` (category → risk 1 to 10, each entry replacing that category's default),
    `paths` (category → globs, added to the default globs, never removing one), `mergeMethod`
    (`rebase | merge | squash`, default none), `judgeMaxLines` (default 1500), `waitMinutes`
-   (default 60). An unknown key or a wrong type is an error, and the verdict is human. The gate
-   reads the policy from `origin/<base>`, never from the PR head. A diff that changes
+   (default 60). An unknown key or a wrong type is an error, and the verdict is human; the old keys
+   `agentMerge` and `alwaysHuman` name their replacement. No policy file on the base is an error
+   too. The gate reads the policy from `origin/<base>`, never from the PR head. A diff that changes
    `.merge-risk.json` has the category `config` and is human.
 6. Default paths: `docs` is `docs/**`, `README*` and `*.md` in the root. `**/SKILL.md`,
    `AGENTS.md`, `CLAUDE.md` and `**/prompts/**` are `logic`, never `docs`. Defaults also cover
    migrations (`**/migrations/**`), lockfiles (`deps`), `.github/workflows/**` (`ci`) and
    `Dockerfile*` (`infra`). A changed file that matches no glob is `logic`.
-7. The gate gives human when any of these is true, and else auto: no block or an invalid block;
-   `agentMerge` is false; `door` is `one-way`; `rollback` is not `revert`; `touches` or the diff
-   has a category in `alwaysHuman`; the diff has a category that `touches` does not list; the
-   counted lines are more than `judgeMaxLines`. The gate never uses the `verdict` field of the
-   block. Each result lists every reason that made it human.
+7. The gate scores the risk: the highest category risk of the diff and `touches` (defaults
+   docs 1, tests 2, ui 3, logic 4, deps 5, config 6, ci 7, public-api 7, infra 8,
+   schema/migration 9, auth/security 10, money 10, data-delete 10), plus 1, 2 or 3 for a
+   `module`, `service` or `consumers` blast radius, plus 1 for `revert+redeploy`, capped at 10;
+   the block's `risk` raises it, never lowers it. The limit is `maxAutoRisk`, capped at 3 when
+   the repo is public or its visibility is unknown. The gate gives human when any of these is
+   true, and else auto: no block or an invalid block; `door` is `one-way`; `rollback` is
+   `data-fix` or `impossible`; the diff has a category that `touches` does not list; the counted
+   lines are more than `judgeMaxLines`; the risk is above the limit. A one-way change is human at
+   any risk and any limit. Each result lists every reason that made it human.
 8. Counted lines are the added plus removed lines of files that are not `docs` and not
    generated (lockfiles, snapshot files, files with a `@generated` marker).
 
@@ -174,8 +180,9 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
 
 24. When the gate gives auto, the judge gets only the diff against the base of the counted
     files, the names and line counts of the other files, the block and the categories. It
-    answers `{"verdict": "agree" | "disagree", "reason": "..."}`. Disagree, invalid JSON, or no
-    answer in 10 minutes is human. From Claude Code the judge is `codex exec`; from Codex it is
+    answers `{"verdict": "agree" | "disagree", "risk": 1-10, "reason": "..."}`. Disagree, an agree
+    without a valid risk, invalid JSON, or no answer in 10 minutes is human, and so is a judge
+    risk above the gate's limit. From Claude Code the judge is `codex exec`; from Codex it is
     `claude -p`. When that CLI is missing or fails, a fresh agent of the same vendor judges and
     the merge comment says "judge: same-model".
 25. The merge method is the policy's `mergeMethod` when set; else rebase when the repo allows it
@@ -290,7 +297,7 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
   blast_radius: isolated
   touches: [docs, tests]
   rollback: revert
-  verdict: auto
+  risk: 2
   reasons:
     - "Only skill prose and its tests change"
   ```
@@ -323,35 +330,53 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
 
 #### Scenario: the repo adds paths and keeps the defaults
 
-- **Given** the policy `{"agentMerge": true, "paths": {"money": ["src/billing/**"]}}`
+- **Given** the policy `{"maxAutoRisk": 5, "paths": {"money": ["src/billing/**"]}}`
 - **When** the diff changes `src/billing/invoice.py` and `db/migrations/0042_add.sql`
 - **Then** the categories are `money` and `schema/migration`
 
-#### Scenario: the repo removes a default always-human category
+#### Scenario: the repo overrides one category's risk
 
-- **Given** the policy `{"agentMerge": true, "alwaysHuman": ["money"]}` and a block with
-  `touches: [infra]`, two-way, revert
+- **Given** the policy `{"maxAutoRisk": 8, "categoryRisk": {"infra": 5}}` and a block with
+  `touches: [infra]`, two-way, isolated, revert, `risk: 1`
 - **When** the diff changes only `Dockerfile`
-- **Then** the gate verdict is auto
+- **Then** the risk is 5 and the gate verdict is auto
+
+#### Scenario: a risk above the limit is human
+
+- **Given** the policy `{"maxAutoRisk": 3}` and a block with `touches: [logic]`, isolated
+- **When** the diff changes only `src/app.py`
+- **Then** the risk is 4 and the verdict is human with the reason "risk 4 > max auto risk 3"
+
+#### Scenario: a public repo is capped at 3
+
+- **Given** a public repo with the policy `{"maxAutoRisk": 8}` and a logic block
+- **When** the gate runs
+- **Then** the verdict is human with the reason "risk 4 > max auto risk 3 (public repo)"
+
+#### Scenario: the block raises the risk, never lowers it
+
+- **Given** the policy `{"maxAutoRisk": 5}` and a logic diff (floor 4)
+- **When** the block says `risk: 6`, then `risk: 1`
+- **Then** the risk is 6 (human), then 4 (auto)
 
 #### Scenario: the PR cannot loosen its own policy
 
-- **Given** `origin/main` has `{"agentMerge": true}` with the default `alwaysHuman`
-- **When** PR #62 adds `db/migrations/0042_add.sql` and sets `"alwaysHuman": []` in its own
+- **Given** `origin/main` has `{"maxAutoRisk": 3}`
+- **When** PR #62 adds `db/migrations/0042_add.sql` and sets `"maxAutoRisk": 10` in its own
   `.merge-risk.json`, with a block that lists `schema/migration` and `config`
 - **Then** the gate uses the policy of `origin/main`, and the verdict is human with the reasons
-  "schema/migration is always human" and "config: .merge-risk.json changed"
+  "config: .merge-risk.json changed" and "risk 9 > max auto risk 3"
 
 #### Scenario: the first policy file is not used by its own PR
 
 - **Given** `origin/main` has no `.merge-risk.json`
-- **When** PR #63 adds `.merge-risk.json` with `{"agentMerge": true}`
+- **When** PR #63 adds `.merge-risk.json` with `{"maxAutoRisk": 3}`
 - **Then** the PreToolUse hook enforces the block (the file is in the working tree), and the gate
-  verdict is human with the reason "agentMerge is off"
+  verdict is human with the reason "policy: no .merge-risk.json on the base"
 
 #### Scenario: an unknown policy key is an error
 
-- **Given** the policy `{"agentMerge": true, "autoMerge": true}`
+- **Given** the policy `{"maxAutoRisk": 3, "autoMerge": true}`
 - **When** the gate runs
 - **Then** the verdict is human with the reason "policy: unknown key autoMerge"
 
@@ -361,30 +386,29 @@ scenarios in "the base moves" can pass. This spec does not write tickets for the
 - **When** the diff changes only `skills/pr-risk/SKILL.md`
 - **Then** the verdict is human with the reason "diff touches logic, not in touches"
 
-#### Scenario: one-way door is human
+#### Scenario: one-way door is human at any risk
 
-- **Given** a valid block with `door: one-way` and `verdict: auto`
+- **Given** the policy `{"maxAutoRisk": 10}` and a valid docs block with `door: one-way`, `risk: 1`
 - **When** the gate runs
-- **Then** the verdict is human with the reason "door one-way", whatever the `verdict` field says
+- **Then** the verdict is human with the reason "door one-way"
 
-#### Scenario: rollback other than revert is human
+#### Scenario: a rollback that cannot revert is one-way
 
-- **Given** a valid two-way block with `rollback: revert+redeploy`
+- **Given** the policy `{"maxAutoRisk": 10}` and a valid two-way block with `rollback: data-fix`
 - **When** the gate runs
-- **Then** the verdict is human
+- **Then** the verdict is human with the reason "rollback data-fix is one-way"
 
 #### Scenario: an undeclared migration is human
 
 - **Given** a block with `touches: [logic, tests]`
 - **When** the diff also changes `db/migrations/0042_add.sql`
 - **Then** the verdict is human with the reasons "diff touches schema/migration, not in touches"
-  and "schema/migration is always human"
 
-#### Scenario: agentMerge false is human
+#### Scenario: maxAutoRisk 0 is human
 
-- **Given** the policy `{"agentMerge": false}` and a valid two-way docs block
+- **Given** the policy `{"maxAutoRisk": 0}` and a valid two-way docs block
 - **When** the gate runs
-- **Then** the verdict is human with the reason "agentMerge is off"
+- **Then** the verdict is human with the reason "risk 1 > max auto risk 0"
 
 #### Scenario: counted lines at the limit
 

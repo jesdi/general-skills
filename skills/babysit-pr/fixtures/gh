@@ -155,7 +155,8 @@ def api(args):
                      "user": {"login": st["user"]},
                      "title": st.get("title", ""), "body": st.get("body", ""),
                      "head": {"sha": st.get("head_sha", "head1"), "ref": st.get("head_ref", "feature")},
-                     "base": {"ref": st.get("base_ref", "main"), **({"sha": st["base_sha"]} if "base_sha" in st else {})}}, jq, include)
+                     "base": {"ref": st.get("base_ref", "main"), "repo": {"private": st.get("private", False)},
+                              **({"sha": st["base_sha"]} if "base_sha" in st else {})}}, jq, include)
     if path == "pulls" and method == "GET" and fields.get("state") == "open":
         log(False)
         return emit([{"number": p["number"], "base": {"ref": p["base"]}} for p in st.get("open_prs", [])

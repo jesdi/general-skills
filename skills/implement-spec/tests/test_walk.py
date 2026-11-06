@@ -66,7 +66,7 @@ step = step[n] if n < len(step) else {{}}
 if role in ("reviewer", "final-reviewer", "final-spec", "final-correctness", "final-structure") and "report" not in step:
     step = dict(step, report=dict(status="DONE", commits=[], files=[], concerns=[], findings=[]))
 if role == "pr-writer" and "report" not in step:  # an unscripted pr-writer writes a summary and a valid merge-risk block
-    step = dict(step, report=dict(status="DONE", commits=[], files=[], concerns=[], body="## Summary\\n\\nCSV export.\\n\\n## Merge Danger\\n\\n```merge-risk v1\\ndoor: two-way\\nblast_radius: isolated\\ntouches: [docs]\\nrollback: revert\\nverdict: auto\\nreasons:\\n  - \\"Only prose changes\\"\\n```\\n"))
+    step = dict(step, report=dict(status="DONE", commits=[], files=[], concerns=[], body="## Summary\\n\\nCSV export.\\n\\n## Merge Danger\\n\\n```merge-risk v1\\ndoor: two-way\\nblast_radius: isolated\\ntouches: [docs]\\nrollback: revert\\nrisk: 1\\nreasons:\\n  - \\"Only prose changes\\"\\n```\\n"))
 for name in step.get("touch", []):
     (rig / "sig" / name).touch()
 for name in step.get("wait", []):

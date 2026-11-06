@@ -8,6 +8,7 @@ file is the PR body (summary + merge-risk block). Exit 0, one JSON object on std
   reason     the handoff reason when disagree: "judge: <judge reason>", or "judge timeout"
   sameModel  true when the other vendor's CLI was missing and a fresh agent of the same vendor judged
   label      what the merge comment shows after "judge ": "agree" | "same-model agree" (agree only)
+  risk       the judge's risk, 1-10 (agree only); an agree without a whole risk from 1 to 10 is disagree
 Env BABYSIT_JUDGE_TIMEOUT overrides the 10 minute limit, in seconds.
 
 The judge CLIs are fakes on PATH (`codex`, `claude`). A fake logs {name, argv, stdin} to
@@ -40,7 +41,7 @@ print(ans)
 sys.exit(int(os.environ.get("FAKE_EXIT_{NAME}", "0")))
 """
 
-AGREE = '{"verdict": "agree", "reason": "small and reversible"}'
+AGREE = '{"verdict": "agree", "risk": 2, "reason": "small and reversible"}'
 
 
 def git(repo, *args):
@@ -69,7 +70,7 @@ door: two-way
 blast_radius: isolated
 touches: [logic]
 rollback: revert
-verdict: auto
+risk: 1
 reasons:
   - "BLOCK-REASON-TEXT small and reversible"
 ```
@@ -82,7 +83,7 @@ class Judge:
         self.repo = tmp_path / "repo"
         self.repo.mkdir()
         git(self.repo, "init", "-q", "-b", "work")
-        base = commit(self.repo, {"README.md": "hi\n", ".merge-risk.json": '{"agentMerge": true}'},
+        base = commit(self.repo, {"README.md": "hi\n", ".merge-risk.json": '{"maxAutoRisk": 5}'},
                       "base")
         git(self.repo, "update-ref", "refs/remotes/origin/main", base)
         self.head = commit(self.repo, {
@@ -231,7 +232,12 @@ def test_only_a_plain_reasoned_agree_is_agree(tmp_path):
     for answer in ('{"verdict": "auto", "reason": "ok"}', '{"verdict": "human", "reason": "ok"}',
                    '{"verdict": "approve", "reason": "ok"}', '{"verdict": "AGREE", "reason": "ok"}',
                    '{"verdict": true, "reason": "ok"}', '{"verdict": "agree"}',
-                   '{"verdict": "agree", "reason": ""}', '["agree"]', 'null'):
+                   '{"verdict": "agree", "reason": ""}', '["agree"]', 'null',
+                   '{"verdict": "agree", "reason": "ok"}', '{"verdict": "agree", "risk": 0, "reason": "ok"}',
+                   '{"verdict": "agree", "risk": 11, "reason": "ok"}',
+                   '{"verdict": "agree", "risk": "2", "reason": "ok"}',
+                   '{"verdict": "agree", "risk": 2.5, "reason": "ok"}',
+                   '{"verdict": "agree", "risk": true, "reason": "ok"}'):
         sub = tmp_path / f"case{len(list(tmp_path.iterdir()))}"
         sub.mkdir()
         out = Judge(sub).run(answer)
@@ -240,16 +246,16 @@ def test_only_a_plain_reasoned_agree_is_agree(tmp_path):
 
 
 def test_agree_on_a_human_gate_block_never_becomes_auto(tmp_path):
-    """The gate said human (block verdict: human); the judge agreeing must not turn that into an
+    """The gate said human (block risk: 8); the judge agreeing must not turn that into an
     auto: the result is only agree/disagree with the known keys, never an auto or human verdict."""
     j = Judge(tmp_path)
-    j.body.write_text(BODY.replace("verdict: auto", "verdict: human"))
+    j.body.write_text(BODY.replace("risk: 1", "risk: 8"))
     out = j.run(AGREE)
     assert out["verdict"] == "agree"
-    assert set(out) <= {"verdict", "sameModel", "label"}, out
+    assert set(out) <= {"verdict", "risk", "sameModel", "label"}, out
     assert "auto" not in json.dumps(out) and "human" not in json.dumps(out)
     c = j.calls()[0]
-    assert "verdict: human" in json.dumps(c["argv"]) + c["stdin"]
+    assert "risk: 8" in json.dumps(c["argv"]) + c["stdin"]
 
 
 def test_a_judge_that_agrees_but_exits_nonzero_falls_back(tmp_path):
@@ -270,7 +276,7 @@ def test_a_judge_that_agrees_but_exits_nonzero_falls_back(tmp_path):
 
 
 def test_a_gate_human_stays_human_whatever_the_judge_says(tmp_path):
-    """The block's advisory `verdict: auto` is ignored by the gate. With a one-way door the gate
+    """The block's advisory `risk: 1` is ignored by the gate. With a one-way door the gate
     says human; a judge agree on that same input is only agree and carries nothing that could
     turn the gate's human into auto."""
     j = Judge(tmp_path)
@@ -282,5 +288,5 @@ def test_a_gate_human_stays_human_whatever_the_judge_says(tmp_path):
     assert json.loads(gate.stdout)["verdict"] == "human", gate.stdout + gate.stderr
     out = j.run(AGREE)
     assert out["verdict"] == "agree"
-    assert set(out) <= {"verdict", "sameModel", "label"}, out
+    assert set(out) <= {"verdict", "risk", "sameModel", "label"}, out
     assert "auto" not in json.dumps(out) and "human" not in json.dumps(out)

@@ -56,7 +56,7 @@ def run_judge(j, script, home):
 
 def judge_world(tmp_path):
     j = Judge(tmp_path)
-    j.answer.write_text('{"verdict": "agree", "reason": "ok"}')
+    j.answer.write_text('{"verdict": "agree", "risk": 1, "reason": "ok"}')
     home = tmp_path / "home"
     home.mkdir()
     return j, home, stage_script(tmp_path)

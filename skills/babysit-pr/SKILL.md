@@ -21,7 +21,7 @@ Run with `/babysit-pr <pr-url>`. The PostToolUse hook in `hooks/post-pr-create.s
 2. `update-plan --base <base>` when the base moved; follow its plan (see Base moved). Every step uses `origin/<base>` of the PR (a stacked PR's parent), never `main`.
 3. `checks --wait-minutes <waitMinutes>` until the head is green, red, stalled (`CI stalled`) or empty (`no checks`). Green means every check passed.
 4. Red: `round start --op <id>` (keep the id), then the fix round below. Renew the lease each round and `lease check` before each push.
-5. Green: run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's verdict label to `merge --judge agree` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw.
+5. Green: run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's label and risk to `merge --judge agree --judge-risk <risk>` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw, and hands off when the gate's or the judge's risk is above the repo's limit.
 
 ## A fix round
 

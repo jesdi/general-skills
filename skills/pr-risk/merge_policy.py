@@ -17,14 +17,25 @@ DEFAULT_PATHS = {
     "infra": ["**/Dockerfile*"],
     "logic": ["**/SKILL.md", "**/AGENTS.md", "**/CLAUDE.md", "**/prompts/**"],
 }
-DEFAULT_POLICY = {"agentMerge": False, "paths": {}, "mergeMethod": None,
-                  "judgeMaxLines": 1500, "waitMinutes": 60,
-                  "alwaysHuman": ["schema/migration", "auth/security", "money", "data-delete",
-                                  "infra"]}
+# Risk of each category, 1 (harmless) to 10 (never merged by an agent). A repo overrides
+# single entries with `categoryRisk`.
+CATEGORY_RISK = {"docs": 1, "tests": 2, "ui": 3, "logic": 4, "deps": 5, "config": 6, "ci": 7,
+                 "public-api": 7, "infra": 8, "schema/migration": 9, "auth/security": 10,
+                 "money": 10, "data-delete": 10}
+# A public repo never merges above this risk without a human; a repo that sets no
+# `maxAutoRisk` gets it too.
+PUBLIC_MAX_RISK = 3
+DEFAULT_POLICY = {"maxAutoRisk": PUBLIC_MAX_RISK, "categoryRisk": {}, "paths": {},
+                  "mergeMethod": None, "judgeMaxLines": 1500, "waitMinutes": 60}
+REPLACED_KEYS = {"agentMerge": "maxAutoRisk", "alwaysHuman": "categoryRisk"}
 
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def is_risk(v, low=1):
+    return is_int(v) and low <= v <= 10
 
 
 def is_str_list(v):
@@ -32,8 +43,9 @@ def is_str_list(v):
 
 
 POLICY_TYPES = {
-    "agentMerge": lambda v: isinstance(v, bool),
-    "alwaysHuman": lambda v: is_str_list(v) and all(c in CATEGORIES for c in v),
+    "maxAutoRisk": lambda v: is_risk(v, low=0),
+    "categoryRisk": lambda v: isinstance(v, dict) and all(
+        c in CATEGORIES and is_risk(r) for c, r in v.items()),
     "paths": lambda v: isinstance(v, dict) and all(
         c in CATEGORIES and is_str_list(g) for c, g in v.items()),
     "mergeMethod": lambda v: v in ("rebase", "merge", "squash"),
@@ -49,22 +61,30 @@ def git(*args, check=True):
     return p
 
 
+def has_bracket_glob(paths):
+    return any("[" in g or "]" in g for globs in paths.values() for g in globs)
+
+
 def policy_error(key, value):
     """Why one policy entry is rejected, else None."""
+    if key in REPLACED_KEYS:
+        return f"policy: {key} was replaced by {REPLACED_KEYS[key]}"
     if key not in POLICY_TYPES:
         return f"policy: unknown key {key}"
     if not POLICY_TYPES[key](value):
         return f"policy: wrong type for {key}"
-    if key == "paths" and any("[" in g or "]" in g for globs in value.values() for g in globs):
+    if key == "paths" and has_bracket_glob(value):
         return "policy: unsupported glob syntax in paths"
     return None
 
 
 def load_policy(base):
-    """Policy from the base commit, never the PR head. Returns (policy, errors)."""
+    """Policy from the base commit, never the PR head. Returns (policy, errors).
+
+    No policy file on the base is an error: a PR must not merge itself under a policy it adds."""
     p = git("show", f"{base}:{POLICY_FILE}", check=False)
     if p.returncode:
-        return dict(DEFAULT_POLICY), []
+        return dict(DEFAULT_POLICY), [f"policy: no {POLICY_FILE} on the base"]
     try:
         raw = json.loads(p.stdout)
     except ValueError:

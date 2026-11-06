@@ -1,18 +1,8 @@
 {
-  "agentMerge": true,
+  "maxAutoRisk": 3,
   "mergeMethod": "rebase",
   "judgeMaxLines": 1500,
   "waitMinutes": 60,
-  "alwaysHuman": [
-    "schema/migration",
-    "auth/security",
-    "money",
-    "data-delete",
-    "infra",
-    "ci",
-    "config",
-    "logic"
-  ],
   "paths": {
     "auth/security": [
       ".merge-risk.json",

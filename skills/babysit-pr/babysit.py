@@ -659,7 +659,7 @@ def load_merge_risk(base=None):
 
 
 JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
-GATE_NEEDS = ("gate", "base_policy", "classify_diff", "diff_stats", "parse")
+GATE_NEEDS = ("gate", "base_policy", "classify_diff", "diff_stats", "parse", "risk_floor")
 
 
 def missing_functions(mr, *names):
@@ -736,13 +736,15 @@ def judge(base, head, body_file, agent):
         return {"verdict": "disagree", "reason": "judge timeout", "sameModel": same_model}
     try:
         data = json.loads(answer)
-        verdict, reason = data["verdict"], data.get("reason")
+        verdict, reason, risk = data["verdict"], data.get("reason"), data.get("risk")
     except (TypeError, ValueError, KeyError, AttributeError):
-        verdict, reason = None, None
+        verdict, reason, risk = None, None, None
     if verdict == "agree" and not (isinstance(reason, str) and reason.strip()):
         verdict = None
+    if verdict == "agree" and not (type(risk) is int and 1 <= risk <= 10):
+        verdict = None
     if verdict == "agree":
-        return {"verdict": "agree", "sameModel": same_model,
+        return {"verdict": "agree", "risk": risk, "sameModel": same_model,
                 "label": "same-model agree" if same_model else "agree"}
     if verdict != "disagree":
         reason = "invalid answer"
@@ -839,7 +841,8 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
                       "next": "In Claude Code send PushNotification, then end the turn. Otherwise end the turn now."}))
 
 
-def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None, base=None):
+def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None, base=None,
+              judge_risk=None):
     pr = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
     if base not in (None, pr["base"]["ref"]):
         fail(f"--base {base} is not the PR's base {pr['base']['ref']}")
@@ -870,10 +873,17 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
         mr = load_merge_risk(base)
         if old := missing_functions(mr, *GATE_NEEDS):
             stop(f"pr-risk is too old: {', '.join(old)}")
-        result = mr.gate(body, base, sha)  # trusted policy, recomputed for this sha
+        public = pr["base"].get("repo", {}).get("private") is not True  # unknown counts as public
+        result = mr.gate(body, base, sha, public)  # trusted policy, recomputed for this sha
         if result["verdict"] != "auto":
-            gate = "gate: human"
+            gate = f"gate: human, risk {result['risk']}/10"
             stop(f"gate is human: {'; '.join(result['reasons'])}")
+        gate = f"gate: passed, risk {result['risk']}/10"
+        if judge_risk is None:
+            stop("judge risk missing: pass --judge-risk")
+        if judge_risk > result["maxAutoRisk"]:
+            stop(f"judge risk {judge_risk} > max auto risk {result['maxAutoRisk']}")
+        risk_line = f"risk {max(result['risk'], judge_risk)}/10 (auto up to {result['maxAutoRisk']}), "
     else:
         judge_line = f"owner approved {approved}"
         commits = pr_commits(repo, number)
@@ -924,8 +934,8 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
             fail(f"head moved since the gate saw {sha}: gate again")
         stop(f"merge blocked: {'approval required' if 'approv' in err.lower() else err}")
     pr = Pr(repo, number)
-    pr.post("🤖 Merged by babysit-pr: gate passed, " + (
-        f"judge {judge_label}" if approved is None else f"owner approved {approved}"))
+    pr.post("🤖 Merged by babysit-pr: " + (
+        f"{risk_line}gate passed, judge {judge_label}" if approved is None else f"owner approved {approved}"))
     if session:
         release(pr, session)
 
@@ -968,6 +978,7 @@ def main():
     mg.add_argument("--sha", required=True)
     mg.add_argument("--body", required=True)
     mg.add_argument("--judge")
+    mg.add_argument("--judge-risk", type=int, choices=range(1, 11), metavar="1-10")
     mg.add_argument("--approved-sha")
     mg.add_argument("--base")
     for p in (mg, hp):
@@ -991,7 +1002,7 @@ def main():
     elif a.cmd == "merge":
         if not (a.judge or a.approved_sha):
             ap.error("merge needs --judge or --approved-sha")
-        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session, a.base)
+        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session, a.base, a.judge_risk)
     elif a.cmd == "handoff":
         handoff(a.repo, a.pr, a.reason, a.ci, a.rounds, a.gate, a.judge, Path(a.fix_log).read_text(), session=a.session)
     elif a.cmd == "update-plan":

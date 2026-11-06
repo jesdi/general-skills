@@ -30,7 +30,7 @@ with open(os.environ["FAKE_LOG"], "a") as log:
                           "session": {k: os.environ.get(k) for k in
                                       ("GIT_DIR", "CLAUDE_PROJECT_DIR", "CODEX_THREAD_ID", "CLAUDECODE")},
                           "stdin": sys.stdin.read()}) + "\\n")
-print(json.dumps({"verdict": "disagree" if leaked else "agree",
+print(json.dumps({"verdict": "disagree" if leaked else "agree", "risk": 1,
                   "reason": "checkout instructions loaded" if leaked else "isolated"}))
 ''')
     result = j.run(agent=agent, TMPDIR=j.repo, GIT_DIR=j.repo / ".git",

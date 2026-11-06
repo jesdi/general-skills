@@ -41,7 +41,7 @@ def test_handoff_retry_cannot_end_resumed_session(tmp_path):
 def test_stale_session_cannot_merge_or_release_new_holder(tmp_path):
     w = world(tmp_path)
     assert w.run("acquire", "s2").returncode == 0
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--session", "s1")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1", "--session", "s1")
     assert p.returncode != 0, p.output
     assert w.github().get("merges", []) == []
     assert handoffs(w) == []
@@ -52,7 +52,7 @@ def test_sessionless_merge_cannot_adopt_a_lease(tmp_path):
     w = world(tmp_path)
     assert w.run("acquire", "s2").returncode == 0
     before = w.github()
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0, p.output
     assert "--session" in p.output
     assert w.github() == before
@@ -110,7 +110,7 @@ def test_handoff_rechecks_ownership_after_posting_comment(tmp_path):
 def test_merge_with_own_session_ends_only_its_lease(tmp_path):
     w = world(tmp_path)
     assert w.run("acquire", "s1").returncode == 0
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--session", "s1")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1", "--session", "s1")
     assert p.returncode == 0, p.output
     assert len(w.github()["merges"]) == 1
     assert w.active_leases() == []

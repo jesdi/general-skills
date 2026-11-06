@@ -10,7 +10,8 @@ Interface under test (defined here):
       is recomputed for SHA with the trusted merge_risk and the policy committed on origin/<base>.
       --judge agree merges only when that gate is auto; else it hands off with the gate's reasons.
       Merges with `gh pr merge N --<method> --match-head-commit SHA`, never `--auto`, then posts
-      `🤖 Merged by babysit-pr: gate passed, judge <label>` and exits 0.
+      `🤖 Merged by babysit-pr: risk <n>/10 (auto up to <limit>), gate passed, judge <label>` and
+      exits 0. <n> is the higher of the gate's risk and --judge-risk.
       --approved-sha is the owner's `@babysitter merge <sha>` approval (instead of --judge): it
       needs an owner comment `@babysitter merge <sha>` for it (else nothing merges and it hands
       off with "merge approval must name a commit: @babysitter merge <sha>"), and is honoured only
@@ -44,7 +45,7 @@ door: two-way
 blast_radius: isolated
 touches: [logic, tests]
 rollback: revert
-verdict: auto
+risk: 1
 reasons:
   - "small and reversible"
 ```
@@ -82,10 +83,10 @@ def world(tmp_path, head="a1b2c3d", commits=None, body=BLOCK, policy=None, appro
     green = [{"name": "ci", "status": "completed", "conclusion": "success",
               "created_at": iso(T), "started_at": iso(T)}]
     st.update(head_sha=head, title="feat: parse empty rows", body=body,  # the live PR body is the gated one
-              commits=commits or [commit(head)], **{"check_runs": {head: green}, **state})
+              commits=commits or [commit(head)], **{"check_runs": {head: green}, "private": True, **state})
     w.state.write_text(json.dumps(st))
     (tmp_path / "body.md").write_text(body)
-    checkout(w, [c["sha"] for c in st["commits"]], policy or {"agentMerge": True})
+    checkout(w, [c["sha"] for c in st["commits"]], policy or {"maxAutoRisk": 5})
     if policy:  # the same policy also feeds `--policy`, the merge method
         w.policy_file = tmp_path / "policy.json"
         w.policy_file.write_text(json.dumps(policy))
@@ -117,14 +118,14 @@ def handoffs(w):
 
 def test_stale_gate_sha_fails_and_nothing_merges(tmp_path):
     w = world(tmp_path, head="f0e1d2c", commits=[commit("a1b2c3d"), commit("f0e1d2c", author="alice")])
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert "gate again" in p.output
     assert w.github().get("merges", []) == []
     assert not any("Merged by babysit-pr" in b for b in comments(w))
 
 
-@pytest.mark.parametrize("extra", [("--judge", "agree"), ("--approved-sha", "a1b2c3d")])
+@pytest.mark.parametrize("extra", [("--judge", "agree", "--judge-risk", "1"), ("--approved-sha", "a1b2c3d")])
 def test_head_with_no_checks_hands_off_and_nothing_merges(tmp_path, extra):
     w = world(tmp_path, check_runs={}, approvals=("a1b2c3d",))
     p = merge(w, tmp_path, "a1b2c3d", *extra)
@@ -136,18 +137,18 @@ def test_head_with_no_checks_hands_off_and_nothing_merges(tmp_path, extra):
 
 def test_default_method_is_rebase_pinned_to_the_gated_sha_and_commented(tmp_path):
     w = world(tmp_path)
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode == 0, p.output
     [m] = w.github()["merges"]
     assert (m["number"], m["method"], m["match"], m["auto"]) == ("58", "rebase", "a1b2c3d", False)
-    assert "🤖 Merged by babysit-pr: gate passed, judge agree" in comments(w)
+    assert "🤖 Merged by babysit-pr: risk 4/10 (auto up to 5), gate passed, judge agree" in comments(w)
 
 
 def test_same_model_judge_shows_in_the_merge_comment(tmp_path):
     w = world(tmp_path)
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "same-model agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "same-model agree", "--judge-risk", "1")
     assert p.returncode == 0, p.output
-    assert "🤖 Merged by babysit-pr: gate passed, judge same-model agree" in comments(w)
+    assert "🤖 Merged by babysit-pr: risk 4/10 (auto up to 5), gate passed, judge same-model agree" in comments(w)
 
 
 def test_merge_method_is_merge_when_the_branch_has_a_merge_commit(tmp_path):
@@ -155,7 +156,7 @@ def test_merge_method_is_merge_when_the_branch_has_a_merge_commit(tmp_path):
     p = cli(w, "merge-method", "--repo", "jesdi/demo", "--pr", "58")
     assert p.returncode == 0, p.output
     assert json.loads(p.stdout) == {"method": "merge"}
-    assert merge(w, tmp_path, "a1b2c3d", "--judge", "agree").returncode == 0
+    assert merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1").returncode == 0
     assert w.github()["merges"][0]["method"] == "merge"
 
 
@@ -166,8 +167,8 @@ def test_merge_method_is_rebase_for_a_linear_branch(tmp_path):
 
 
 def test_squash_policy_keeps_the_title_summary_and_block_digest(tmp_path):
-    w = world(tmp_path, policy={"agentMerge": True, "mergeMethod": "squash"})
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    w = world(tmp_path, policy={"maxAutoRisk": 5, "mergeMethod": "squash"})
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode == 0, p.output
     [m] = w.github()["merges"]
     assert m["method"] == "squash"
@@ -180,7 +181,7 @@ def test_squash_policy_keeps_the_title_summary_and_block_digest(tmp_path):
 def test_required_approval_failure_hands_off(tmp_path):
     w = world(tmp_path, merge_error="At least 1 approving review is required by reviewers "
                                     "with write access.")
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     [h] = handoffs(w)
     assert h.startswith("## 🧑 Needs human: merge blocked: approval required")
@@ -249,9 +250,9 @@ def test_approval_voided_by_a_rebase_hands_off(tmp_path):
 
 
 @pytest.mark.parametrize("method", [None, "squash", "merge", "rebase"])
-@pytest.mark.parametrize("extra", [("--judge", "agree"), ("--approved-sha", "a1b2c3d")])
+@pytest.mark.parametrize("extra", [("--judge", "agree", "--judge-risk", "1"), ("--approved-sha", "a1b2c3d")])
 def test_auto_merge_is_never_requested(tmp_path, extra, method):
-    policy = {"agentMerge": True, "mergeMethod": method} if method else None
+    policy = {"maxAutoRisk": 5, "mergeMethod": method} if method else None
     w = world(tmp_path, policy=policy, approvals=("a1b2c3d",))
     assert merge(w, tmp_path, "a1b2c3d", *extra).returncode == 0
     [m] = w.github()["merges"]
