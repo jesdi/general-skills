@@ -289,3 +289,14 @@ def test_stacked_base_uses_origin_parent_never_main(tmp_path):
     out = gate(tmp_path, repo, sha, block(), base="feat/parent")
     assert out["categories"] == ["docs"]
     assert out["verdict"] == "auto"
+
+
+def test_a_caller_that_predates_public_gets_the_public_cap(tmp_path):
+    """An older babysit-pr calls gate(body, base, head): it must get the strict cap, not crash."""
+    repo, sha = make_repo(tmp_path, policy(maxAutoRisk=8), {"src/app.py": "x\n"})
+    code = (f"import sys, json; sys.path.insert(0, {str(SCRIPT.parent)!r}); import merge_risk;"
+            f"print(json.dumps(merge_risk.gate({block(touches='logic')!r}, 'main', {sha!r})))")
+    out = json.loads(subprocess.run([sys.executable, "-c", code], cwd=repo, env=ENV, text=True,
+                                    capture_output=True, check=True).stdout)
+    assert out["maxAutoRisk"] == 3
+    assert out["verdict"] == "human"

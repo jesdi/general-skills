@@ -314,7 +314,8 @@ def is_public_repo():
     return not (p.returncode == 0 and p.stdout.strip() == "true")
 
 
-def gate(body, base, head, public):
+def gate(body, base, head, public=True):
+    """The merge verdict. `public` defaults to True so a caller that predates it gets the strict cap."""
     block = parse(body)
     base, policy, reasons = base_policy(base)
     stats = diff_stats(classify_diff(base, head, policy)[1])
