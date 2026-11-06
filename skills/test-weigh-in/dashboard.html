@@ -6,11 +6,16 @@ body{font:14px system-ui,sans-serif;margin:24px;color:#222;overflow-wrap:break-w
 .gauge{grid-row:span 3;display:grid;grid-template-rows:subgrid;row-gap:4px;align-content:start;margin-bottom:12px;border:2px solid #ccc;border-radius:8px;padding:12px;background:#fff;text-align:center;cursor:pointer;font:inherit}
 .gauge>*{align-self:start}
 .gauge-status{font-size:12px;line-height:1.3}
+/* with a red suite, each short reason wraps inside only when it alone is wider than the card, so a line never splits
+   "172 tests not green"; a lone "0 of 4 metrics measured" flows as text */
+.gauge-status.red>span{display:inline-block}
 /* one row of tabs on a rule; it scrolls sideways when the row is wider than the screen */
 .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #ccc;scrollbar-width:thin}
-.tabs>button{flex:none;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
+.tabs>button{flex:none;display:inline-flex;flex-direction:column;align-items:center;font:inherit;padding:4px 12px;border:1px solid #ccc;border-bottom:3px solid transparent;border-radius:6px 6px 0 0;background:#f3f4f6;color:#222;cursor:pointer;white-space:nowrap}
 .tabs>button[aria-pressed=true]{background:#2563eb;color:#fff;border-bottom-color:#1e40af;font-weight:600}
-@media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 7px}}
+/* every tab is as wide as its bold label, so selecting one moves no other; hidden, so screen readers skip it */
+.tabs>button::after{content:attr(data-label);content:attr(data-label)/"";font-weight:600;height:0;overflow:hidden;visibility:hidden;pointer-events:none}
+@media (max-width:600px){.tabs{gap:2px}.tabs>button{padding:4px 6px}}
 button:focus-visible{outline:3px solid #f59e0b;outline-offset:2px}
 #details table{width:100%}
 #details tr+tr{border-top:1px solid #e5e7eb}
@@ -29,7 +34,15 @@ table{border-collapse:collapse}td,th{padding:4px 12px;text-align:left}
 @media (min-width:601px){#details th:nth-child(-n+3),#details td:nth-child(-n+3):not([colspan]){width:1%;white-space:nowrap}}
 td:first-child,th:first-child{padding-left:0}
 @media (max-width:600px){td,th{padding:4px 6px}td:last-child,th:last-child{padding-right:0}#details td:first-child{min-width:7em}}
-input[type=search]{font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
+input[type=search]{scroll-margin-top:16px;font:inherit;padding:6px 10px;border:1px solid #ccc;border-radius:6px;width:100%;max-width:24rem;box-sizing:border-box}
+/* the pair count and a pager above the list, the same pager again below it; the pager keeps to the right */
+.ov-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin:12px 0}
+.ov-bar>p{margin:0}
+.pager{display:flex;align-items:center;gap:8px;margin-left:auto}
+.pager>span{white-space:nowrap;font-variant-numeric:tabular-nums}
+.pager>button{font:inherit;min-height:32px;padding:0 12px;border:1px solid #ccc;border-radius:6px;background:#f3f4f6;color:#222;cursor:pointer}
+.pager>button:disabled{color:#9ca3af;cursor:default}
+@media (max-width:600px){.pager>button{min-height:44px;padding:0 14px}}
 .pair{display:grid;grid-template-columns:8em minmax(0,1fr);gap:4px 12px;padding:8px 0;border-bottom:1px solid #e5e7eb}
 .pair>strong{grid-row:span 3}
 .pair hr{width:100%;border:0;border-top:1px dashed #d1d5db;margin:0}
@@ -140,13 +153,34 @@ function drawMap(parent) {
   const pickedName = el('p', '', side); pickedName.setAttribute('data-testid', 'map-picked');
   const list = el('div', '', side); list.setAttribute('data-testid', 'map-similar');
   let lit = [];
+  // the selected dot's own mark, unlike the blue rings of its similar dots: the dot again, then an ink ring on a white
+  // rim 5 px out from it (at least 18 px across on any screen), all drawn after every dot so no neighbour covers it;
+  // clicks pass through to the dots beneath
+  const mark = document.createElementNS(NS, 'g');
+  mark.setAttribute('data-testid', 'map-selected'); mark.setAttribute('pointer-events', 'none'); mark.setAttribute('display', 'none');
+  const copy = mark.appendChild(document.createElementNS(NS, 'circle'));
+  const rings = [['#fff', 5], ['#222', 2.5]].map(([stroke, width]) => {
+    const c = document.createElementNS(NS, 'circle');
+    c.setAttribute('fill', 'none'); c.setAttribute('stroke', stroke); c.setAttribute('stroke-width', width);
+    c.setAttribute('vector-effect', 'non-scaling-stroke');
+    return mark.appendChild(c);
+  });
+  svg.appendChild(mark);
   // selection touches only the previous and the new highlights and the neighbour list, never the placement
   const pick = (d) => {
     picked = d;
     lit.forEach((c) => { c.setAttribute('stroke', 'none'); delete c.dataset.highlighted; });
     const sims = d.similar.slice().sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    lit = [d.test, ...sims.map(([n]) => n)].map((n) => circles.get(n)).filter(Boolean);
+    // only the similar dots get a blue ring; the selected one shows through its own mark below
+    lit = sims.map(([n]) => circles.get(n)).filter(Boolean);
     lit.forEach((c) => { c.setAttribute('stroke', '#2563eb'); c.dataset.highlighted = 'true'; });
+    // the drawing's pixels per unit; 1 where nothing is laid out
+    const dot = circles.get(d.test), scale = svg.getBoundingClientRect().width / w || 1;
+    const r = Number(dot.getAttribute('r')), ring = Math.max(r + 5 / scale, 9 / scale);
+    [copy, ...rings].forEach((c) => { c.setAttribute('cx', dot.getAttribute('cx')); c.setAttribute('cy', dot.getAttribute('cy')); });
+    copy.setAttribute('r', r); copy.setAttribute('fill', dot.getAttribute('fill'));
+    rings.forEach((c) => c.setAttribute('r', ring));
+    mark.removeAttribute('display');
     hint.hidden = true;
     pickedName.replaceChildren();
     el('strong', 'Selected', pickedName); el('br', '', pickedName); ident(el('span', d.test, pickedName));
@@ -176,15 +210,35 @@ function drawOverlaps(parent) {
   input.type = 'search'; input.placeholder = 'Search test identities'; input.value = ovQuery; input.setAttribute('aria-label', 'Search overlapping tests');
   input.setAttribute('data-testid', 'overlap-search');
   box.appendChild(input);
-  const out = el('div', '', box);
+  const bar = el('div', '', box); bar.className = 'ov-bar';
+  const count = el('p', '', bar); count.setAttribute('data-testid', 'overlap-count');
+  const empty = el('p', 'No pair matches this search.', box); empty.setAttribute('data-testid', 'overlap-empty');
+  const list = el('div', '', box);
+  const foot = el('div', '', box); foot.className = 'ov-bar';
+  // the same pager above and below the list; after a page turn focus is on the top one, so paging from the bottom
+  // brings the reader back to the start of the new page instead of leaving them 100 rows down
+  const pager = (parent, label, suffix) => {
+    const nav = el('nav', '', parent); nav.className = 'pager'; nav.setAttribute('aria-label', label);
+    const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id + suffix); b.onclick = () => turn(d, suffix !== ''); return b; };
+    // the counter before the buttons, so its width changing (page 9 to 10) never moves a button
+    const at = el('span', '', nav); at.setAttribute('data-testid', 'overlap-page' + suffix);
+    return { at, prev: step('Previous', -1, 'overlap-prev'), next: step('Next', 1, 'overlap-next') };
+  };
+  const top = pager(bar, 'Pages of pairs', ''), bottom = pager(foot, 'Pages of pairs, end of list', '-bottom');
+  top.at.setAttribute('aria-live', 'polite');
+  const turn = (d, fromBottom) => {
+    ovPage += d; draw();
+    if (fromBottom) input.scrollIntoView?.({ block: 'start' }); // jsdom has no scrollIntoView
+    const [ahead, back] = d < 0 ? [top.prev, top.next] : [top.next, top.prev];
+    (ahead.disabled ? back : ahead).focus({ preventScroll: true });
+  };
   const draw = () => {
-    out.replaceChildren();
     const q = ovQuery.toLowerCase();
     const hits = q ? ranked.filter((o) => o.tests.some((t) => t.toLowerCase().includes(q))) : ranked;
     const pages = Math.max(1, Math.ceil(hits.length / PAGE));
     ovPage = Math.min(ovPage, pages - 1);
-    el('p', hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs'), out).setAttribute('data-testid', 'overlap-count');
-    if (!hits.length) el('p', 'No pair matches this search.', out).setAttribute('data-testid', 'overlap-empty');
+    count.textContent = hits.length.toLocaleString('en-US') + (hits.length === 1 ? ' pair' : ' pairs');
+    if (hits.length) empty.remove(); else bar.after(empty);
     // a page is built off the page and attached once: one insertion instead of hundreds
     const rows = document.createDocumentFragment();
     hits.slice(ovPage * PAGE, (ovPage + 1) * PAGE).forEach((o) => {
@@ -194,12 +248,8 @@ function drawOverlaps(parent) {
       // the two tests on their own lines, a dashed rule between them
       o.tests.forEach((t, k) => { if (k) el('hr', '', row); testLine('div', t, row).setAttribute('data-testid', 'overlap-test'); });
     });
-    out.appendChild(rows);
-    const nav = el('p', '', out);
-    const step = (text, d, id) => { const b = el('button', text, nav); b.setAttribute('data-testid', id); b.disabled = ovPage + d < 0 || ovPage + d >= pages; b.onclick = () => { ovPage += d; draw(); }; };
-    step('Previous', -1, 'overlap-prev');
-    el('span', ' Page ' + (ovPage + 1) + ' of ' + pages + ' ', nav);
-    step('Next', 1, 'overlap-next');
+    list.replaceChildren(rows);
+    [top, bottom].forEach((p) => { p.at.textContent = 'Page ' + (ovPage + 1) + ' of ' + pages; p.prev.disabled = ovPage === 0; p.next.disabled = ovPage === pages - 1; });
   };
   input.oninput = () => { ovQuery = input.value; ovPage = 0; draw(); };
   draw();
@@ -218,18 +268,21 @@ function render() {
     g.setAttribute('aria-pressed', i === selected);
     el('span', p.name, g).setAttribute('data-testid', 'gauge-title');
     el('span', p.score === null ? '–' : shown(p.score), g).className = 'score';
-    const status = el('span', p.partial ? 'partial: ' + p.metrics.length + ' of ' + p.total + ' metrics measured' : 'all ' + p.total + ' metrics measured', g);
-    status.className = 'gauge-status' + (p.partial ? ' flag' : ''); status.setAttribute('data-testid', 'gauge-status');
+    const { head, reasons } = p.status;
+    const status = el('span', head, g);
+    reasons.forEach((r, k) => { status.append(' '); el('span', r + (k < reasons.length - 1 ? ';' : ''), status); });
+    status.className = 'gauge-status' + (reasons.length ? ' flag' : '') + (p.red_suite ? ' red' : ''); status.setAttribute('data-testid', 'gauge-status');
     g.onclick = () => { selected = i; tab = 'Metrics'; picked = null; render(); };
   });
   const p = data.pillars[selected];
   el('h2', p.name, details);
   const names = ['Metrics', 'Worst tests', 'Smells', ...(p.key === 'economy' ? ['Overlaps', 'Map'] : [])];
   const tabs = el('div', '', details); tabs.className = 'tabs';
-  names.forEach((n) => { const b = el('button', n, tabs); b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
+  names.forEach((n) => { const b = el('button', n, tabs); b.dataset.label = n; b.setAttribute('aria-pressed', n === tab); b.onclick = () => { tab = n; picked = null; render(); }; });
   el('h3', tab, details);
   if (tab === 'Metrics') {
     if (!p.metrics.length) el('p', 'No metrics were measured for this pillar.', details);
+    if (p.status.note) el('p', p.status.note, details).setAttribute('data-testid', 'partial-reason');
     const t = el('table', '', details);
     const head = el('tr', '', t);
     ['Metric', 'Value', 'Score', 'Anchors'].forEach((h) => el('th', h, head));

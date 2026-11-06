@@ -1,6 +1,7 @@
 // Ticket tw/s4-coverage/07: the dashboard of a suite that is not green, loaded in jsdom from the file weigh.py wrote.
 // Page contract on top of test-weigh-in-dashboard.test.ts: [data-testid=banner] names the number of failing tests;
-// the details of some gauge or tab list each skipped test by node id with the word "skipped".
+// the details of some gauge or tab list each skipped test by node id with the word "skipped"; each partial
+// [data-testid=gauge-status] and the Metrics tab of its pillar say why it is partial.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -69,5 +70,34 @@ describe('dashboard.html of a suite that is not green', () => {
     }
     expect(text).toMatch(/skipped/i);
     for (const name of SKIPPED) expect(text).toContain(name);
+  });
+
+  // Regression, Refactoring and Economy use a value metric, so a suite that is not green leaves them partial (req 14)
+  const statuses = (doc: Document) =>
+    [...doc.querySelectorAll('[data-testid=gauge-status]')].map((s) => s.textContent ?? '');
+
+  it.each([
+    ['red_suite', '3 tests failing'],
+    ['skipped_suite', '4 tests skipped'],
+  ])('says on each value pillar of the %s that it is partial because %s', async (kind, reason) => {
+    const doc = await open(pages[kind]);
+    const shown = statuses(doc);
+    for (const i of [0, 1, 4]) expect(shown[i]).toMatch(new RegExp(`^partial: .*${reason}$`));
+    for (const i of [2, 3]) expect(shown[i]).not.toMatch(/partial|failing|skipped/);
+    // a count of measured metrics alone never explains a pillar whose metrics were all measured
+    for (const s of shown) expect(s).not.toMatch(/partial: (\d+) of \1 metrics measured$/);
+  });
+
+  it('names both reasons when a pillar is missing metrics in a red suite', async () => {
+    const regression = statuses(await open(pages.red_suite))[0];
+    expect(regression).toMatch(/^partial: \d of 4 measured; 3 tests failing$/);
+  });
+
+  it('explains in the Metrics tab of a value pillar that the failing tests are left out', async () => {
+    const doc = await open(pages.red_suite);
+    doc.querySelectorAll<HTMLElement>('[data-testid=gauge]')[1].click();
+    expect(doc.querySelector('[data-testid=partial-reason]')?.textContent).toMatch(/3 tests failing/);
+    doc.querySelectorAll<HTMLElement>('[data-testid=gauge]')[2].click();
+    expect(doc.querySelector('[data-testid=partial-reason]')).toBeNull();
   });
 });

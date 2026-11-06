@@ -175,3 +175,50 @@ describe('offline (R11)', () => {
     expect(requests).toEqual([]);
   });
 });
+
+// A pager sits above the list as well as below it, so 100 tall rows never stand between the reader and the next page.
+describe('pager above and below the list', () => {
+  const PAGER = ['overlap-prev', 'overlap-page', 'overlap-next'];
+  const before = (a: Node, b: Node) => (a.compareDocumentPosition(b) & 4) !== 0; // b follows a
+  const button = (doc: Document, id: string) => q(doc, id) as HTMLButtonElement;
+  const state = (doc: Document, suffix: string) => ({
+    page: q(doc, 'overlap-page' + suffix)?.textContent?.trim(),
+    prev: button(doc, 'overlap-prev' + suffix).disabled,
+    next: button(doc, 'overlap-next' + suffix).disabled,
+  });
+
+  it('puts one pager before the first pair and one after the last, each control with its own test id', async () => {
+    const { doc } = await open(fixture.forward.html);
+    const all = rows(doc);
+    for (const id of PAGER) {
+      expect(doc.querySelectorAll(`[data-testid=${id}]`), id).toHaveLength(1);
+      expect(doc.querySelectorAll(`[data-testid=${id}-bottom]`), id + '-bottom').toHaveLength(1);
+      expect(before(q(doc, id)!, all[0]), `${id} above the list`).toBe(true);
+      expect(before(all[all.length - 1], q(doc, id + '-bottom')!), `${id}-bottom below the list`).toBe(true);
+    }
+    const navs = [...doc.querySelectorAll('nav')].filter((n) => n.querySelector('[data-testid^=overlap-]'));
+    expect(navs).toHaveLength(2);
+    expect(new Set(navs.map((n) => n.getAttribute('aria-label'))).size, 'two distinct pager labels').toBe(2);
+  });
+
+  it('keeps both pagers in step: counter, and disabled at the first and last page', async () => {
+    const { doc } = await open(fixture.forward.html);
+    expect(state(doc, '')).toEqual({ page: 'Page 1 of 68', prev: true, next: false });
+    expect(state(doc, '-bottom')).toEqual(state(doc, ''));
+    button(doc, 'overlap-next-bottom').click();
+    expect(state(doc, '')).toEqual({ page: 'Page 2 of 68', prev: false, next: false });
+    expect(state(doc, '-bottom')).toEqual(state(doc, ''));
+    for (let page = 2; page < 68; page++) button(doc, 'overlap-next').click();
+    for (const suffix of ['', '-bottom']) expect(state(doc, suffix), `pager${suffix}`).toEqual({ page: 'Page 68 of 68', prev: false, next: true });
+  });
+
+  it('sends focus to the top pager after paging from the bottom, and keeps it on a pager that stays usable', async () => {
+    const { doc } = await open(fixture.forward.html);
+    button(doc, 'overlap-next-bottom').focus();
+    button(doc, 'overlap-next-bottom').click();
+    expect(doc.activeElement, 'bottom Next lands on top Next').toBe(button(doc, 'overlap-next'));
+    button(doc, 'overlap-prev').focus();
+    button(doc, 'overlap-prev').click(); // back on page 1: Previous is now disabled
+    expect(doc.activeElement, 'a pager button that became disabled hands focus to its sibling').toBe(button(doc, 'overlap-next'));
+  });
+});

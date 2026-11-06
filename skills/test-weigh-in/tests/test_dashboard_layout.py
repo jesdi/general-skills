@@ -20,16 +20,26 @@ SPEC = HERE.parents[2] / "specs" / "test-weigh-in-dashboard-polish"
 TABS = ["Metrics", "Overlaps", "Map"]
 
 
-@pytest.fixture(scope="module")
-def report(tmp_path_factory):
-    out = tmp_path_factory.mktemp("layout04")
-    built = subprocess.run([sys.executable, str(HERE / "layout_page.py"), str(out)], capture_output=True, text=True, timeout=600)
+def drive(out, page=(), driver=()):
+    """Build layout_page.py with `page` args into `out` and measure it with browser_driver.py and `driver` args."""
+    built = subprocess.run([sys.executable, str(HERE / "layout_page.py"), str(out), *page], capture_output=True, text=True, timeout=600)
     assert built.returncode == 0, built.stderr
     html = Path(built.stdout.strip())
-    drove = subprocess.run([uv(), "run", "--with", "playwright", "python", str(HERE / "browser_driver.py"), str(html)],
+    drove = subprocess.run([uv(), "run", "--with", "playwright", "python", str(HERE / "browser_driver.py"), str(html), *driver],
                            capture_output=True, text=True, timeout=600)
     assert drove.returncode == 0, drove.stderr[-3000:]
     return {"bytes": html.stat().st_size, **json.loads(drove.stdout)}
+
+
+@pytest.fixture(scope="module")
+def report(tmp_path_factory):
+    return drive(tmp_path_factory.mktemp("layout04"))
+
+
+@pytest.fixture(scope="module")
+def red_report(tmp_path_factory):
+    """The same suite red: failing and skipped tests, Regression and Refactoring partial for both reasons."""
+    return drive(tmp_path_factory.mktemp("layout04red"), page=["red"], driver=["--gauges"])
 
 
 def only_active(tabs, label):
@@ -49,14 +59,22 @@ def test_the_active_tab_follows_selection_and_keyboard_focus_shows(report):
 
 
 @pytest.mark.parametrize("view", ["desktop", "narrow"])
-def test_gauges_align_and_partial_status_stays_readable(report, view):
-    gauges = report[view]["gauges"]
+def test_selecting_a_tab_moves_no_tab(report, view):
+    steps = report["tab_boxes"][view]["steps"]
+    assert len(steps) == 5, f"Economy shows every tab: {list(steps)}"
+    first = next(iter(steps.values()))
+    for label, boxes in steps.items():
+        assert boxes == first, f"selecting {label} at {view} moves the tabs: {boxes} vs {first}"
+
+
+def gauges_readable(r, view, max_lines=2):
+    gauges = r[view]["gauges"]
     assert len(gauges) == 5
     for g in gauges:
         assert g["title"] and g["status"], "every gauge has a gauge-title and a gauge-status, a fully measured one too"
         assert g["status"]["text"], "a fully measured pillar still states its measurement status"
         assert not g["title"]["clipped"] and not g["status"]["clipped"]
-        assert g["status"]["font"] >= 11 and g["status"]["lines"] <= 2, f"partial status unreadable: {g['status']}"
+        assert g["status"]["font"] >= 11 and g["status"]["lines"] <= max_lines, f"partial status unreadable: {g['status']}"
     rows = {}
     for g in gauges:
         rows.setdefault(g["card"]["top"], []).append(g)
@@ -65,7 +83,30 @@ def test_gauges_align_and_partial_status_stays_readable(report, view):
             assert len({g[part]["top"] for g in row}) == 1, f"{part} not aligned across a row at {view}: {[g[part]['top'] for g in row]}"
     refactoring = next(g for g in gauges if "refactoring" in g["title"]["text"].lower())
     assert "0 of 4" in refactoring["status"]["text"]
-    assert report[view]["overview"]["scroll_width"] <= report[view]["overview"]["viewport"], "the page overflows sideways"
+    assert r[view]["overview"]["scroll_width"] <= r[view]["overview"]["viewport"], "the page overflows sideways"
+    return refactoring
+
+
+@pytest.mark.parametrize("view", ["desktop", "narrow"])
+def test_gauges_align_and_partial_status_stays_readable(report, view):
+    gauges_readable(report, view)
+
+
+@pytest.mark.parametrize("view", ["desktop", "narrow"])
+def test_a_red_suite_status_naming_both_reasons_stays_readable(red_report, view):
+    # 3 lines at most: at 390 px "partial: 2 of 4 measured;" is a pixel or two wider than the card, so the head, the
+    # metric count and the tests left out take a line each; no reason may break across lines
+    refactoring = gauges_readable(red_report, view, max_lines=3)
+    assert re.fullmatch(r"partial: 0 of 4 measured; \d+ tests not green", refactoring["status"]["text"]), refactoring["status"]
+    # a lone "0 of 3 metrics measured" of a pillar the red suite leaves whole may flow as text
+    for g in (g for g in red_report[view]["gauges"] if "green" in g["status"]["text"]):
+        assert all(n == 1 for n in g["reasons"]), f"a reason breaks across lines at {view}: {g['status']['text']} {g['reasons']}"
+
+
+@pytest.mark.parametrize("view, least", [("desktop", 32), ("narrow", 44)])
+def test_the_overlap_pager_buttons_are_tall_enough_to_tap(report, view, least):
+    for button, height in report[view]["pager_heights"].items():
+        assert height >= least, f"{button} is {height} px tall at {view}, under {least}"
 
 
 @pytest.mark.parametrize("view", ["desktop", "narrow"])

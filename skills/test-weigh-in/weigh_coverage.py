@@ -1,6 +1,7 @@
 """Read `coverage json --show-contexts` into per-test coverage, and derive unique coverage and overlaps."""
 import os
 import re
+from collections import Counter
 from itertools import combinations
 
 from weigh_inventory import is_test
@@ -60,9 +61,28 @@ def branch_percent(report):
     return 100 * totals["covered_branches"] / totals["num_branches"]
 
 
+# Why a test gives no value, in the order the report names them
+NO_VALUE = ("failing", "skipped", "flaky")
+
+
+def value_kind(test):
+    """"valued" when a test passed in the plain run and the same under coverage, else why it gives no value: "failing"
+    (flaky or not), "skipped", or "flaky" (passed, then differed under coverage). The one definition of a test's value."""
+    if test["outcome"] == "passed":
+        return "flaky" if test["flaky"] else "valued"
+    return "skipped" if test["outcome"] == "skipped" else "failing"
+
+
 def valued(tests):
-    """The tests that give value: passed in the plain run and the same under coverage, so not flaky."""
-    return {node: test for node, test in tests.items() if test["outcome"] == "passed" and not test["flaky"]}
+    """The tests that give value."""
+    return {node: test for node, test in tests.items() if value_kind(test) == "valued"}
+
+
+def left_out(tests):
+    """Each kind of test that gives no value with its count, e.g. [(3, "failing"), (4, "skipped")]; empty exactly when
+    every test gives value, so a red suite always has a kind to name."""
+    counts = Counter(value_kind(t) for t in tests.values())
+    return [(counts[kind], kind) for kind in NO_VALUE if counts[kind]]
 
 
 def _items(test):

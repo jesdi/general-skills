@@ -1,7 +1,7 @@
 // Ticket tw/s5-smells/10: the partial gauges and the 1-99 clamp, loaded in jsdom from the file weigh.py wrote.
 // Page contract on top of test-weigh-in-dashboard.test.ts: each [data-testid=gauge] holds its displayed score in
 // an element of class "score" and says "partial" in its text when the pillar is partial.
-// Snapshot contract: pillars {<key>: {score, partial}} with unrounded scores; metrics {<id>: {value, score}}.
+// Snapshot contract: pillars {<key>: {score, partial, red_suite}} with unrounded scores; metrics {<id>: {value, score}}.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

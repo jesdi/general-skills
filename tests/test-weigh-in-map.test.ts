@@ -84,7 +84,11 @@ describe('Map tab', () => {
     dots().find((d) => d.dataset.test === INTENT)!.dispatchEvent(new doc.defaultView!.MouseEvent('click', { bubbles: true }));
 
     const highlighted = dots().filter((d) => d.dataset.highlighted === 'true').map((d) => d.dataset.test);
-    expect(highlighted.filter((n) => n !== INTENT).sort()).toEqual([...TWINS, EDGE_AT].sort());
+    // the selected dot carries its own mark, not the blue ring of its similar dots
+    expect(highlighted.sort()).toEqual([...TWINS, EDGE_AT].sort());
+    const mark = doc.querySelector('[data-testid=map-selected]')!;
+    const at = (e: Element) => [e.getAttribute('cx'), e.getAttribute('cy')];
+    expect(at(mark.querySelector('circle')!)).toEqual(at(dots().find((d) => d.dataset.test === INTENT)!));
     for (const other of [...OTHERS, EDGE_BELOW]) expect(highlighted).not.toContain(other);
     const rows = [...doc.querySelectorAll('[data-testid=map-similar-item]')].map((r) => r.textContent ?? '');
     expect(rows).toHaveLength(4);

@@ -6,7 +6,7 @@ Interface the tests pin (the spec leaves the TOML keys and the snapshot JSON key
                optional partial_weight, target, bad, optional log = true. Percentages are 0-100,
                durations are seconds. Pillar keys: regression, refactoring, feedback,
                maintainability, economy.
-  snapshot:    rules {version, sha256}; metrics {<id>: {value, score}}; pillars {<key>: {score, partial}}.
+  snapshot:    rules {version, sha256}; metrics {<id>: {value, score}}; pillars {<key>: {score, partial, red_suite}}.
                Scores are unrounded floats; only the dashboard rounds and clamps.
 """
 import hashlib
