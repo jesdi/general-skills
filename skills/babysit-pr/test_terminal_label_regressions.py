@@ -87,7 +87,7 @@ def test_completed_successor_merge_clears_stale_handoff(tmp_path, finish_at):
         st["s2merged"] = True
         state.write_text(json.dumps(st))
         subprocess.run([sys.executable, SCRIPT, "merge", "--repo", "jesdi/demo", "--pr", "58",
-                        "--sha", "a1b2c3d", "--body", BODY, "--judge", "agree", "--session", "s2"],
+                        "--sha", "a1b2c3d", "--body", BODY, "--judge", "agree", "--judge-risk", "1", "--session", "s2"],
                        check=True, stdout=subprocess.DEVNULL)
         st = json.loads(state.read_text())
 '''.replace("TRIGGER", trigger)

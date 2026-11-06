@@ -1,6 +1,6 @@
 """Acceptance tests for `merge_risk.py parse|validate`, through the command line only.
 
-`parse` prints one JSON object: door, blast_radius, touches, rollback, verdict,
+`parse` prints one JSON object: door, blast_radius, touches, rollback, risk,
 reasons and errors (a list of messages, empty when the block is valid).
 """
 import json
@@ -14,7 +14,7 @@ VALID = '''door: two-way            # one-way | two-way
 blast_radius: isolated
 touches: [docs, tests]
 rollback: revert
-verdict: auto
+risk: 1
 reasons:
   - "Only skill prose and its tests change"
 '''

@@ -51,7 +51,7 @@ if fire:
                        check=True, stdout=subprocess.DEVNULL)
     if kind == "successor":
         subprocess.run([*base, "merge", *where, "--sha", "a1b2c3d", "--body", {body!r},
-                        "--judge", "agree", "--session", "s2"], check=True, stdout=subprocess.DEVNULL)
+                        "--judge", "agree", "--judge-risk", "1", "--session", "s2"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([*base, "lease", "release", *where, "--session", "s2"], stdout=subprocess.DEVNULL)
     st = json.loads(state.read_text())
     st["taken"] = True

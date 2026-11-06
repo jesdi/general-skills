@@ -9,15 +9,17 @@ import re
 import subprocess
 import sys
 
-from merge_policy import CATEGORIES, DEFAULT_PATHS, POLICY_FILE, git, load_policy  # noqa: F401
+from merge_policy import (CATEGORIES, CATEGORY_RISK, DEFAULT_PATHS, POLICY_FILE,  # noqa: F401
+                          PUBLIC_MAX_RISK, git, load_policy)
 
 ENUMS = {
     "door": ["one-way", "two-way"],
     "blast_radius": ["isolated", "module", "service", "consumers"],
     "rollback": ["revert", "revert+redeploy", "data-fix", "impossible"],
-    "verdict": ["auto", "human"],
 }
-KEYS = [*ENUMS, "touches", "reasons"]
+KEYS = [*ENUMS, "risk", "touches", "reasons"]
+BLAST_RISK = {"isolated": 0, "module": 1, "service": 2, "consumers": 3}
+ONE_WAY_ROLLBACKS = ("data-fix", "impossible")
 FENCE = re.compile(r"^```merge-risk v1[ \t]*\n(.*?)^```[ \t]*$", re.S | re.M)
 
 
@@ -149,6 +151,17 @@ class Block:
                         if c and c not in CATEGORIES]
         if "reasons" in fields and not fields["reasons"]:
             self.errors.append("reasons must have at least one item")
+        self.read_risk()
+
+    def read_risk(self):
+        """Turn `risk` into an int from 1 to 10, or record why it is not one."""
+        risk = self.fields.get("risk")
+        if risk is None:
+            return
+        if re.fullmatch(r"[1-9]|10", risk):
+            self.fields["risk"] = int(risk)
+        else:
+            self.errors.append(f"risk: {risk!r} is not a whole number from 1 to 10")
 
 
 def parse_block(text):
@@ -254,21 +267,20 @@ def block_reasons(block, cats):
         return ["no merge-risk block"]
     if block["errors"]:
         return [f"invalid block: {e}" for e in block["errors"]]
+    # A one-way change is never merged by an agent, whatever the risk and the policy say.
     reasons = []
     if block["door"] == "one-way":
         reasons.append("door one-way")
-    if block["rollback"] != "revert":
-        reasons.append(f"rollback {block['rollback']}")
+    if block["rollback"] in ONE_WAY_ROLLBACKS:
+        reasons.append(f"rollback {block['rollback']} is one-way")
     return reasons + [f"diff touches {c}, not in touches"
                       for c in sorted(cats - set(block["touches"]))]
 
 
-def diff_reasons(policy, touches, stats):
+def diff_reasons(policy, stats):
     """Reasons from the policy and the diff stats."""
     cats, counted, unknown, policy_changed = stats
-    reasons = [] if policy["agentMerge"] else ["agentMerge is off"]
-    reasons += [f"{c} is always human" for c in sorted(touches | cats)
-                if c in policy["alwaysHuman"]]
+    reasons = []
     if policy_changed:
         reasons.append(f"config: {POLICY_FILE} changed")
     reasons += [f"unknown line count: {p}" for p in unknown]
@@ -277,16 +289,46 @@ def diff_reasons(policy, touches, stats):
     return reasons
 
 
-def gate(body, base, head):
+def risk_floor(policy, cats, block):
+    """The lowest risk the diff can have: its riskiest category, raised by blast radius and rollback.
+
+    The block's own `risk` can raise the score above this floor, never lower it."""
+    risks = {**CATEGORY_RISK, **policy["categoryRisk"]}
+    floor = max((risks[c] for c in cats), default=1) + BLAST_RISK[block["blast_radius"]]
+    floor += block["rollback"] == "revert+redeploy"
+    return min(floor, 10)
+
+
+def risk_limit(policy, public):
+    """The highest risk an agent may merge: the repo's maxAutoRisk, never above 3 when public."""
+    return min(policy["maxAutoRisk"], PUBLIC_MAX_RISK) if public else policy["maxAutoRisk"]
+
+
+def is_public_repo():
+    """Whether the checkout's GitHub repo is public. Unknown counts as public."""
+    try:
+        p = subprocess.run(["gh", "repo", "view", "--json", "isPrivate", "--jq", ".isPrivate"],
+                           text=True, capture_output=True)
+    except OSError:  # no gh
+        return True
+    return not (p.returncode == 0 and p.stdout.strip() == "true")
+
+
+def gate(body, base, head, public):
     block = parse(body)
     base, policy, reasons = base_policy(base)
     stats = diff_stats(classify_diff(base, head, policy)[1])
     cats, counted = stats[0], stats[1]
     reasons += block_reasons(block, cats)
     touches = set(block["touches"]) if not block["errors"] else set()
-    reasons += diff_reasons(policy, touches, stats)
-    return {"verdict": "human" if reasons else "auto", "reasons": reasons,
-            "categories": sorted(cats), "countedLines": counted}
+    reasons += diff_reasons(policy, stats)
+    risk = 10 if block["errors"] else max(risk_floor(policy, cats | touches, block), block["risk"])
+    limit = risk_limit(policy, public)
+    if risk > limit:
+        capped = limit < policy["maxAutoRisk"]
+        reasons.append(f"risk {risk} > max auto risk {limit}" + (" (public repo)" if capped else ""))
+    return {"verdict": "human" if reasons else "auto", "reasons": reasons, "risk": risk,
+            "maxAutoRisk": limit, "categories": sorted(cats), "countedLines": counted}
 
 
 def is_gate_call(argv):
@@ -296,7 +338,7 @@ def is_gate_call(argv):
 def main(argv):
     if is_gate_call(argv):
         with open(argv[3]) as f:
-            print(json.dumps(gate(f.read(), argv[5], argv[7])))
+            print(json.dumps(gate(f.read(), argv[5], argv[7], is_public_repo())))
         return 0
     if len(argv) != 3 or argv[1] not in ("parse", "validate"):
         print(__doc__, file=sys.stderr)

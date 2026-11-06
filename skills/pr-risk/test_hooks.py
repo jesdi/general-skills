@@ -20,7 +20,7 @@ door: two-way
 blast_radius: isolated
 touches: [docs, tests]
 rollback: revert
-verdict: auto
+risk: 1
 reasons:
   - "Only skill prose and its tests change"
 ```
@@ -47,7 +47,7 @@ def make_repo(tmp_path, policy=True):
     git(seed, "push", str(origin), "main")
     git(tmp_path, "clone", str(origin), str(repo))
     if policy:
-        (repo / ".merge-risk.json").write_text('{"agentMerge": true}\n')
+        (repo / ".merge-risk.json").write_text('{"maxAutoRisk": 3}\n')
     return repo
 
 

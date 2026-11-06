@@ -17,24 +17,59 @@ def merged(w):
     return w.github().get("merges", [])
 
 
-def test_agent_merge_off_hands_off_with_the_policy_as_the_reason(tmp_path):
-    w = world(tmp_path, policy={"agentMerge": False})
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+def test_max_auto_risk_0_hands_off_with_the_policy_as_the_reason(tmp_path):
+    w = world(tmp_path, policy={"maxAutoRisk": 0})
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     [h] = handoffs(w)
-    assert "agentMerge" in h.splitlines()[0]
+    assert "max auto risk 0" in h.splitlines()[0]
     assert not any("Merged by babysit-pr" in c["body"] for c in w.github()["comments"])
 
 
 def test_one_way_door_hands_off_although_the_block_says_auto(tmp_path):
-    assert "verdict: auto" in BLOCK
+    assert "risk: 1" in BLOCK
     w = world(tmp_path, body=BLOCK.replace("door: two-way", "door: one-way"))
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     [h] = handoffs(w)
     assert "door one-way" in h.splitlines()[0]
+
+
+def test_judge_risk_above_the_limit_hands_off(tmp_path):
+    w = world(tmp_path)
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "6")
+    assert p.returncode != 0
+    assert merged(w) == []
+    [h] = handoffs(w)
+    assert h.startswith("## 🧑 Needs human: judge risk 6 > max auto risk 5")
+
+
+def test_agree_without_a_judge_risk_hands_off(tmp_path):
+    w = world(tmp_path)
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    assert p.returncode != 0
+    assert merged(w) == []
+    [h] = handoffs(w)
+    assert h.startswith("## 🧑 Needs human: judge risk missing")
+
+
+def test_public_repo_caps_the_limit_at_3(tmp_path):
+    w = world(tmp_path, private=False)  # the policy allows 5; the diff is logic, risk 4
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
+    assert p.returncode != 0
+    assert merged(w) == []
+    [h] = handoffs(w)
+    assert "risk 4 > max auto risk 3 (public repo)" in h.splitlines()[0]
+
+
+def test_owner_approval_merges_a_one_way_door(tmp_path):
+    body = BLOCK.replace("door: two-way", "door: one-way")
+    w = world(tmp_path, head=HEAD, body=body, approvals=(HEAD,))
+    p = merge(w, tmp_path, HEAD, "--approved-sha", HEAD)
+    assert p.returncode == 0, p.output
+    assert len(merged(w)) == 1
 
 
 def test_approved_sha_without_an_owner_comment_approves_nothing(tmp_path):
@@ -48,7 +83,7 @@ def test_approved_sha_without_an_owner_comment_approves_nothing(tmp_path):
 
 def test_owner_comment_with_a_sha_prefix_merges_a_human_verdict_pinned_to_the_head(tmp_path):
     # the policy gives human, so only the owner's comment can merge; the caller passes the full SHA
-    w = world(tmp_path, head=HEAD, policy={"agentMerge": False}, approvals=(HEAD[:7],))
+    w = world(tmp_path, head=HEAD, policy={"maxAutoRisk": 0}, approvals=(HEAD[:7],))
     p = merge(w, tmp_path, HEAD, "--approved-sha", HEAD)
     assert p.returncode == 0, p.output
     [m] = merged(w)
@@ -83,7 +118,7 @@ def test_judge_with_a_trusted_pr_risk_lacking_classify_diff_hands_off(tmp_path):
 def test_merge_with_a_trusted_pr_risk_lacking_classify_diff_hands_off(tmp_path):
     w = world(tmp_path, pr_risk=False)
     old_install(w.home / ".claude" / "skills" / "pr-risk", ["classify_diff"])
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert "AttributeError" not in p.output
     assert merged(w) == []
@@ -93,8 +128,8 @@ def test_merge_with_a_trusted_pr_risk_lacking_classify_diff_hands_off(tmp_path):
 
 def test_gate_reads_the_diff_of_the_sha_it_merges_not_the_checked_out_head(tmp_path):
     # the checkout sits on `work` (= origin/main, an empty diff); only HEAD's own commit adds a counted line
-    w = world(tmp_path, policy={"agentMerge": True, "judgeMaxLines": 0})
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    w = world(tmp_path, policy={"maxAutoRisk": 5, "judgeMaxLines": 0})
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     [h] = handoffs(w)
@@ -111,14 +146,14 @@ def live_body_differs(tmp_path, live, *extra):
 
 
 def test_saved_body_does_not_stand_in_for_a_one_way_live_body(tmp_path):
-    w, p = live_body_differs(tmp_path, BLOCK.replace("door: two-way", "door: one-way"), "--judge", "agree")
+    w, p = live_body_differs(tmp_path, BLOCK.replace("door: two-way", "door: one-way"), "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     assert not any("Merged by babysit-pr" in c["body"] for c in w.github()["comments"])
 
 
 def test_saved_body_does_not_stand_in_for_an_empty_live_body(tmp_path):
-    w, p = live_body_differs(tmp_path, "", "--judge", "agree")
+    w, p = live_body_differs(tmp_path, "", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     assert not any("Merged by babysit-pr" in c["body"] for c in w.github()["comments"])
@@ -129,7 +164,7 @@ def test_open_prs_into_the_head_branch_hand_off_and_nothing_merges(tmp_path):
     w = world(tmp_path, head_ref="feat/new-cart",
               open_prs=[{"number": 57, "base": "feat/new-cart"}, {"number": 60, "base": "main"},
                         {"number": 61, "base": "feat/new-cart"}])
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode != 0
     assert merged(w) == []
     [h] = handoffs(w)
@@ -138,6 +173,6 @@ def test_open_prs_into_the_head_branch_hand_off_and_nothing_merges(tmp_path):
 
 def test_open_prs_into_other_branches_do_not_block_the_merge(tmp_path):
     w = world(tmp_path, head_ref="feat/new-cart", open_prs=[{"number": 60, "base": "main"}])
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1")
     assert p.returncode == 0, p.output
     assert len(merged(w)) == 1

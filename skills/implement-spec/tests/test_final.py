@@ -505,7 +505,7 @@ def test_with_commit_gpgsign_on_every_pushed_commit_is_signed_with_the_configure
 # ---------------------------------------------------------------- the merge-risk block of the PR body (ticket 15)
 
 PR_RISK = SKILL.parent / "pr-risk"
-BLOCK = ("door: two-way\nblast_radius: isolated\ntouches: [%s]\nrollback: revert\nverdict: auto\n"
+BLOCK = ("door: two-way\nblast_radius: isolated\ntouches: [%s]\nrollback: revert\nrisk: 1\n"
          "reasons:\n  - \"Only prose changes\"\n")
 
 

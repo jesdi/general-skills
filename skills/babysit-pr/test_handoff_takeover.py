@@ -94,7 +94,7 @@ def test_merge_after_takeover_leaves_the_new_holders_labels_and_reports_it(tmp_p
     w = world(tmp_path, repo_labels=["babysitting", "needs-human"])
     assert w.run("acquire", "s1").returncode == 0
     takeover_before_label_write(w)
-    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--session", "s1")
+    p = merge(w, tmp_path, "a1b2c3d", "--judge", "agree", "--judge-risk", "1", "--session", "s1")
     assert w.github().get("taken"), "the takeover never fired"
     assert len(w.github()["merges"]) == 1
     assert holder(w) == ["s2"]
