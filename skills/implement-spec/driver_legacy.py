@@ -4,17 +4,20 @@
 Every run of a newer driver holds `lock` (driver._hold), so a newer and an older driver never run in one repository
 at the same time. The driver calls `resume` once, after the locks and before any check reads a ref: a run with no
 `schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier; a run
-before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops.
+before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops;
+a run before schema 5 gets its rulings and corrections keyed by their test.
 ponytail: delete this module, tests/test_legacy.py and its one line in driver._hold and in driver._start_errors
 once no older driver is left.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO
 
 import driver_decisions
+import driver_report
 import driver_slots
 import driver_state
 from driver_names import Names
@@ -141,9 +144,34 @@ def _ruled(q: dict) -> str:
     return f"Ruling: {q['ticket'] or 'end of run'} {q['kind']} ({q['answer']}): {q['subject']}."
 
 
+def _per_test(entry: dict, evidence: list[Path]) -> None:
+    """Schema 5: `disputes` and `corrected` move from their locked file to the test each record names, a review
+    correction that named only its file to the file itself, and each finding of `evidence`, the files of the ticket's
+    `spec-ambiguous` questions, gets the key of its file's record. `settled` counts one per record that is not the
+    correction of a ruling, so an arbitration of two files counts two: the cap comes no later than it would."""
+    disputes, corrected = entry.get("disputes", {}), entry.get("corrected", {})
+    keys = {file: driver_report.test_key(file, record["test"]) for file, record in {**corrected, **disputes}.items()}
+    entry["disputes"] = {keys[file]: record for file, record in disputes.items()}
+    entry["corrected"] = {keys[file]: record for file, record in corrected.items()}
+    entry["settled"] = len(disputes) + len(corrected.keys() - disputes.keys())
+    for path in evidence:
+        findings = json.loads(path.read_text())
+        path.write_text(json.dumps([{"key": keys.get(one["file"], one["file"]), **one} for one in findings],
+                                   indent=1) + "\n")
+
+
+def _all_per_test(state: dict) -> None:
+    """Schema 5 for each ticket not keyed per test yet, with the evidence of its `spec-ambiguous` questions."""
+    for number, entry in state["tickets"].items():
+        if "settled" not in entry:  # schema 5 added it, so its presence marks a ticket already keyed per test
+            asked = [Path(q["evidence"][0]) for q in state["run"].get("questions", [])
+                     if (q["ticket"], q["kind"]) == (number, "spec-ambiguous")]
+            _per_test(entry, [path for path in asked if path.exists()])
+
+
 def _upgraded(state: dict) -> None:
     """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier.
-    Schema 4: an answered question keeps its ruling sentence."""
+    Schema 4: an answered question keeps its ruling sentence. Schema 5: see `_per_test`."""
     run = state["run"]
     for q in run.get("questions", []):
         if q["answer"] is not None:
@@ -151,6 +179,7 @@ def _upgraded(state: dict) -> None:
     for record in [run.get("final", {}), *state["tickets"].values()]:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
+    _all_per_test(state)
     if isinstance(run.get("gates"), int):
         run["gates"] = {"fast": 0, "full": run["gates"]}
     run["schema"] = driver_state.SCHEMA

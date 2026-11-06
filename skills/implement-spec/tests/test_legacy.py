@@ -1,6 +1,8 @@
 """The names of a run, and the take-over of a run that an older driver started (driver_names, driver_legacy)."""
+import json
 import subprocess
 
+import driver_dispute
 import driver_legacy
 import driver_state
 from conftest import GIT
@@ -137,3 +139,28 @@ def test_the_lock_of_an_older_driver_is_shared_by_newer_drivers_and_excludes_an_
         f"a driver of an older version runs in this repository: it holds the lock {tmp_path / 'implement-spec.lock'}. "
         "Wait until it ends, then run the driver again."))
     older.close()
+
+
+def test_resume_keys_the_rulings_and_corrections_of_a_schema_4_run_by_their_test(repo, tmp_path):
+    """Schema 4 keyed them by the locked file; each record names its test, so the key moves to that test. A review
+    correction recorded only its file and is keyed by it, as a fixture finding that names no test is. The evidence
+    of each `spec-ambiguous` question of the ticket gets the key of its file's record, which `keep-test` closes."""
+    state, _, _ = older_run(repo, tmp_path)
+    ruled = {"test": "test_01.py::test_x[a]", "requirement": "R3", "ruling": "test-wrong", "reason": "r"}
+    by_file = {"test": "tests/test_02.py", "requirement": "", "reason": "STALE"}
+    evidence = tmp_path / ".agent/implement/01/spec-ambiguous-1.json"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text(json.dumps([{"file": "tests/test_01.py", "title": "t"}, {"file": "tests/test_02.py"}]))
+    question = {"ticket": "01", "kind": "spec-ambiguous", "answer": "keep-test", "evidence": [str(evidence)],
+                "subject": "s"}
+    gone = {**question, "evidence": [str(tmp_path / "gone.json")]}
+    edit(state, {"disputes": {"tests/test_01.py": ruled},
+                 "corrected": {"tests/test_01.py": ruled, "tests/test_02.py": by_file}}, questions=[question, gone])
+    assert resume(state, tmp_path)[0] == []
+    entry = state.read()["tickets"]["01"]
+    assert entry["disputes"] == {"tests/test_01.py::test_x": ruled}
+    assert entry["corrected"] == {"tests/test_01.py::test_x": ruled, "tests/test_02.py": by_file}
+    assert entry["settled"] == 2  # one per record of schema 4: each was an arbitration or a correction
+    assert [one["key"] for one in json.loads(evidence.read_text())] == ["tests/test_01.py::test_x", "tests/test_02.py"]
+    assert driver_dispute.kept(state.read()["run"]["questions"][:1], "01") == {"tests/test_01.py::test_x",
+                                                                             "tests/test_02.py"}

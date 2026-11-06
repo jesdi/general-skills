@@ -49,8 +49,9 @@ KINDS = {
     "spec-ambiguous": Kind(
         "Ticket {ticket}: the spec reads two ways on a locked test: {subject}",
         "This locked test was ruled on or corrected once in ticket {ticket}, and a second dispute or a second "
-        "correction needs it again: the spec supports both readings. Ticket {ticket} is BLOCKED and each ticket that "
-        "it blocks waits.",
+        "correction needs it again: the spec supports both readings. Or the locked tests of ticket {ticket} were "
+        "arbitrated or corrected so often that the driver asks before one more: the first reading says so. Ticket "
+        "{ticket} is BLOCKED and each ticket that it blocks waits.",
         "",
         {"keep-test": Option(
             "The test stands as it is. The role that disputed it runs again and makes it green; a review finding that "

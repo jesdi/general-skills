@@ -3,13 +3,14 @@
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost, tokens}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note,
-                     landing, disputes, corrected}}}
+                     landing, disputes, corrected, settled}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
 full one. landing is the commit whose full gate was red at the landing while the fixer of the round it started has
-not reported, else None. disputes is {locked file: {test, requirement, ruling, reason}}, the reviewer's ruling on
-the file; corrected is {locked file: {test, requirement, reason}}, the reading of its one correction. A locked file has
-at most one of each per ticket, and no answer writes them."""
+not reported, else None. disputes is {<locked file>::<test>: {test, requirement, ruling, reason}}, the reviewer's
+ruling on the test; corrected is {<locked file>::<test>: {test, requirement, reason}}, the reading of its one
+correction. A locked test has at most one of each per ticket. settled counts the arbitrations and review corrections
+of the ticket's locked tests. No answer writes the three."""
 from __future__ import annotations
 
 import fcntl
@@ -23,8 +24,8 @@ from typing import IO
 from driver_names import Names
 from driver_slots import ancestor, git, on_branch, path
 
-SCHEMA = 4  # the version of this contract; 2: the names of driver_names, 3: gate tiers, 4: the two question kinds and
-# the ruling kept on an answered question. A run of an older driver has none.
+SCHEMA = 5  # the version of this contract; 2: the names of driver_names, 3: gate tiers, 4: the two question kinds and
+# the ruling kept on an answered question, 5: disputes and corrected per locked test. A run of an older driver has none.
 PHASES = ("pending", "test-writer", "implement", "gate", "review", "fix", "merge", "merged", "blocked")
 
 
@@ -35,7 +36,7 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "landing": None, "disputes": {}, "corrected": {}}
+            "slot": None, "note": "", "landing": None, "disputes": {}, "corrected": {}, "settled": 0}
 
 
 def _final() -> dict:
