@@ -1046,3 +1046,19 @@ def test_lazy_preparation_uses_the_pr_tip_not_a_running_tickets_commit(repo, tmp
                           tip=lambda: pr_tip)
     driver._prepare_slot(2, {1}, run)
     assert out_of('git', '-C', '.agent/worktrees/slot-2', 'rev-parse', 'HEAD') == pr_tip
+
+
+def test_resume_reports_all_saved_state_errors_without_starting_an_agent(repo, tmp_path, capsys):
+    two(repo)
+    state = driver_state.State(tmp_path / '.agent/implement/state.json')
+    state.start('feat/x', ['01', '02'])
+    state.ticket('01', phase='polish')
+    state.ticket('02', phase='ship')
+    started = tmp_path.parent / f'{tmp_path.name}-agent-started'
+    code, _, out = walk(tmp_path, capsys, f'touch {started}; exit 9\n')
+    assert code == 3 and not started.exists()
+    errors = [line for line in out.splitlines() if 'unknown phase' in line]
+    assert errors == [
+        ".agent/implement/state.json: ticket 01 has the unknown phase 'polish'",
+        ".agent/implement/state.json: ticket 02 has the unknown phase 'ship'",
+    ]

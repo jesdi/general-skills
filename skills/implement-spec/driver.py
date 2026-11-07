@@ -521,9 +521,8 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str]
     slots = 1 if args.only else min(args.parallel, len(tickets))
     errors = _resume(tickets, state, pr, slots, args, kept)
     errors = errors or _apply_answers(state, args)
-    for error in errors:
-        print(error)
     if errors:
+        print("\n".join(errors))
         return 3
     run = Run(args, models, state, pr, kept)
     _record_skipped(skipped)
