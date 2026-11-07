@@ -8,6 +8,10 @@ import subprocess
 from pathlib import Path
 
 
+class PreparationError(RuntimeError):
+    """A requested slot could not be prepared; already running tickets may finish."""
+
+
 def git(slot: str, *args: str) -> subprocess.CompletedProcess[str]:
     # core.quotePath off: git prints a path with a non-ASCII name as it is, so it equals the path that a report names.
     return subprocess.run(["git", "-C", slot, "-c", "core.quotePath=false", *args], capture_output=True, text=True)
@@ -50,7 +54,7 @@ def _owned_checkout(slot: str) -> bool:
             and not Path(slot).is_symlink())
 
 
-def create(number: int, prepare: str | None, keep: bool = False) -> str:
+def create(number: int, prepare: str | None, keep: bool = False, *, start: str = "HEAD") -> str:
     """Make and prepare slot 2..N once, or reuse it off any branch (`keep`: as it is). Returns "" or the error."""
     slot = path(number)
     if Path(slot, ".git").exists():
@@ -61,7 +65,7 @@ def create(number: int, prepare: str | None, keep: bool = False) -> str:
         return ""
     # One force recovers this missing slot registration only; a locked registration still fails.
     # Never prune: another session may mount the shared metadata without its sibling checkouts.
-    added = git(".", "worktree", "add", "-q", "--force", "--detach", slot)
+    added = git(".", "worktree", "add", "-q", "--force", "--detach", slot, start)
     if added.returncode:
         return f"slot {number}: cannot create {slot}: {added.stderr.strip()}"
     if not prepare:
@@ -75,9 +79,12 @@ def create(number: int, prepare: str | None, keep: bool = False) -> str:
     return ""
 
 
-def setup(count: int, prepare: str | None, keep: set[int] = frozenset()) -> list[str]:
-    """Slots 2..count, before any agent. The first failure stops the run: [] or [the error]."""
+def setup(count: int, prepare: str | None, keep: set[int] = frozenset(),
+          *, existing_only: bool = False) -> list[str]:
+    """Check slots before agents; existing_only defers absent slots until their first assignment."""
     for number in range(2, count + 1):
+        if existing_only and not Path(path(number), ".git").exists():
+            continue
         if error := create(number, prepare, number in keep):
             return [error]
     return []
