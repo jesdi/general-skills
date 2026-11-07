@@ -1,0 +1,2 @@
+The driver has already assigned your working checkout. Reuse it for this role and every fix attempt; it satisfies the requirement to work in a worktree. Do not create another worktree for a ticket or fix. Only a read-only review whose instructions explicitly permit an isolated check may create a temporary checkout; read the existing gate evidence first and create a copy only when that evidence cannot answer a specific finding. Never run `git worktree prune`: the shared repository can contain live checkouts that this session cannot see.
+

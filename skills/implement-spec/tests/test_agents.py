@@ -270,7 +270,7 @@ def test_implementer_prompt_carries_pointers_and_only_template_sentences(env):
     for pointer in ("specs/csv/spec.md", ".agent/tickets/01-export-rows.md", "`export_csv()`", sha,
                     "tests/test_export.py", report):
         assert pointer in prompt, pointer
-    template = (SKILL / "prompts/implementer.md").read_text()
+    template = (SKILL / "prompts/implementer.md").read_text() + (SKILL / "prompts/workspace.md").read_text()
     for prefix in (str(w.repo.resolve()) + "/", str(w.repo) + "/"):
         prompt = prompt.replace(prefix, "")
     for value in (report, "specs/csv/spec.md", ".agent/tickets/01-export-rows.md", "`export_csv()`", sha,

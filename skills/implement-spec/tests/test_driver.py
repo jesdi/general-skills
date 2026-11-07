@@ -240,6 +240,7 @@ def test_a_rerun_prompt_holds_only_template_lines_and_keeps_its_ending(repo, tmp
     ending = first[first.index("\nWrite one JSON report"):]
     line = (driver_report.PROMPTS / "timeout.md").read_text().replace("{minutes}", "0.005")
     assert "timed out" in line and "in the tree" in line
+    first = first.replace("\n\n", "\n\n" + driver_agents.render("workspace", {}), 1)
     assert prompt == first + line + ending
 
 
