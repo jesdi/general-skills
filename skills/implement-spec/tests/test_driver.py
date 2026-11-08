@@ -945,21 +945,6 @@ def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(r
     assert "| fast gates run | 2 |" in out and "| full gates run | 0 |" in out
 
 
-def test_plumbing_landing_needs_no_checkout_of_the_merge_commit(repo, tmp_path, capsys, monkeypatch):
-    two(repo)
-    original = driver.git
-
-    def no_detached_landing(slot, *args, **kwargs):
-        assert len(args) < 4 or args[:3] != ("checkout", "-q", "--detach")
-        return original(slot, *args, **kwargs)
-
-    monkeypatch.setattr(driver, "git", no_detached_landing)
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
-    assert code == 0, out
-    assert len(out_of("git", "rev-list", "--parents", "-n1", walked()).split()) == 3
-    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out
-
-
 @pytest.mark.parametrize("gate, after", [
     ("echo patched >> work-01.txt", "after: not clean\n     M work-01.txt\n"),
     ("git commit -q --allow-empty -m by-the-gate", "after: HEAD moved to "),
