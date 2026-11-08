@@ -304,10 +304,10 @@ def test_concurrent_first_runs_of_the_launcher_all_succeed(tmp_path):
     assert [p.name for p in (cache / "venv").iterdir()] == ["3.13.7-jsonschema-4.26.0"]
 
 
-def test_a_timeout_doubles_the_limit_and_a_second_one_blocks(repo, tmp_path, capsys):
+def test_a_timeout_doubles_the_limit_and_a_second_one_asks_to_retry(repo, tmp_path, capsys):
     repo()
     code, ledger = agents(tmp_path, capsys, "exec sleep 30\n", "--timeout", "implementer=0.005")
-    assert code == 1
+    assert code == 2
     assert ledger[0].endswith(": timed out after 0.005 minutes.") and ledger[1].endswith(": timed out after 0.01 minutes.")
     assert ledger[2].startswith("Ticket 01: BLOCKED at the implementer: timed out")
 
@@ -328,6 +328,70 @@ def test_a_moved_head_resets_the_slot_and_reruns(repo, tmp_path, capsys, move, p
     assert code == 0
     assert problem in ledger[0] and ledger[0].endswith(f"the driver reset the slot to {tip[:7]}.")
     assert subprocess.run(["git", "rev-parse", "feat/x~1"], capture_output=True, text=True).stdout.strip() == tip
+
+
+@pytest.mark.parametrize("failure", [
+    "git checkout -q --detach; git branch -q -D ticket/feat%2Fx/01; exit 0\n",
+    "echo unfinished > code.txt; exec sleep 30\n",
+])
+def test_exhausted_same_model_retry_can_resume_without_losing_locked_tests(repo, tmp_path, capsys, failure):
+    repo()
+    writer = f"if [ $role = test-writer ]; then\n{COMMIT}{WRITER}{REPORT}exit 0; fi\n"
+    code, _ = agents(tmp_path, capsys, writer + failure,
+                          "--timeout", "implementer=0.005", seam="`f()`")
+    assert code == 2
+    state = state_of(tmp_path)
+    entry = state["tickets"]["01"]
+    locked = entry["test_writer_sha"]
+    question, = state["run"]["questions"]
+    assert question["id"] == "01-ticket-blocked-1"
+    assert question["resume"] == {"phase": "implement", "tip": locked}
+    assert entry["phase"] == "blocked" and entry["locked"] == ["work.txt"]
+    assert state["run"]["gates"] == {"fast": 0, "full": 0}
+    if "unfinished" in failure:
+        assert (tmp_path / "code.txt").read_text() == "unfinished\n"
+    code, _ = agents(tmp_path, capsys, failure, seam="`f()`")
+    assert code == 2 and state_of(tmp_path)["run"]["questions"] == [question]
+    assert state_of(tmp_path)["run"]["agents"] == state["run"]["agents"]
+    good = COMMIT.replace("work.txt", "code.txt") + IMPLEMENTER + REPORT
+    code, _ = agents(tmp_path, capsys, good, "--answer", question["id"] + "=retry", seam="`f()`")
+    assert code == 0
+    final = state_of(tmp_path)
+    assert final["tickets"]["01"]["phase"] == "merged"
+    assert final["tickets"]["01"]["test_writer_sha"] == locked
+    assert final["run"]["gates"]["fast"] >= 1 and final["run"]["gates"]["full"] >= 1
+    assert (tmp_path / "work.txt").read_text() == "test-writer\n"
+    assert sum(agent["role"] == "test-writer" for agent in final["run"]["agents"]) == 1
+
+
+def test_documented_recovery_validates_an_older_checkpoint_before_adding_a_question(repo, tmp_path, capsys):
+    repo()
+    writer = f"if [ $role = test-writer ]; then\n{COMMIT}{WRITER}{REPORT}exit 0; fi\n"
+    failure = "git checkout -q --detach; git branch -q -D ticket/feat%2Fx/01; exit 0\n"
+    assert agents(tmp_path, capsys, writer + failure, seam="`f()`")[0] == 2
+    path = tmp_path / ".agent/implement/state.json"
+    data = state_of(tmp_path)
+    data["run"]["questions"] = []  # persisted by the older same-model failure path
+    path.write_text(json.dumps(data))
+    before = path.read_bytes()
+    tip = data["tickets"]["01"]["test_writer_sha"]
+    skill = Path(driver.__file__).parent
+    script = (skill / "recovery.md").read_text().split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    command = [sys.executable, "-", str(skill), "01"]
+    refused = subprocess.run([*command, "0" * 40], input=script, text=True, capture_output=True)
+    assert refused.returncode != 0 and "Checkpoint not verified" in refused.stderr
+    assert path.read_bytes() == before and not path.with_name("state-before-recovery-01.json").exists()
+    recovered = subprocess.run([*command, tip], input=script, text=True, capture_output=True)
+    assert recovered.returncode == 0, recovered.stderr
+    assert "--answer 01-ticket-blocked-1=retry" in recovered.stdout
+    assert path.with_name("state-before-recovery-01.json").read_bytes() == before
+    after = path.read_bytes()
+    repeated = subprocess.run([*command, tip], input=script, text=True, capture_output=True)
+    assert repeated.returncode != 0 and path.read_bytes() == after
+    good = COMMIT.replace("work.txt", "code.txt") + IMPLEMENTER + REPORT
+    assert agents(tmp_path, capsys, good, "--answer", "01-ticket-blocked-1=retry", seam="`f()`")[0] == 0
+    assert state_of(tmp_path)["tickets"]["01"]["test_writer_sha"] == tip
+    assert (tmp_path / "work.txt").read_text() == "test-writer\n"
 
 
 def test_an_existing_ticket_branch_stops_the_run(repo, tmp_path, capsys):

@@ -422,10 +422,10 @@ def test_timeout_keeps_the_tree_and_reruns_once_with_double_the_limit(env):
     assert git(w.repo, "show", "feat/csv:wip.txt") == "half done\n"
 
 
-def test_second_timeout_blocks_the_ticket(env):
+def test_second_timeout_asks_before_retrying_the_ticket(env):
     w = World(env, refactor=True)
     hang = {"files": {"wip.txt": "half done\n"}, "sleep": 60}
-    blocked(w.run({"implementer": [hang, hang, impl()]}, "--timeout", "implementer=0.04"))
+    asks(w.run({"implementer": [hang, hang, impl()]}, "--timeout", "implementer=0.04"))
     assert len(w.calls("implementer")) == 2
     assert any("BLOCKED" in l and "timed out" in l for l in w.ledger().splitlines()), w.ledger()
     assert (w.repo / "wip.txt").exists()

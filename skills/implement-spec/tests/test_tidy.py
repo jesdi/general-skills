@@ -260,7 +260,8 @@ def test_a_fixer_that_times_out_twice_keeps_its_files_and_the_branch_stays_at_th
     rig.run(plan(**{"final/final-spec": [final(finding("Q-ONE"))], "final/fixer": [slow, slow]}),
             "--timeout", "fixer=0.01", *UNATTENDED)
     reviewed = rig.final()["reviewed"]
-    assert rig.code == 1 and rig.pushes() == [] and rig.branch() == reviewed, rig.out
+    assert rig.code == 2 and rig.pushes() == [] and rig.branch() == reviewed, rig.out
+    assert decisions(rig)["questions"][0]["id"] == "final-ticket-blocked-1"
     assert (rig.repo / "wip.txt").read_text() == "half done\n"
     assert rig.led(f"End of run: the fix batch was rejected, so the driver moved feat/csv back to its reviewed tip "
                    f"{reviewed[:7]}; the fixer made no commit. The files of the fixer stay in slot 1 as they are.")
