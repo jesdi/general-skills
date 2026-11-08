@@ -62,11 +62,17 @@ def test_old_final_state_gains_an_unused_repair_allowance_without_rerunning_work
     state = rig.state()
     del state['run']['final']['gate_repairs']
     del state['run']['final']['gate_failure']
+    del state['run']['final']['lenses']
     (rig.repo / '.agent/implement/state.json').write_text(json.dumps(state))
     rig.run(plan())
     assert rig.code == 0, rig.out
     assert len(rig.calls()) == snapshot.calls and len(rig.gates()) == snapshot.gates
     assert rig.final()['gate_repairs'] == 0 and rig.final()['gate_failure'] is None
+    rig.run(plan(), '--push')
+    assert rig.code == 0, rig.out
+    body = rig.prs()[0]['body']
+    assert f"Full review: {rig.final()['onto']}..{rig.final()['tidied']}" in body
+    assert 'Scoped review after the fix batch: not needed' in body
 
 
 def test_gate_repair_after_review_fix_preserves_findings_for_scoped_review(tmp_path):

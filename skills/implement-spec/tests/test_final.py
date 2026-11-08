@@ -624,18 +624,30 @@ def test_full_gate_runs_only_after_every_ticket_is_integrated(tmp_path):
     assert len(rig.gates('fast')) == 3
 
 
-def test_red_integration_gate_is_repaired_before_full_review_without_ticket_rounds(tmp_path):
+@pytest.mark.parametrize("review_fix", [False, True])
+def test_red_integration_gate_is_repaired_before_full_review_without_ticket_rounds(tmp_path, review_fix):
     rig = Final(tmp_path)
     rig.gate_conf(full={'subjects': ['feat(01): Export rows']})
-    rig.run(plan(**{'final/fixer': [fixer('fixed\n', 'repair integration', ticket_of='01')]}))
+    repairs = [fixer('fixed\n', 'repair integration', ticket_of='01')]
+    if review_fix:
+        repairs.append(fixer('reviewed\n', 'repair review finding', ticket_of='01'))
+    steps = plan(**{'final/fixer': repairs, 'final/final-spec': [final(finding('FOLLOWUP')) if review_fix else final()]})
+    rig.run(steps, '--push')
     assert rig.code == 0, rig.output()
     assert rig.state()['tickets']['01']['round'] == 0
     assert rig.state()['tickets']['01']['phase'] == 'merged'
-    assert len(rig.final_calls('fixer')) == 1
+    assert len(rig.final_calls('fixer')) == 1 + int(review_fix)
     call = rig.final_calls('fixer')[0]
     assert 'gate-full-' in call['prompt']
     assert rig.final_calls('final-spec')[0]['t0'] > call['t1']
-    assert [g['exit'] for g in rig.gates('full')] == [1, 0]
+    assert [g['exit'] for g in rig.gates('full')] == ([1, 0, 0] if review_fix else [1, 0])
+    full_tip = rig.final_calls('final-spec')[0]['head']
+    state = rig.state()['run']['final']
+    body = rig.prs()[0]['body']
+    assert f"Full review: {state['onto']}..{full_tip}" in body
+    scoped = f'{full_tip}..{rig.branch()}' if review_fix else 'not needed'
+    assert f'Scoped review after the fix batch: {scoped}' in body
+    assert 'Fix commits of the integrated branch' in body
 
 
 @pytest.mark.parametrize('transient', [True, False])

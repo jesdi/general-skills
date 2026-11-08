@@ -610,6 +610,13 @@ def _name(run: Run) -> str:
     return next((line[2:].strip() for line in lines if line.startswith("# ")), run.pr)
 
 
+def _review_coverage(final: dict) -> dict[str, str]:
+    """The first full review may include gate repairs made after tidy; later reviews cover the remaining range."""
+    full_tip = next((lens["tip"] for lens in final["lenses"].values()), final["tidied"])
+    return {"full_review": f"{final['onto']}..{full_tip}",
+            "scoped": f"{full_tip}..{final['reviewed']}" if full_tip != final["reviewed"] else "not needed"}
+
+
 def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
     """The end of the PR body: the ticket-to-commit map, the fix commits, the rulings and the review coverage."""
     titles, tip = {ticket.number: ticket.title for ticket in tickets}, final["reviewed"]
@@ -618,8 +625,7 @@ def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
     return driver_agents.render("pr-body", {
         "map": "\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items()),
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
-        "tip": tip, "onto": final["onto"], "tidied": final["tidied"],
-        "scoped": f"{final['tidied']}..{tip}" if fixes else "not needed",
+        "tip": tip, **_review_coverage(final),
         "providers": _review_providers(run.state.read()["run"]["agents"])})
 
 
