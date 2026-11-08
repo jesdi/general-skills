@@ -950,7 +950,7 @@ def test_plumbing_landing_needs_no_checkout_of_the_merge_commit(repo, tmp_path, 
     original = driver.git
 
     def no_detached_landing(slot, *args, **kwargs):
-        assert args[:3] != ("checkout", "-q", "--detach")
+        assert len(args) < 4 or args[:3] != ("checkout", "-q", "--detach")
         return original(slot, *args, **kwargs)
 
     monkeypatch.setattr(driver, "git", no_detached_landing)

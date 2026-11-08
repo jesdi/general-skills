@@ -1036,7 +1036,8 @@ def test_a_reviewer_that_times_out_starts_again_from_the_clean_tip(tmp_path):
 def test_a_conflict_is_resolved_once_in_the_ticket_slot_and_a_second_one_blocks(tmp_path):
     rig = test_review.conflicted(under(tmp_path, "once"))
     assert rig.code == 0, rig.ledger()
-    assert rig.tip() in [gate["commit"] for gate in rig.gates()] and dict(rig.state()["run"]["landed"])["01"] == rig.tip()
+    assert dict(rig.state()["run"]["landed"])["01"] == rig.tip()
+    assert len(rig.gates("full")) == 1 and rig.gates("full")[0]["branch"] == "feat/csv"
     assert rig.led("Ticket 01: the conflict agent resolved the merge conflict in demo/cli.py at ")
     prompt = rig.prompt("conflict-0")
     assert "Files in conflict: demo/cli.py\n" in prompt and f"at commit {rig.sha('03', 'implementer')}\n" in prompt
