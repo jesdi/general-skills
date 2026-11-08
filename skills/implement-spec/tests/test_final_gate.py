@@ -1,4 +1,6 @@
 """Full integration gating through the driver CLI, after ticket landings."""
+import pytest
+
 from test_final import fixer
 from test_walk import plan
 from test_fixloop import inside  # noqa: F401 (in-process runtime discovery)
@@ -87,3 +89,37 @@ def test_gate_repair_after_review_fix_preserves_findings_for_scoped_review(tmp_p
     assert 'findings-0.json' in scoped['prompt']
     assert rig.final()['reviewed'] == rig.branch()
     assert rig.pushes() == [f'refs/heads/feat/csv {rig.branch()}']
+
+
+@pytest.mark.parametrize("transient", [True, False])
+def test_evidenced_noop_repair_checks_the_same_tip_and_keeps_the_bound(tmp_path, monkeypatch, transient):
+    import test_final
+
+    monkeypatch.setattr(test_final, "Final", Inside)
+    test_final.test_final_gate_repair_can_prove_no_code_change_but_still_spends_its_attempt(tmp_path, transient)
+
+
+def test_noop_gate_repair_without_failure_evidence_cannot_spend_or_publish(tmp_path):
+    rig = Inside(tmp_path)
+    rig.gate_conf(full={"subjects": ["feat(01): Export rows"]})
+    empty = {"report": dict(status="DONE", commits=[], files=[], green=["passed"], concerns=["no change"])}
+    rig.run(plan(**{"final/fixer": [empty, empty]}), "--push")
+    assert rig.code == 2, rig.out
+    assert rig.final()["gate_repairs"] == 0
+    assert len(rig.gates("full")) == 1 and not rig.pushes()
+    assert "no concern names the finding the full integration gate is red" in rig.out
+
+
+def test_gate_repair_preserves_locked_tests_and_escalates_a_needed_correction(tmp_path):
+    rig = Inside(tmp_path)
+    rig.gate_conf(full={"subjects": ["feat(01): Export rows"]})
+    changed = fixer("fixed\n", "alter test", ticket_of="01")
+    changed["commits"][0]["files"]["tests/test_01.py"] = "changed = True\n"
+    changed["report"]["files"].append("tests/test_01.py")
+    retry = {"report": dict(changed["report"], commits=[{"sha": "$HEAD", "ticket": "01"}])}
+    rig.run(plan(**{"final/fixer": [changed, retry]}), "--push")
+    assert rig.code == 2, rig.out
+    assert "locked file changed: tests/test_01.py" in rig.out
+    assert rig.final()["gate_repairs"] == 0 and not rig.pushes()
+    assert rig.branch() == rig.final()["tidied"]
+    assert rig.state()["tickets"]["01"]["phase"] == "merged"

@@ -244,7 +244,7 @@ def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
 
 
 def _resolve_rebase_conflict(run: Run, base: str, onto: str) -> None:
-    """Run the conflict agent, with its one rerun, on the rebase that is open in slot 1, leave the rebased tip for the final integration gate.
+    """Resolve the rebase in slot 1, with one agent rerun; the final integration gate checks its tip.
     No rebase is open afterwards, also when this raises."""
     files = _files_in_conflict()
     values = {**_prompt_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
@@ -537,9 +537,11 @@ def _fixer_call(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_rec
         values.update(driver_final_gate.pointers(final, gate_record, tip))
         name = f"gate-fixer-{final['gate_repairs']}"
     tidied = final["tidied"]
-    return Call("fixer", FINAL, ".", values, template="final-fixer", fix_round=final["round"], name=name,
+    return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate_record else "final-fixer",
+                fix_round=final["round"], name=name,
                 check={"owners": [ticket.number for ticket in tickets],
-                       "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]]},
+                       "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]],
+                       "fix": [values["gate_title"]] if gate_record else []},
                 locked=lambda _: driver_locked.for_end_of_run(run.state.read()["tickets"], tidied))
 
 
@@ -553,26 +555,33 @@ def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_reco
         raise Halted(f"{halted}{_undo_rejected_batch(run, tip)}") from None
 
 
+def _name_batch(run: Run, tip: str, report: dict) -> list[str]:
+    """Attribute new commits before gating/review; a validated gate-only no-op leaves the tip unchanged."""
+    made = git(".", "rev-list", "--reverse", f"{tip}..HEAD").stdout.split()
+    if not made:
+        return []
+    named = driver_tidy.rewrite(tip, [(commit, _fix_commit_message(commit, report)) for commit in made])
+    if not driver_tidy.same_tree(named[-1], made[-1]):
+        raise Blocked(f"the named commits do not have the tree of {made[-1][:7]}")
+    # Same tree: slot 1's index and working files remain correct as the ref moves.
+    if error := driver_merge.land(run.pr, named[-1], made[-1]):
+        raise Blocked(error)
+    return named
+
+
 def _fix_batch(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> None:
-    """Run the one fix batch, then name its commits `fix(NN)`."""
+    """Run one bounded batch and settle its attributed tip before the next full gate."""
     with during("the fix batch"):
         report = _run_fixer(run, tickets, final, tip, gate_record)
-        # The commits are named before the gate and the scoped review see them: nothing is rewritten after a review.
-        made = git(".", "rev-list", "--reverse", f"{tip}..HEAD").stdout.split()
-        named = driver_tidy.rewrite(tip, [(commit, _fix_commit_message(commit, report)) for commit in made])
-        if not driver_tidy.same_tree(named[-1], made[-1]):
-            raise Blocked(f"the named commits do not have the tree of {made[-1][:7]}")
-        # Slot 1 has the branch checked out: the new tip has the same tree, so the index and the files stay right.
-        if error := driver_merge.land(run.pr, named[-1], made[-1]):
-            raise Blocked(error)
-    fields = dict(open=[], batch=named[-1])
+        named = _name_batch(run, tip, report)
+    fields = dict(open=[], batch=named[-1] if named else tip)
     if gate_record:
         fields.update(gate_repairs=final["gate_repairs"] + 1, gate_failure=None)
     run.state.update(lambda state: state["run"]["final"].update(fields))
     subjects = ", ".join(f"{commit[:7]} {driver_tidy.text(commit).splitlines()[0]}" for commit in named)
     label = "integration gate" if gate_record else "final review"
-    ledger(f"Fix batch of the {label}: {len(named)} commit{'s' if len(named) > 1 else ''} on {tip[:7]}: "
-           f"{subjects}.")
+    ledger(f"Fix batch of the {label}: {len(named)} commit{'s' if len(named) != 1 else ''} on {tip[:7]}: "
+           f"{subjects or 'no code change'}.")
 
 
 def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:

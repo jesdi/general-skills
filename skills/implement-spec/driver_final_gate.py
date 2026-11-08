@@ -42,5 +42,4 @@ def pointers(final: dict, record: str, tip: str) -> dict[str, str]:
                    evidence=f'Read the exact failure log: {record}')
     path = OUT / FINAL / f"gate-findings-{final['gate_repairs']}.json"
     path.write_text(json.dumps([finding], indent=1) + '\n')
-    return dict(findings=str(path), findings_list=f"- critical: {finding['title']}; read {record}",
-                must_fix_list='None. This batch repairs the integration gate; review findings stay for review.')
+    return dict(gate_title=finding["title"], findings=str(path), findings_list=f"- critical: {finding['title']}; read {record}")

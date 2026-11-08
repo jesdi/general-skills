@@ -636,3 +636,22 @@ def test_red_integration_gate_is_repaired_before_full_review_without_ticket_roun
     assert 'gate-full-' in call['prompt']
     assert rig.final_calls('final-spec')[0]['t0'] > call['t1']
     assert [g['exit'] for g in rig.gates('full')] == [1, 0]
+
+
+@pytest.mark.parametrize('transient', [True, False])
+def test_final_gate_repair_can_prove_no_code_change_but_still_spends_its_attempt(tmp_path, transient):
+    rig = Final(tmp_path)
+    rig.gate_conf(full={'subjects': ['feat(01): Export rows']})
+    no_change = {'report': dict(status='DONE_WITH_CONCERNS', commits=[], files=[], green=['targeted checks pass'],
+                               concerns=['the full integration gate is red on $HEAD: inspected the exact log; no code change is needed'])}
+    if transient:
+        no_change['files'] = {str(rig.rig / 'gate.json'): '{}'}  # repair the external gate environment
+    rig.run(plan(**{'final/fixer': [no_change]}), '--push')
+    assert rig.code == (0 if transient else 2), rig.output()
+    state = rig.state()['run']['final']
+    assert state['gate_repairs'] == 1
+    assert rig.branch() == state['tidied']
+    assert len(rig.final_calls('fixer')) == 1
+    assert [g['exit'] for g in rig.gates('full')] == [1, 0 if transient else 1]
+    assert bool(rig.pushes()) == transient
+    assert len(rig.final_calls('final-spec')) == int(transient)
