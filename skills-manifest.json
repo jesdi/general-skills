@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-08T03:27:01.103Z",
+  "generatedAt": "2026-11-08T07:21:01.147Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -10,9 +10,9 @@
     },
     {
       "name": "babysit-pr",
-      "version": "0.1.5",
-      "hash": "sha256-71a14f734fcc2c21c7e068a4a0bf42afc23d7898d0d21ff962205832619b0ab2",
-      "description": "Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr <pr-url>`."
+      "version": "0.1.6",
+      "hash": "sha256-81e4eb55e555b5c56df6f90a83a300d79d859f294a2ebe8f00ed231bc21390c2",
+      "description": "Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr` and a PR URL."
     },
     {
       "name": "backlog",
