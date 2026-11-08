@@ -331,24 +331,23 @@ def test_a_fast_forward_merge_has_one_fast_and_one_full_record_of_the_ticket_tip
     a1 = rig.sha("01", "implementer")
     assert rig.walked() == a1
     records = sorted((rig.repo / ".agent/implement/01").glob("gate-*.log"))
-    assert [p.name for p in records] == [f"gate-fast-{a1[:7]}.log", f"gate-full-{a1[:7]}.log"]
-    for tier, record in zip(("fast", "full"), records):
+    assert [p.name for p in records] == [f"gate-fast-{a1[:7]}.log"]
+    for tier, record in zip(("fast",), records):
         text = record.read_text()
         assert f"tier: {tier}\ncommit: {a1}\n" in text and "GATE-OUTPUT-MARK" in text
         assert len(re.findall(r"\d\d:\d\d:\d\d", text)) >= 2
         assert re.search(r"exit\D*0", text) and not re.search(r"^(\?\?| M|M |A )", text, re.M)
-    fast, full = rig.walk_gates()
+    (fast,) = rig.walk_gates()
     assert (fast["tier"], fast["commit"], fast["branch"]) == ("fast", a1, "ticket/feat%2Fcsv/01")
-    assert (full["tier"], full["commit"], full["branch"]) == ("full", a1, "HEAD")  # the commit that lands, detached
-    assert {gate["status"] for gate in (fast, full)} == {""}
-    assert {gate["cwd"] for gate in (fast, full)} == {str(rig.repo.resolve())}
+    assert {gate["status"] for gate in (fast,)} == {""}
+    assert {gate["cwd"] for gate in (fast,)} == {str(rig.repo.resolve())}
 
 
 def test_gate_environment_names_the_pr_branch_and_a_pycache_prefix_under_agent_implement(tmp_path):
     rig = Rig(tmp_path, {"01-export-rows.md": ticket("01", "Export rows")}).run(plan())
     assert rig.code == 0, rig.output()
     gates = rig.walk_gates()
-    assert [gate["tier"] for gate in gates] == ["fast", "full"]
+    assert [gate["tier"] for gate in gates] == ["fast"]
     for gate in gates:
         assert gate["base"] == "feat/csv" and gate["pycache"]
         assert os.path.realpath(gate["pycache"]).startswith(str((rig.repo / ".agent/implement").resolve()) + os.sep)
@@ -375,7 +374,7 @@ def test_blocked_ticket_stops_only_the_tickets_it_blocks(blocked):
     assert blocked.code == 1
 
 
-def test_non_fast_forward_merge_is_a_plumbing_merge_commit_gated_once(tmp_path):
+def test_non_fast_forward_merge_is_a_plumbing_merge_commit_without_a_landing_gate(tmp_path):
     files = {k: v for k, v in three().items() if not k.startswith("02")}
     rig = Rig(tmp_path, files)
     steps = plan(**{"01_test-writer": [{**tw("01"), "touch": ["s1"]}],
@@ -388,8 +387,8 @@ def test_non_fast_forward_merge_is_a_plumbing_merge_commit_gated_once(tmp_path):
     assert len(git(rig.repo, "rev-list", "--parents", "-n1", tip).split()) == 3, "tip is a merge commit"
     fast = [g["commit"] for g in rig.walk_gates() if g["tier"] == "fast"]
     full = [g["commit"] for g in rig.walk_gates() if g["tier"] == "full"]
-    # 03 lands first, as a fast-forward; 01 lands as the merge commit. No full gate runs on 01's own tip.
-    assert sorted(fast) == sorted([a01, a03]) and full == [a03, tip], (fast, full)
+    # 03 lands first, as a fast-forward; 01 lands as the merge commit. Both wait for the final full gate.
+    assert sorted(fast) == sorted([a01, a03]) and full == [], (fast, full)
     waited = rig.calls("01", "implementer")[0]
     assert waited["after_wait"]["branch"] == "ticket/feat%2Fcsv/01" and waited["after_wait"]["head"] == waited["head"]
     assert waited["after_wait"]["status"] == ""

@@ -1,10 +1,10 @@
-# Fixer of the final review
+# Fixer of the integrated branch
 
 Spec: {spec}
 Tickets: {tickets}
 PR branch: {pr_branch}, at commit {start_sha}
 Locked files: {locked}
-Findings file of the final review: {findings}
+Findings file: {findings}
 Findings to fix:
 {findings_list}
 Must-fix findings carried from ticket reviews:
@@ -14,7 +14,7 @@ Fix each finding in the list as one batch, in one commit or in several. List eve
 Each commit belongs to one ticket: the ticket whose criterion or code the commit changes. A fix for two tickets is two commits.
 Never edit a locked file: each one stays as it is at {start_sha}, and the driver rejects a report whose commits change one.
 Use targeted tests while you work.
-Before you report DONE or DONE_WITH_CONCERNS, make the fast gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} and IMPLEMENT_SPEC_LOCKED='{locked}' (the locked files above) in the environment, then fix, commit, and run it again until it passes. The driver runs its full gate on that commit, and a scoped review reads your commits.
+Before you report DONE or DONE_WITH_CONCERNS, make the fast gate green on your final commit: run `{gate}` with IMPLEMENT_SPEC_BASE={pr_branch} and IMPLEMENT_SPEC_LOCKED='{locked}' (the locked files above) in the environment, then fix, commit, and run it again until it passes. The driver runs its full gate on that commit, and the final review reads the green integrated tip (all lenses before its first review, a scoped review thereafter).
 Commit your work on the checked-out PR branch and change no commit that is on it now. Do not dispatch subagents.
 In `commits`, give every commit you made with the number of its ticket: the driver names each commit `fix(NN): <your subject>` from it, and a commit with no ticket is a violation. In `green`, give the summary lines of the passing test output.
 

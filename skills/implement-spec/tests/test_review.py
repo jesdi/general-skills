@@ -285,12 +285,12 @@ def conflicted(tmp, moves_again=False):
         "01/conflict": [resolve]}))
 
 
-def test_a_conflicting_merge_runs_the_conflict_agent_once_then_the_gate_on_the_merge_commit(tmp_path):
+def test_a_conflicting_merge_runs_the_conflict_agent_once_then_the_final_integration_gate(tmp_path):
     rig = conflicted(tmp_path)
     assert rig.code == 0, rig.output()
     (call,) = rig.calls("01", "conflict")
     assert call["cwd"] == rig.calls("01", "implementer")[0]["cwd"], "in the ticket's slot"
-    assert rig.tip() in [g["commit"] for g in rig.gates()], "the merge commit is gated"
+    assert [g["commit"] for g in rig.gates("full")] == [git(rig.repo, "rev-parse", "feat/csv").strip()]
     assert git(rig.repo, "show", "feat/csv:demo/cli.py") == cli("resolved")
     assert rig.led("demo/cli.py", "onflict")
 

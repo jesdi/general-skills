@@ -611,3 +611,27 @@ def test_a_cached_body_that_no_longer_validates_is_rewritten_before_gh_pr_create
     assert len(rig.final_calls("pr-writer")) == 2, "the invalid cached body was not rewritten"
     (pr,) = rig.prs()
     assert risk_valid(tmp_path, pr["body"].split("## Tickets")[0]) and "styles" not in pr["body"].split("## Tickets")[0]
+
+
+def test_full_gate_runs_only_after_every_ticket_is_integrated(tmp_path):
+    rig = Final(tmp_path, THREE).run(plan())
+    assert rig.code == 0, rig.output()
+    full = rig.gates('full')
+    assert len(full) == 1
+    assert full[0]['commit'] == rig.branch()
+    assert all(entry['phase'] == 'merged' for entry in rig.state()['tickets'].values())
+    assert len(rig.gates('fast')) == 3
+
+
+def test_red_integration_gate_is_repaired_before_full_review_without_ticket_rounds(tmp_path):
+    rig = Final(tmp_path)
+    rig.gate_conf(full={'subjects': ['feat(01): Export rows']})
+    rig.run(plan(**{'final/fixer': [fixer('fixed\n', 'repair integration', ticket_of='01')]}))
+    assert rig.code == 0, rig.output()
+    assert rig.state()['tickets']['01']['round'] == 0
+    assert rig.state()['tickets']['01']['phase'] == 'merged'
+    assert len(rig.final_calls('fixer')) == 1
+    call = rig.final_calls('fixer')[0]
+    assert 'gate-full-' in call['prompt']
+    assert rig.final_calls('final-spec')[0]['t0'] > call['t1']
+    assert [g['exit'] for g in rig.gates('full')] == [1, 0]

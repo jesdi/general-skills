@@ -228,7 +228,7 @@ def test_a_fix_batch_is_named_per_commit_and_a_commit_with_no_owner_is_a_violati
     assert rig.led("End of run: BLOCKED at the fix batch: commits.0.sha")  # `$HEAD~1` is no SHA: a second violation
     reviewed = rig.final()["reviewed"]
     assert rig.branch() == reviewed, "the rejected commits are off the branch"
-    (line,) = rig.led(f"End of run: the fix batch was rejected, so the driver moved feat/csv back to its reviewed tip {reviewed[:7]}")
+    (line,) = rig.led(f"End of run: the fix batch was rejected, so the driver moved feat/csv back to its pre-batch tip {reviewed[:7]}")
     left = line.split("the commits of the batch end at ")[1].split()[0]
     assert git(rig.repo, "log", "--format=%s", f"{reviewed}..{left}").split("\n")[:2] == ["escape quotes", "quote commas"]
     assert line.endswith("The files of the fixer stay in slot 1 as they are.")
@@ -263,7 +263,7 @@ def test_a_fixer_that_times_out_twice_keeps_its_files_and_the_branch_stays_at_th
     assert rig.code == 2 and rig.pushes() == [] and rig.branch() == reviewed, rig.out
     assert decisions(rig)["questions"][0]["id"] == "final-ticket-blocked-1"
     assert (rig.repo / "wip.txt").read_text() == "half done\n"
-    assert rig.led(f"End of run: the fix batch was rejected, so the driver moved feat/csv back to its reviewed tip "
+    assert rig.led(f"End of run: the fix batch was rejected, so the driver moved feat/csv back to its pre-batch tip "
                    f"{reviewed[:7]}; the fixer made no commit. The files of the fixer stay in slot 1 as they are.")
 
 
@@ -306,14 +306,14 @@ def test_a_lens_that_changes_the_slot_twice_ends_the_run_with_a_clean_slot(tmp_p
     assert rig.code == 0 and rig.pushes() == [f"refs/heads/feat/csv {tip}"], rig.out
 
 
-def test_a_red_gate_on_the_tidied_tip_stops_before_the_final_review(tmp_path):
+def test_a_red_gate_on_the_tidied_tip_repairs_then_parks_before_review(tmp_path):
     rig = Inside(tmp_path, ONE, gate={"red": ["feat/csv"]})
-    rig.run(plan(), *UNATTENDED)
-    assert rig.code == 1 and not rig.final_calls("final-spec") and rig.pushes() == [], rig.out
-    assert rig.led("End of run: BLOCKED at the gate: the full gate is red on " + rig.branch()[:7])
-    assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["final"]}
-    # The fast gate of the ticket tip, the full gate of its fast-forward, and the full gate of the tidied tip.
-    assert rig.state()["run"]["gates"] == {"fast": 1, "full": 2} and "| full gates run | 2 |" in rig.out
+    rig.run(plan(**{"final/fixer": [fixer("fixed\n", "integration fix", ticket_of="01")]}), *UNATTENDED)
+    assert rig.code == 2 and not rig.final_calls("final-spec") and rig.pushes() == [], rig.out
+    assert rig.led("End of run: BLOCKED at the integration gate: the full integration gate remains red")
+    assert stage(rig)["status"] == "awaiting-review" and stage(rig)["open_questions"] == 1
+    assert rig.state()["run"]["gates"] == {"fast": 1, "full": 2}
+    assert rig.final()["gate_repairs"] == 1
 
 
 # ---------------------------------------------------------------- the rebase
@@ -337,7 +337,7 @@ def test_a_base_that_moved_with_no_conflict_is_rebased_onto_with_no_agent_and_on
     assert rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"] and stage(rig) == {"stage": "implement", "status": "done"}
 
 
-def test_a_resolved_rebase_keeps_the_ticket_messages_and_gates_the_rebased_tip_and_the_tidied_tip(tmp_path):
+def test_a_resolved_rebase_keeps_ticket_messages_and_gates_only_the_final_tidied_tip(tmp_path):
     cli = {"demo/cli.py": "def main():\n    return 'base'\n"}
     resolved = {**RESOLVE, "files": {"demo/cli.py": "def main():\n    return 'both'\n"}}
     rig = moved(tmp_path, cli, resolved)  # the agent commits as "resolve conflict" and goes on with the rebase
@@ -351,7 +351,7 @@ def test_a_resolved_rebase_keeps_the_ticket_messages_and_gates_the_rebased_tip_a
     (line,) = rig.led("Rebase: the conflict agent resolved the conflict with main in demo/cli.py at ")
     rebased = line.rstrip(".").split()[-1]
     records = sorted(p.name for p in (rig.repo / ".agent/implement/final").glob("gate-*.log"))
-    assert records == sorted([f"gate-full-{rebased}.log", f"gate-full-{rig.branch()[:7]}.log"]) and rebased != rig.branch()[:7]
+    assert records == [f"gate-full-{rig.branch()[:7]}.log"] and rebased != rig.branch()[:7]
     assert ref(rig.repo, f"{rebased}^{{tree}}") == ref(rig.repo, "feat/csv^{tree}")
 
 
@@ -385,12 +385,13 @@ def test_a_conflict_agent_that_gives_up_leaves_no_rebase_open(tmp_path):
     assert not (rig.repo / ".git/rebase-merge").exists()
 
 
-def test_a_red_gate_after_the_rebase_leaves_the_branch_unrewritten(tmp_path):
-    rig = Inside(tmp_path, ONE, gate={"unbranched": True})  # red on a commit that no branch holds: the rebased tip
+def test_rebase_conflict_resolution_waits_for_the_final_integration_gate(tmp_path):
+    rig = Inside(tmp_path, ONE, gate={"unbranched": True})
     rig.move_base({"demo/export.py": "def export_csv():\n    return 'base'\n"})
     rig.run(plan(**{"final/conflict": [{**RESOLVE, "files": {"demo/export.py": "x = 1\n"}}]}))
-    assert rig.code == 1 and rig.branch() == rig.recovery(), rig.out
-    assert rig.led("End of run: BLOCKED at the rewrite: the gate after the rebase: the full gate is red on ")
+    assert rig.code == 0 and rig.branch() != rig.recovery(), rig.out
+    assert len(rig.gates("full")) == 1
+    assert rig.gates("full")[0]["commit"] == rig.branch()
 
 
 def test_a_base_that_holds_a_ticket_commit_already_leaves_the_branch_unrewritten(tmp_path):
