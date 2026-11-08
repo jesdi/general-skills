@@ -1,6 +1,6 @@
 ---
 name: babysit-pr
-description: Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr <pr-url>`.
+description: Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr` and a PR URL.
 ---
 
 # babysit-pr
@@ -8,6 +8,16 @@ description: Babysit an open pull request until it is merged or handed to a huma
 Run with `/babysit-pr <pr-url>`. The PostToolUse hook in `hooks/post-pr-create.sh` asks for this after a ready PR is opened in a repo with `.merge-risk.json`. When a subagent opened the PR, the hook queues it instead, and the Stop hook in `hooks/stop-babysit-pending.sh` asks the main session for it when that session stops.
 
 `babysit.py` is next to this file; every state change below goes through it (`python3 babysit.py <cmd> --repo <owner/name> --pr <n> ...`). Work in a checkout of the PR branch. The base is the PR's `baseRefName`, never a fixed `main`.
+
+## Merge authorization
+
+An explicit instruction in this conversation such as “babysit that PR and merge it when green” authorizes merging that PR. Record its current remote head as the authorized head. The agent obtains the SHA; the user need not type it or repeat the instruction in a GitHub comment.
+
+That authorization follows this session's fixes within the original task and clean rebases. Keep the authorized head in session context: before a push, compare the remote head with the last head this session recorded, then advance it only to the exact checked commit this session produced and successfully pushed. Before merging, compare again. A commit author or GitHub login is not provenance: another agent can use the same identity. Unknown remote commits or a scope change require a new user decision: hand off with reason `authorization scope changed`, naming the old and new heads and the unapproved change. Never adopt them by refreshing the recorded head. After lost context, recover this evidence or ask rather than infer authorization.
+
+With this authorization, run `merge --session-approved --session <lease-session> --sha <authorized-head> --body <body-file>` after CI is green and the review checks below pass. The merge still pins and rechecks the exact head, base and body, verifies lease ownership, and respects review handoffs, dependent PRs and GitHub branch protections. The session authorization supplies the human decision when risk exceeds the automatic limit; no duplicate approval comment or judge is needed. The success comment records the session and merged SHA.
+
+Invoking the skill alone, or a hook starting it, does not grant this explicit authorization: use the automatic gate/judge path. The owner's existing `@babysitter merge <sha>` comment remains a separate, commit-specific approval path.
 
 ## Before anything
 
@@ -21,7 +31,7 @@ Run with `/babysit-pr <pr-url>`. The PostToolUse hook in `hooks/post-pr-create.s
 2. `update-plan --base <base>` when the base moved; follow its plan (see Base moved). Every step uses `origin/<base>` of the PR (a stacked PR's parent), never `main`.
 3. `checks --wait-minutes <waitMinutes>` until the head is green, red, stalled (`CI stalled`) or empty (`no checks`). Green means every check passed.
 4. Red: `round start --op <id>` (keep the id), then the fix round below. Renew the lease each round and `lease check` before each push.
-5. Green: run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's label and risk to `merge --judge agree --judge-risk <risk>` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw, and hands off when the gate's or the judge's risk is above the repo's limit.
+5. Green: with explicit session authorization, use its merge path above. Otherwise, absent an owner commit approval, run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's label and risk to `merge --judge agree --judge-risk <risk>` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw, and hands off when the gate's or the judge's risk is above the repo's limit.
 
 ## A fix round
 
@@ -41,7 +51,7 @@ Hand off when 5 rounds are done and a check still fails (`5 fix rounds`), or the
 - `rebase-with-conflict`: rebase and resolve each stop with the `resolving-merge-conflicts` skill. Never `--abort`. Push with the printed lease form.
 - `merge`: `git merge origin/<base>`, resolve with the same skill, push without force. This PR now uses the merge method.
 
-Push only after the ladder passes, then wait for CI on the new head. If a resolution changed a file whose categories (the pr-risk path classification, not its directory) are neither `tests` nor `docs`, or a lockfile by hand, the verdict is human: once CI is green, `handoff` with `conflict resolved in code` (no gate, judge or merge).
+Push only after the ladder passes, then wait for CI on the new head. For session-authorized runs, a clean rebase advances the authorized head only from the previously recorded remote head to this session's successfully pushed result; preserve the same scope and check the new SHA. If a resolution changed a file whose categories (the pr-risk path classification, not its directory) are neither `tests` nor `docs`, or a lockfile by hand, the verdict is human: once CI is green, `handoff` with `conflict resolved in code` (no gate, judge or merge).
 
 ## Handoff
 
