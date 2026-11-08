@@ -82,7 +82,7 @@ def test_outside_a_git_worktree_git_errors_are_reported(tmp_path, monkeypatch, c
     assert code == 3 and "git status failed" in out
 
 
-def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path, monkeypatch):
+def test_models_file_checks_configuration_without_runtime_availability(repo, capsys, tmp_path, monkeypatch):
     repo(t01=ticket("01"))
     monkeypatch.setattr(driver_agents.shutil, "which", lambda cli: None if cli == "codex" else cli)
     models = tmp_path.parent / f"{tmp_path.name}-models.json"
@@ -90,8 +90,7 @@ def test_models_file_checks_the_first_entry_of_each_role(repo, capsys, tmp_path,
     claude = {"reviewer": ["claude-opus-5-5@medium"], "final-reviewer": ["claude-opus-5-5@medium"]}
     models.write_text(json.dumps({"implementer": ["openai/gpt-sol@medium"], **claude, "fixer": ["other/x@low"]}))
     assert run(capsys, "--models", str(models)) == (
-        3, "implementer: codex is not on PATH (model entry openai/gpt-sol@medium)\n"
-           "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n"
+        3, "fixer: model entry other/x@low names an unknown provider (known: anthropic, openai)\n"
            "implementer: a second implementer model entry is required for fix round 2\n")
 
 

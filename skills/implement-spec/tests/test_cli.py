@@ -223,13 +223,16 @@ def test_dirty_worktree_exits_3_naming_the_paths(env, tmp_path):
     assert "demo/export.py" in proc.stdout and "notes.txt" in proc.stdout
 
 
-def test_models_file_naming_a_provider_without_its_cli_exits_3(env, tmp_path):
-    (tmp_path / "bin/codex").unlink()
+def test_dry_run_checks_models_without_requiring_provider_clis(env, tmp_path):
+    for cli in ("claude", "codex"):
+        (tmp_path / f"bin/{cli}").unlink()
     repo = make_repo(tmp_path / "demo", three())
     models = models_file(tmp_path, implementer=["openai/gpt-sol@medium"])
+    before = snapshot(repo)
     proc = drive(env, repo, "--tickets", ".agent/tickets", "--gate", "make check", "--fast-gate", "make check", "--models", str(models), "--dry-run")
-    assert proc.returncode == 3, proc.stderr
-    assert any("implementer" in l and "codex" in l for l in proc.stdout.splitlines())
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "max frontier width" in proc.stdout
+    assert_untouched(proc, repo, before, tmp_path)
 
 
 def test_one_implementer_model_is_rejected_before_any_agent(env, tmp_path):

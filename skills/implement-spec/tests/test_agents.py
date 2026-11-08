@@ -341,6 +341,39 @@ def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_thei
     assert launches(w.tmp, "claude"), "the first agent starts on Anthropic"
 
 
+def test_a_missing_first_cli_uses_the_available_reviewer_and_discloses_the_fallback(env):
+    opus, unavailable = "anthropic/claude-opus-5@medium", "openai/gpt-astra@medium"
+    w = World(env, reviewer=[unavailable, opus], **{"final-reviewer": [unavailable, opus]})
+    (w.tmp / "bin/codex").unlink()
+    report = dict(status="DONE", files=[], concerns=[], findings=[])
+    (w.tmp / "bin/claude").write_text(f"""#!{sys.executable}
+import re, sys
+from pathlib import Path
+prompt = sys.stdin.read()
+if "implement-spec preflight" not in prompt:
+    Path(re.search(r"JSON report at (\\S+?)\\.? ", prompt).group(1)).write_text({json.dumps(report)!r})
+""")
+    proc = w.run(None, "--only", "reviewer", runner=False)
+    ok(proc)
+    assert "codex is not on PATH" in proc.stdout
+    assert "the correctness lens and the scoped review run on" in w.ledger()
+    assert f"{opus}, the implementer's provider" in w.ledger()
+    assert f"reviewer ran on {opus}" in w.ledger()
+    assert json.loads((w.repo / ".agent/implement/01/reviewer-0.json").read_text()) == report
+
+
+def test_a_missing_cli_with_no_reviewer_fallback_fails_before_any_agent(env):
+    unavailable = "openai/gpt-astra@medium"
+    w = World(env, reviewer=[unavailable])
+    (w.tmp / "bin/codex").unlink()
+    proc = w.run(None, runner=False)
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert (f"reviewer: every model entry failed the preflight: model entry {unavailable}: codex is not on PATH"
+            in proc.stdout.splitlines())
+    assert not launches(w.tmp, "claude") and not launches(w.tmp, "codex")
+    assert "ticket/feat%2Fcsv/01" not in git(w.repo, "branch", "--list")
+
+
 def test_a_cli_that_fails_with_no_report_stops_the_run_with_exit_4_and_the_same_command_resumes(env):
     """Stop and ask: the first CLI failure stops the run, with no rerun on another entry of the list."""
     w = World(env, refactor=True)

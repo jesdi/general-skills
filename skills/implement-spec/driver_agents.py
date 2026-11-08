@@ -65,15 +65,13 @@ def split(entry: str) -> tuple[str, str, str]:
     return provider, model, effort
 
 
-def _entry_error(role: str, entry: str, first: bool) -> str | None:
+def _entry_error(role: str, entry: str) -> str | None:
     provider, model, effort = split(entry)
     if provider not in PROVIDERS:
         return f"{role}: model entry {entry} names an unknown provider (known: {', '.join(PROVIDERS)})"
-    cli, efforts = PROVIDERS[provider]
+    _, efforts = PROVIDERS[provider]
     if not model or effort not in efforts:
         return f"{role}: model entry {entry} needs a model and an effort from {', '.join(efforts)}"
-    if first and not shutil.which(cli):
-        return f"{role}: {cli} is not on PATH (model entry {entry})"
     return None
 
 
@@ -156,10 +154,7 @@ def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:
 
 def _entry_errors(models: dict[str, list[str]]) -> list[str]:
     """Every entry error of the merged lists."""
-    # The entries whose CLI must be on PATH; `_layer` gave each role a non-empty list.
-    first = {(role, entries[0]) for role, entries in models.items()} | {
-        ("final-reviewer", other_provider_entry(models))}
-    found = [_entry_error(role, entry, (role, entry) in first) for role, entries in models.items() for entry in entries]
+    found = [_entry_error(role, entry) for role, entries in models.items() for entry in entries]
     if len(models["implementer"]) < 2:
         found.append("implementer: a second implementer model entry is required for fix round 2")
     return [error for error in found if error]
