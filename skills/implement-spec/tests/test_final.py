@@ -420,7 +420,8 @@ def test_a_conflict_with_the_fetched_base_runs_the_conflict_agent_once_then_the_
     rig = conflicted
     assert rig.code == 0, rig.output()
     (call,) = rig.final_calls("conflict")
-    (gate,) = [g for g in rig.gates() if g["commit"] == call["sha"]]
+    (gate,) = rig.gates("full")
+    assert gate["commit"] == rig.branch()
     assert gate["t0"] >= call["t1"], "the gate follows the resolution"
     base = ref(rig.origin, "refs/heads/main")
     git(rig.repo, "merge-base", "--is-ancestor", base, "feat/csv")
