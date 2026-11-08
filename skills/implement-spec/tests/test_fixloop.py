@@ -663,7 +663,7 @@ def test_legacy_red_landing_round_resumes_without_another_landing_gate(tmp_path,
 
     def old_landing(ticket, slot, run, may_resolve):
         landing = real(ticket, slot, run, may_resolve)
-        record = f".agent/implement/{ticket.number}/legacy-full-gate.log"
+        record = f".agent/implement/{ticket.number}/gate-full-{landing.commit[:7]}.log"
         (rig.repo / record).write_text("legacy full gate failure\n")
         found = [{"severity": "critical", "kind": "code", "source": "gate", "file": record,
                   "line": 0, "title": "legacy landing failure", "evidence": record}]
@@ -683,6 +683,7 @@ def test_legacy_red_landing_round_resumes_without_another_landing_gate(tmp_path,
     assert [call["role"] for call in rig.calls("01")] == [
         "test-writer", "implementer", "reviewer", "fixer", "reviewer"]
     assert rig.state()["tickets"]["01"]["round"] == 1
+    assert f"gate-full-{entry['landing'][:7]}.log" in rig.prompt("fixer-1")
     assert all(gate["branch"] == "feat/csv" for gate in rig.gates("full"))
 
 
