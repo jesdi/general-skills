@@ -116,3 +116,70 @@ def test_a_locked_index_does_not_report_a_slot_released(repo, tmp_path):
     Path(index).touch()
     assert not driver_slots.release(slot)
     assert driver_slots.on_branch(slot) == 'ticket/held'
+
+
+def test_registry_operations_coordinate_across_processes_and_linked_checkouts(repo, tmp_path):
+    import sys
+    from pathlib import Path
+    import pytest
+
+    repo()
+    other = tmp_path.parent / f"{tmp_path.name}-linked"
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(other)], check=True)
+    unrelated = tmp_path.parent / f"{tmp_path.name}-independent"
+    subprocess.run(["git", "clone", "-q", "--no-hardlinks", str(tmp_path), str(unrelated)], check=True)
+    program = r'''
+import subprocess, sys
+sys.path.insert(0, sys.argv[1])
+import driver_slots
+real_run = subprocess.run
+mode = sys.argv[2]
+def pause_add(command, *args, **kwargs):
+    if "worktree" in command and "add" in command:
+        print("holding registration", flush=True)
+        sys.stdin.readline()
+    return real_run(command, *args, **kwargs)
+if mode == "add":
+    driver_slots.subprocess.run = pause_add
+    result = driver_slots.git(".", "worktree", "add", "-q", "--detach", ".agent/worktrees/new")
+else:
+    print("requesting checkout", flush=True)
+    result = driver_slots.git(".", "checkout", "-q", "--detach")
+print(result.stderr, flush=True)
+sys.exit(result.returncode)
+'''
+    command = [sys.executable, "-u", "-c", program, str(Path(driver_slots.__file__).parent)]
+    add = subprocess.Popen([*command, "add"], cwd=tmp_path, stdin=subprocess.PIPE,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    checkout = None
+    try:
+        assert add.stdout.readline().strip() == "holding registration"
+        checkout = subprocess.Popen([*command, "checkout"], cwd=other, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
+        assert checkout.stdout.readline().strip() == "requesting checkout"
+        with pytest.raises(subprocess.TimeoutExpired):
+            checkout.communicate(timeout=0.2)
+        # Read-only commands do not wait on worktree registration.
+        probe = "import sys; sys.path.insert(0, sys.argv[1]); import driver_slots; print(driver_slots.head('.'))"
+        read = subprocess.run([sys.executable, "-c", probe, str(Path(driver_slots.__file__).parent)],
+                              cwd=tmp_path, capture_output=True, text=True, timeout=5)
+        assert read.returncode == 0 and read.stdout.strip(), read.stderr
+        independent = subprocess.run([*command, "checkout"], cwd=unrelated, capture_output=True, text=True, timeout=5)
+        assert independent.returncode == 0, independent.stderr
+        add.stdin.write("continue\n")
+        add.stdin.flush()
+        out, err = add.communicate(timeout=5)
+        assert add.returncode == 0, out + err
+        out, err = checkout.communicate(timeout=5)
+        assert checkout.returncode == 0, out + err
+    finally:
+        for process in (add, checkout):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate()
+
+
+def test_git_without_a_command_still_returns_gits_usage_error(repo):
+    repo()
+    result = driver_slots.git(".")
+    assert result.returncode != 0 and "usage: git" in result.stdout + result.stderr

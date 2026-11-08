@@ -4,6 +4,7 @@ Every path is relative to the PR worktree, which is the driver's working directo
 """
 from __future__ import annotations
 
+import fcntl
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,18 @@ class PreparationError(RuntimeError):
 
 def git(slot: str, *args: str) -> subprocess.CompletedProcess[str]:
     # core.quotePath off: git prints a path with a non-ASCII name as it is, so it equals the path that a report names.
-    return subprocess.run(["git", "-C", slot, "-c", "core.quotePath=false", *args], capture_output=True, text=True)
+    command = ["git", "-C", slot, "-c", "core.quotePath=false", *args]
+    if not args or args[0] not in ("checkout", "switch", "branch", "worktree"):
+        return subprocess.run(command, capture_output=True, text=True)
+    # These commands mutate or scan the shared registry. Git exposes a temporarily empty
+    # commondir while adding a checkout; another checkout can otherwise fail reading it.
+    common = subprocess.run(["git", "-C", slot, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True)
+    if common.returncode:
+        return common
+    with (Path(common.stdout.strip()) / "implement-spec-worktrees.lock").open("a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        return subprocess.run(command, capture_output=True, text=True)
 
 
 def names(listing: str) -> list[str]:

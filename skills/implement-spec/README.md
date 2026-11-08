@@ -81,6 +81,7 @@ Everything is under `.agent/`, which is never committed.
 |---|---|
 | `.agent/implement/state.json` | The resume contract: the run record and one record for each ticket (`driver_state.py`). |
 | `<git common directory>/implement-spec/<key>.lock` | An empty file, not in the worktree. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
+| `<git common directory>/implement-spec-worktrees.lock` | Shared by driver processes for `worktree`, `checkout`, `switch` and `branch` commands, so a checkout never reads another driver's half-written registration. Held only during that Git command, never during preparation, agents or gates. Git commands outside the driver do not participate. |
 | `.agent/implement/ledger.md` | One plain sentence for each event. Only the driver writes it, and it reads no fact from it. |
 | `.agent/implement/summary.md` | The result in sentences, and the measurement table: fast gates and full gates, agents, wall time, fix rounds, human stops, cost. |
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |

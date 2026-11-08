@@ -1126,3 +1126,47 @@ def test_resume_reports_all_saved_state_errors_without_starting_an_agent(repo, t
         ".agent/implement/state.json: ticket 01 has the unknown phase 'polish'",
         ".agent/implement/state.json: ticket 02 has the unknown phase 'ship'",
     ]
+
+
+def test_parallel_checkout_waits_for_worktree_registration_to_finish(repo, tmp_path, capsys, monkeypatch):
+    """Pause Git at its visible-but-incomplete registry entry while the other ticket starts."""
+    import shutil
+    import threading
+    import driver_slots
+
+    two(repo)
+    partial, checked = threading.Event(), threading.Event()
+    real_run, real_ticket = subprocess.run, driver._run_ticket
+    failures = []
+
+    def ticket_after_registration_starts(ticket, slot, run):
+        if slot == 1:
+            assert partial.wait(5), "slot 2 was never registered"
+        return real_ticket(ticket, slot, run)
+
+    def paused_git(argv, *args, **kwargs):
+        if argv[0] == "git" and "worktree" in argv and "add" in argv:
+            metadata = tmp_path / ".git/worktrees/slot-2"
+            metadata.mkdir(parents=True)
+            checkout = tmp_path / ".agent/worktrees/slot-2"
+            checkout.mkdir(parents=True)
+            (checkout / ".git").write_text(f"gitdir: {metadata}\n")
+            (metadata / "gitdir").write_text(str(checkout / ".git") + "\n")
+            (metadata / "HEAD").write_text(out_of("git", "rev-parse", "feat/x") + "\n")
+            (metadata / "commondir").touch()  # open(O_CREAT) precedes Git writing ../..
+            partial.set()
+            checked.wait(1)
+            shutil.rmtree(metadata)
+            shutil.rmtree(checkout)
+        result = real_run(argv, *args, **kwargs)
+        if argv[0] == "git" and "checkout" in argv and "ticket/feat%2Fx/01" in argv:
+            if result.returncode:
+                failures.append(result.stderr)
+            checked.set()
+        return result
+
+    monkeypatch.setattr(driver, "_run_ticket", ticket_after_registration_starts)
+    monkeypatch.setattr(driver_slots.subprocess, "run", paused_git)
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT)
+    assert code == 0, out + "\n" + "\n".join(failures)
+    assert failures == []
