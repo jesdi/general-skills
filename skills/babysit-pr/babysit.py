@@ -844,7 +844,7 @@ def handoff(repo, number, reason, ci, rounds, gate, judge_line, fix_log, extra="
 
 
 def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, session=None, base=None,
-              judge_risk=None):
+              judge_risk=None, session_approved=False):
     pr = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
     if base not in (None, pr["base"]["ref"]):
         fail(f"--base {base} is not the PR's base {pr['base']['ref']}")
@@ -861,7 +861,7 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
         fail(f"origin/{base} is {tip[:7]} but the PR's base is {pr['base']['sha'][:7]}: fetch and gate again")
     gate = "gate: passed"
     judge_line = f"judge: {judge_label}"
-    op = hashlib.sha256(f"{sha} {judge_label} {approved}".encode()).hexdigest()[:12]
+    op = hashlib.sha256(f"{sha} {judge_label} {approved} {session_approved}".encode()).hexdigest()[:12]
 
     def stop(reason, extra=""):
         handoff(repo, number, reason, "green", None, gate, judge_line, "(none)", extra, session, f"{op}-{reason}")
@@ -869,7 +869,14 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
 
     if pr["head"]["sha"] != sha:
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
-    if approved is None:
+    if session_approved:
+        own_lease(repo, number, session)
+        gate = "gate: explicit session authorization"
+        judge_line = f"session {session} authorized merge"
+        found = owner_comments(repo, number)
+        if found["handoff"]:
+            stop(found["handoff"])
+    elif approved is None:
         if judge_label not in ("agree", "same-model agree"):
             stop(f"judge {judge_label}")
         mr = load_merge_risk(base)
@@ -937,6 +944,7 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
         stop(f"merge blocked: {'approval required' if 'approv' in err.lower() else err}")
     pr = Pr(repo, number)
     pr.post("🤖 Merged by babysit-pr: " + (
+        f"session {session} authorized merge at {sha}" if session_approved else
         f"{risk_line}gate passed, judge {judge_label}" if approved is None else f"owner approved {approved}"))
     if session:
         release(pr, session)
@@ -982,6 +990,8 @@ def main():
     mg.add_argument("--judge")
     mg.add_argument("--judge-risk", type=int, choices=range(1, 11), metavar="1-10")
     mg.add_argument("--approved-sha")
+    mg.add_argument("--session-approved", action="store_true",
+                    help="the user explicitly instructed this session to merge this PR")
     mg.add_argument("--base")
     for p in (mg, hp):
         p.add_argument("--session", help="release this session's lease")
@@ -1002,9 +1012,14 @@ def main():
     elif a.cmd == "merge-method":
         print(json.dumps({"method": merge_method(a.repo, a.pr, a.policy)}))
     elif a.cmd == "merge":
-        if not (a.judge or a.approved_sha):
-            ap.error("merge needs --judge or --approved-sha")
-        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session, a.base, a.judge_risk)
+        if a.session_approved and not a.session:
+            ap.error("--session-approved needs --session")
+        if a.session_approved and (a.approved_sha or a.judge or a.judge_risk):
+            ap.error("--session-approved cannot be combined with --approved-sha or --judge/--judge-risk")
+        if not (a.judge or a.approved_sha or a.session_approved):
+            ap.error("merge needs --judge, --approved-sha or --session-approved")
+        merge_cmd(a.repo, a.pr, a.sha, a.body, a.policy, a.judge, a.approved_sha, a.session, a.base,
+                  a.judge_risk, a.session_approved)
     elif a.cmd == "handoff":
         handoff(a.repo, a.pr, a.reason, a.ci, a.rounds, a.gate, a.judge, Path(a.fix_log).read_text(), session=a.session)
     elif a.cmd == "update-plan":
