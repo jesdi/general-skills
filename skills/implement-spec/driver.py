@@ -191,19 +191,39 @@ def _refuse_breach(number: str, run: Run, landing: _Landing) -> None:
     `retry` runs the implementer
     again, whose locked-file check names the file until the ticket branch leaves it as the merge base has it."""
     if errors := driver_locked.landing_errors(run.state.read()["tickets"], number, landing.pr_tip, landing.commit):
-        error = "; ".join(errors)
-        run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE),
-                retry_point("implementer", landing.ticket_tip, 0))
-        raise Blocked(error)
+        _block_landing(number, run, landing.ticket_tip, "; ".join(errors))
+
+
+def _block_landing(number: str, run: Run, tip: str, error: str) -> None:
+    run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE),
+            retry_point("implementer", tip, 0))
+    raise Blocked(error)
+
+
+def _landing_slot(number: str, slot: str, run: Run, tip: str) -> None:
+    """Keep cheap checkout/cleanliness safeguards and their retry handoff outside the full gate."""
+    branch = run.names.ticket(number)
+    if driver_slots.on_branch(slot) != branch or driver_slots.head(slot) != tip:
+        _block_landing(number, run, tip, f"the landing slot is no longer on {branch} at {tip[:7]}")
+    status = git(slot, "status", "--porcelain")
+    if status.returncode:
+        _block_landing(number, run, tip, f"cannot inspect the landing slot: {status.stderr.strip()}")
+    if status.stdout:
+        _block_landing(number, run, tip, f"the landing slot has uncommitted work: {status.stdout.strip()}")
 
 
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> _Landing:
     """The reviewed commit to land, with locked-file invariants checked. Call it under the merge lock."""
     number = ticket.number
     # An earlier try left the slot on its merge commit.
-    git(slot, "checkout", "-q", run.names.ticket(number))
+    branch = run.names.ticket(number)
     tip = run.state.ticket(number, phase="merge")["tip"]
+    checkout = git(slot, "checkout", "-q", branch)
+    if checkout.returncode:
+        _block_landing(number, run, tip, f"the landing checkout failed: {checkout.stderr.strip()}")
+    _landing_slot(number, slot, run, tip)
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
+    _landing_slot(number, slot, run, landing.ticket_tip)
     _refuse_breach(number, run, landing)
     return landing
 

@@ -265,9 +265,13 @@ def cli(text):
     return f"def main():\n    return {text!r}\n"
 
 
-def conflicted(tmp, moves_again=False):
+def conflicted(tmp, moves_again=False, dirty=False):
     """01 and 03 both add demo/cli.py; 03 merges first, so 01's merge conflicts."""
     rig = Review(tmp, {k: v for k, v in three().items() if not k.startswith("02")})
+    if dirty:
+        runner = rig.rig / "run-agent"
+        runner.write_text(runner.read_text().replace('if step.get("report") is not None:',
+            'if role == "conflict": Path("leftover.txt").write_text("uncommitted work")\nif step.get("report") is not None:'))
     resolve = {"files": {"demo/cli.py": cli("resolved")}, "commit": "merge: resolve cli",
                "report": {"status": "DONE", "commits": ["$SHA"], "files": ["demo/cli.py"], "concerns": []}}
     if moves_again:  # while the agent works, another commit lands on the PR branch and changes the same file
@@ -301,3 +305,12 @@ def test_a_second_conflict_on_the_same_merge_blocks_the_ticket(tmp_path):
     assert len(rig.calls("01", "conflict")) == 1
     assert rig.led("01", "BLOCKED") and rig.state()["tickets"]["01"]["phase"] == "blocked"
     assert rig.state()["tickets"]["03"]["phase"] == "merged"
+
+
+def test_conflict_resolution_with_uncommitted_work_does_not_land(tmp_path):
+    rig = conflicted(tmp_path, dirty=True)
+    assert rig.state()["tickets"]["01"]["phase"] == "blocked", rig.output()
+    assert len(rig.calls("01", "conflict")) == 1
+    assert not rig.gates("full")
+    assert rig.led("uncommitted", "BLOCKED")
+    assert "ticket/feat%2Fcsv/01" in rig.branches()

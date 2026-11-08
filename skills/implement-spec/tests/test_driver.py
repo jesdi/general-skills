@@ -1147,3 +1147,20 @@ def test_parallel_checkout_waits_for_worktree_registration_to_finish(repo, tmp_p
     code, _, out = walk(tmp_path, capsys, WORK + REPORT)
     assert code == 0, out + "\n" + "\n".join(failures)
     assert failures == []
+
+
+def test_failed_landing_checkout_blocks_before_the_local_merge(repo, tmp_path, capsys):
+    repo(t01=ticket("01", **REFACTOR))
+    start = out_of("git", "rev-parse", "feat/x")
+    gate = 'touch "$(git rev-parse --git-dir)/index.lock"'
+    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT, gate=gate)
+    assert code == 2, out
+    assert state_of(tmp_path)["tickets"]["01"]["phase"] == "blocked"
+    assert out_of("git", "rev-parse", "feat/x") == start
+    assert "| full gates run | 0 |" in out
+    assert any("landing checkout failed" in line for line in ledger)
+    (tmp_path / ".git/index.lock").unlink()
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT, "--answer", "01-ticket-blocked-1=retry")
+    assert code == 0, out
+    assert state_of(tmp_path)["tickets"]["01"]["phase"] == "merged"
+    assert "| full gates run | 1 |" in out
