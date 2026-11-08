@@ -68,13 +68,15 @@ KINDS = {
     # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
     "ticket-blocked": Kind(
         "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding is open: {subject}",
-        "An agent ran two times, the second time on the next entry of its model list, and stopped or was rejected "
-        "both times; or the scoped review after the fix batch of the final review left a finding open. {owner} is "
+        "An agent ran two times, using the same model for a timeout or moved branch and the next entry otherwise, "
+        "and stopped or was rejected both times; or the scoped review after the fix batch of the final review left "
+        "a finding open. {owner} is "
         "BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
         "retry",
         {"retry": Option(
-            "The role runs again on its first entry from the tip the ticket left, with its one rerun on the next "
-            "entry; for an open final-review finding, one more fix batch and scoped review run.",
+            "The role runs again on its first entry from the tip the ticket left, with one rerun (the same model "
+            "for a timeout or moved branch, the next entry otherwise); for an open final-review finding, "
+            "one more fix batch and scoped review run.",
             "Ruling: {ticket} runs again (retry): {subject}.", True),
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",

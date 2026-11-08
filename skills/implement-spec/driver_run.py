@@ -319,11 +319,9 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
     run.ask(call.number, "ticket-blocked", [f"the {call.role}: {error}"], str(report), resume)
 
 
-def _give_up(run: Run, call: Call, report: Path, error: str, same: bool) -> NoReturn:
-    """After the rerun failed too: Blocked, with a `ticket-blocked` question when the agent stopped or was
-    rejected."""
-    if not same:
-        _ask_blocked(run, call, report, error)
+def _give_up(run: Run, call: Call, report: Path, error: str) -> NoReturn:
+    """Every exhausted rerun asks before another attempt, including timeouts and moved branches."""
+    _ask_blocked(run, call, report, error)
     raise Blocked(error)
 
 
@@ -403,4 +401,4 @@ def _attempts(run: Run, call: Call) -> dict:
         if code is None:
             minutes *= 2
         entry = entry if same else rerun_on
-    _give_up(run, call, report, error, same)
+    _give_up(run, call, report, error)
