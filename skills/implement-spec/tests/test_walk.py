@@ -314,11 +314,15 @@ def test_prepare_runs_once_in_slot_2_and_the_slot_is_reused(tmp_path):
     assert (rig.slot2 / "node_modules").is_symlink() and all(g["status"] == "" for g in rig.gates())
 
 
-def test_failing_prepare_exits_3_before_any_agent_naming_slot_and_command(tmp_path):
+def test_failing_prepare_exits_3_after_running_tickets_finish_naming_slot_and_command(tmp_path):
     rig = Rig(tmp_path).run(plan(), "--prepare", "false")
     assert rig.code == 3, rig.output()
     assert re.search(r"slot[- ]?2", rig.out + rig.err) and "false" in rig.out + rig.err
-    assert not rig.calls() and not rig.gates()
+    assert {call["nn"] for call in rig.calls()} == {"01"}
+    assert rig.gates() and not rig.slot2.exists()
+    assert git(rig.repo, "symbolic-ref", "--short", "HEAD").strip() == "feat/csv"
+    rig.run(plan())
+    assert rig.code == 0, rig.output()
 
 
 def test_a_fast_forward_merge_has_one_fast_and_one_full_record_of_the_ticket_tip(tmp_path):

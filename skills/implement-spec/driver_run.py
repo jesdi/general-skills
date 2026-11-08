@@ -336,6 +336,7 @@ def _files(folder: Path, role: str, fix_round: int, name: str) -> tuple[Path, Pa
 def _first_prompt(template: str, values: dict[str, str], notes: tuple | list, report: str) -> str:
     """The template of the role, then the lines of each `notes` template and the ending of the prompt again."""
     text = driver_agents.render(template, {**values, "report": report})
+    text = text.replace("\n\n", "\n\n" + driver_agents.render("workspace", {}), 1)
     if notes:
         text += "".join(driver_agents.render(note, values) for note in notes) + driver_agents.tail(text, report)
     return text

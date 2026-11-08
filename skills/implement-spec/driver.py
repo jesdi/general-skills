@@ -323,15 +323,27 @@ def _take_slot(number: str, kept: dict, free: list[int]) -> int:
     return slot
 
 
+def _prepare_slot(number: int, prepared: set[int], run: Run) -> None:
+    """Create a worker checkout only when first assigned; keep its dependencies for later tickets."""
+    if number in prepared:
+        return
+    if error := driver_slots.create(number, run.args.prepare, number in run.kept.values(), start=run.tip()):
+        raise driver_slots.PreparationError(error)
+    prepared.add(number)
+
+
 def _walk(tickets: list[Ticket], slots: int, run: Run, pool: ThreadPoolExecutor) -> None:
     """Start each ready ticket in the lowest free slot, and look again each time a ticket ends."""
     kept, told = dict(run.kept), set()  # a kept slot waits for its ticket
     free = [slot for slot in range(1, slots + 1) if slot not in kept.values()]
     running: dict = {}  # future -> (ticket number, slot number)
+    prepared = {1} | {number for number in range(2, slots + 1)
+                      if Path(driver_slots.path(number), ".git").exists()}
 
     def start_ready() -> None:
         while (ticket := _next_ticket(tickets, running, told, run, kept)) and (ticket.number in kept or free):
             slot = _take_slot(ticket.number, kept, free)
+            _prepare_slot(slot, prepared, run)
             running[pool.submit(_run_ticket, ticket, slot, run)] = (ticket.number, slot)
 
     while True:
@@ -401,11 +413,11 @@ def _resume_error(number: str, state: driver_state.State) -> str:
 
 
 def _resume(tickets: list[Ticket], state: driver_state.State, pr: str, slots: int, args, kept: dict) -> list[str]:
-    """Start or resume state.json on the PR branch `pr` and make the slots: the errors that stop the run."""
+    """Start or resume state.json on the PR branch `pr` and check existing slots: the errors that stop the run."""
     state.start(pr, [ticket.number for ticket in tickets])
     driver_final.finish_interrupted_move(state, pr)
     errors = [error for error in (_resume_error(ticket.number, state) for ticket in tickets) if error]
-    return errors or driver_slots.setup(slots, args.prepare, set(kept.values()))
+    return errors or driver_slots.setup(slots, args.prepare, set(kept.values()), existing_only=True)
 
 
 def _publish_questions(run: dict) -> str:
@@ -509,15 +521,18 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str]
     slots = 1 if args.only else min(args.parallel, len(tickets))
     errors = _resume(tickets, state, pr, slots, args, kept)
     errors = errors or _apply_answers(state, args)
-    for error in errors:
-        print(error)
     if errors:
+        print("\n".join(errors))
         return 3
     run = Run(args, models, state, pr, kept)
     _record_skipped(skipped)
     if args.unattended and args.stage_json:
         Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
-    end_blocked, lines = _work(tickets, slots, run)
+    try:
+        end_blocked, lines = _work(tickets, slots, run)
+    except driver_slots.PreparationError as error:
+        print(f"implement-spec: {error}; fix slot preparation and run the same command to resume")
+        return 3
     final = state.read()
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)

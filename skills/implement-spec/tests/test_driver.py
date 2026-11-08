@@ -240,6 +240,7 @@ def test_a_rerun_prompt_holds_only_template_lines_and_keeps_its_ending(repo, tmp
     ending = first[first.index("\nWrite one JSON report"):]
     line = (driver_report.PROMPTS / "timeout.md").read_text().replace("{minutes}", "0.005")
     assert "timed out" in line and "in the tree" in line
+    first = first.replace("\n\n", "\n\n" + driver_agents.render("workspace", {}), 1)
     assert prompt == first + line + ending
 
 
@@ -509,10 +510,15 @@ def test_a_tree_that_is_not_clean_is_a_red_gate_and_the_slot_keeps_the_work(repo
 
 def test_a_failing_prepare_stops_the_run_and_removes_the_slot(repo, tmp_path, capsys):
     two(repo)
-    code, ledger, out = walk(tmp_path, capsys, "exit 9\n", "--prepare", "echo no-deps >&2; false")
-    assert (code, ledger) == (3, [])
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT, "--prepare", "echo no-deps >&2; false")
+    assert code == 3
     assert "slot 2: --prepare `echo no-deps >&2; false` exited 1 in .agent/worktrees/slot-2: no-deps" in out
     assert not (tmp_path / ".agent/worktrees/slot-2").exists() and branches() == ["feat/x"]
+    assert state_of(tmp_path)["tickets"]["01"]["phase"] == "merged"  # already running work finishes
+    assert state_of(tmp_path)["tickets"]["02"]["phase"] == "pending"
+    assert all(line.startswith("01 ") for line in Path(f"{tmp_path}-runner.calls").read_text().splitlines())
+    assert out_of("git", "symbolic-ref", "--short", "HEAD") == "feat/x"
+    assert walk(tmp_path, capsys, WORK + REPORT)[0] == 0  # same state resumes safely
 
 
 def test_a_touches_overlap_holds_the_second_ticket_and_the_ledger_says_why(repo, tmp_path, capsys):
@@ -1004,3 +1010,55 @@ def test_last_words_takes_the_result_of_a_stream_json_line(tmp_path):
     log.write_text("ERROR: plain\n")
     assert driver_agents.last_words(log) == "ERROR: plain"
     assert driver_agents.last_words(tmp_path / "none.log") == "no output"
+
+
+def test_a_serial_chain_uses_only_the_existing_checkout(repo, tmp_path, capsys):
+    two(repo, second="01")
+    log = tmp_path.parent / f"{tmp_path.name}-prepare.log"
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT, "--prepare", f"pwd >> {log}")
+    assert code == 0, out
+    assert not log.exists()
+    assert not (tmp_path / '.agent/worktrees/slot-2').exists()
+    calls = Path(f"{tmp_path}-runner.calls").read_text().splitlines()
+    assert {line.split()[1] for line in calls} == {str(tmp_path.resolve())}
+
+
+def test_a_completed_resume_does_not_recreate_unused_slots(repo, tmp_path, capsys):
+    two(repo)
+    log = tmp_path.parent / f"{tmp_path.name}-prepare.log"
+    assert walk(tmp_path, capsys, WORK + TOGETHER + REPORT, "--prepare", f"pwd >> {log}")[0] == 0
+    subprocess.run(['git', 'worktree', 'remove', '.agent/worktrees/slot-2'], check=True)
+    code, _, out = walk(tmp_path, capsys, 'exit 9\n', '--prepare', f'pwd >> {log}')
+    assert code == 0, out
+    assert len(log.read_text().splitlines()) == 1
+    assert not (tmp_path / '.agent/worktrees/slot-2').exists()
+
+
+def test_lazy_preparation_uses_the_pr_tip_not_a_running_tickets_commit(repo, tmp_path):
+    from types import SimpleNamespace
+    repo()
+    pr_tip = out_of('git', 'rev-parse', 'HEAD')
+    subprocess.run(['git', 'checkout', '-qb', 'ticket/running'], check=True)
+    (tmp_path / 'running-ticket-dependency').write_text('not merged\n')
+    subprocess.run(['git', 'add', 'running-ticket-dependency'], check=True)
+    subprocess.run(['git', 'commit', '-qm', 'running ticket'], check=True)
+    run = SimpleNamespace(args=SimpleNamespace(prepare='test ! -e running-ticket-dependency'), kept={},
+                          tip=lambda: pr_tip)
+    driver._prepare_slot(2, {1}, run)
+    assert out_of('git', '-C', '.agent/worktrees/slot-2', 'rev-parse', 'HEAD') == pr_tip
+
+
+def test_resume_reports_all_saved_state_errors_without_starting_an_agent(repo, tmp_path, capsys):
+    two(repo)
+    state = driver_state.State(tmp_path / '.agent/implement/state.json')
+    state.start('feat/x', ['01', '02'])
+    state.ticket('01', phase='polish')
+    state.ticket('02', phase='ship')
+    started = tmp_path.parent / f'{tmp_path.name}-agent-started'
+    code, _, out = walk(tmp_path, capsys, f'touch {started}; exit 9\n')
+    assert code == 3 and not started.exists()
+    errors = [line for line in out.splitlines() if 'unknown phase' in line]
+    assert errors == [
+        ".agent/implement/state.json: ticket 01 has the unknown phase 'polish'",
+        ".agent/implement/state.json: ticket 02 has the unknown phase 'ship'",
+    ]
