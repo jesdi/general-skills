@@ -343,7 +343,7 @@ def test_a_model_the_account_cannot_use_is_skipped_and_its_roles_go_on_with_thei
 
 def test_a_missing_first_cli_uses_the_available_reviewer_and_discloses_the_fallback(env):
     """No fake runner, so the driver launches the CLI itself: `bin/claude` is a stub on the restricted PATH of `env`
-    that writes the reviewer's report, never the real claude."""
+    that logs its argv like the `env` fakes and writes the reviewer's report, never the real claude."""
     opus, unavailable = "anthropic/claude-opus-5@medium", "openai/gpt-astra@medium"
     w = World(env, reviewer=[unavailable, opus], **{"final-reviewer": [unavailable, opus]})
     (w.tmp / "bin/codex").unlink()
@@ -353,11 +353,16 @@ import re, sys
 from pathlib import Path
 prompt = sys.stdin.read()
 if "implement-spec preflight" not in prompt:
+    with open({str(w.tmp / "argv-claude")!r}, "a") as log:
+        log.write("".join(arg + "\\0" for arg in sys.argv[1:]) + "\\x1e")
     Path(re.search(r"JSON report at (\\S+?)\\.? ", prompt).group(1)).write_text({json.dumps(report)!r})
 """)
     proc = w.run(None, "--only", "reviewer", runner=False)
     ok(proc)
     assert "codex is not on PATH" in proc.stdout
+    argvs = launches(w.tmp, "claude")
+    assert argvs and all(value_after(argv, "--model") == "claude-opus-5" for argv in argvs), argvs
+    assert not launches(w.tmp, "codex")
     assert "the correctness lens and the scoped review run on" in w.ledger()
     assert f"{opus}, the implementer's provider" in w.ledger()
     assert f"reviewer ran on {opus}" in w.ledger()
