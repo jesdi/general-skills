@@ -13,11 +13,6 @@ from driver_run import FINAL, FINAL_RESUME, OUT, Blocked, Run
 RETRY_SUBJECT = 'the full integration gate remains red after its repair'
 
 
-def _allowance(state: dict) -> int:
-    return 1 + sum(q['ticket'] == FINAL and q['subject'].startswith(RETRY_SUBJECT)
-                   and q['answer'] == 'retry' for q in state['run']['questions'])
-
-
 def failure(run: Run, tip: str) -> str:
     """Return a repairable red record, empty for green, or park at the repair cap."""
     state = run.state.read()
@@ -28,9 +23,10 @@ def failure(run: Run, tip: str) -> str:
     if not record:
         return ''
     run.state.update(lambda s: s['run']['final'].update(gate_failure=dict(tip=tip, record=record)))
-    if final['gate_repairs'] >= _allowance(state):
+    if final['gate_repairs'] >= final['gate_allowance']:
         subject = f'{RETRY_SUBJECT}: {tip[:7]}; read {record}'
-        run.ask(FINAL, 'ticket-blocked', [subject], record, FINAL_RESUME)
+        run.ask(FINAL, 'ticket-blocked', [subject], record, FINAL_RESUME._replace(
+            gate_allowance=final['gate_repairs'] + 1))
         raise Blocked(subject)
     return record
 

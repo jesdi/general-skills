@@ -2,7 +2,7 @@
 
 A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
-     resume: {phase[, tip][, round]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
+     resume: {phase[, tip][, round][, gate_allowance]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
      ruling: the ruling sentence, once answered}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
@@ -25,10 +25,15 @@ class Resume(NamedTuple):
     phase: str
     tip: str | None = None  # the tip it goes on from, for a role that commits
     round: int | None = None  # the fix rounds done, for a fixer: its own round runs again
+    gate_allowance: int | None = None  # explicit operator grant for final integration repair
 
     def fields(self) -> dict:
         """The fields of the record; one that is None stays as it is."""
         return {name: value for name, value in self._asdict().items() if value is not None}
+
+    def checkpoint(self) -> dict:
+        """Retain completed work at a stop without applying a future operator grant."""
+        return self._replace(gate_allowance=None).fields()
 
 
 class Option(NamedTuple):

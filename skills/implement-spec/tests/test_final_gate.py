@@ -7,7 +7,8 @@ from test_fixloop import inside  # noqa: F401 (in-process runtime discovery)
 from test_tidy import Inside, tools  # noqa: F401 (fake gh and signing config)
 
 
-def test_red_repair_parks_once_and_retry_uses_saved_failure_without_reopening_tickets(tmp_path):
+@pytest.mark.parametrize("reword", [False, True])
+def test_red_repair_parks_once_and_retry_uses_saved_failure_without_reopening_tickets(tmp_path, reword):
     rig = Inside(tmp_path)
     rig.gate_conf(full={'subjects': ['feat(01): Export rows', 'fix(01): first repair']})
     steps = plan(**{'final/fixer': [fixer('first\n', 'first repair', ticket_of='01'),
@@ -17,15 +18,36 @@ def test_red_repair_parks_once_and_retry_uses_saved_failure_without_reopening_ti
     assert len(rig.final_calls('fixer')) == 1
     assert not rig.final_calls('final-spec') and not rig.pushes()
     assert rig.state()['tickets']['01']['phase'] == 'merged'
+    assert rig.final()['gate_allowance'] == 1
+    assert rig.state()['run']['questions'][0]['resume']['gate_allowance'] == 2
     gate_count = len(rig.gates('full'))
+    if reword:
+        import json
+        state = rig.state()
+        state['run']['questions'][0]['subject'] = 'Revised wording for the integration retry'
+        (rig.repo / '.agent/implement/state.json').write_text(json.dumps(state))
     rig.run(steps, '--push', '--answer', 'final-ticket-blocked-1=retry')
     assert rig.code == 0, rig.output()
     assert len(rig.final_calls('fixer')) == 2
     assert len(rig.calls('01', 'implementer')) == 1
     assert len(rig.gates('full')) == gate_count + 1
-    assert rig.state()['run']['final']['gate_repairs'] == 2
+    assert rig.final()['gate_repairs'] == rig.final()['gate_allowance'] == 2
     assert rig.state()['tickets']['01']['round'] == 0
     assert rig.pushes() == [f'refs/heads/feat/csv {rig.branch()}']
+
+
+def test_editing_after_red_gate_does_not_grant_another_repair(tmp_path):
+    rig = Inside(tmp_path)
+    rig.gate_conf(full={'subjects': ['feat(01): Export rows', 'fix(01): first repair']})
+    steps = plan(**{'final/fixer': [fixer('first\n', 'first repair', ticket_of='01')]})
+    rig.run(steps)
+    assert rig.code == 2, rig.output()
+    snapshot = rig.snap()
+    rig.run(steps, '--answer', 'final-ticket-blocked-1=edit')
+    assert rig.code == 1, rig.output()
+    assert rig.final()['gate_allowance'] == rig.final()['gate_repairs'] == 1
+    assert len(rig.calls()) == snapshot.calls and len(rig.gates()) == snapshot.gates
+    assert rig.state()['tickets']['01']['phase'] == 'merged'
 
 
 def test_interrupted_integration_repair_resumes_from_saved_log(tmp_path, monkeypatch):
@@ -61,6 +83,7 @@ def test_old_final_state_gains_an_unused_repair_allowance_without_rerunning_work
     snapshot = rig.snap()
     state = rig.state()
     del state['run']['final']['gate_repairs']
+    del state['run']['final']['gate_allowance']
     del state['run']['final']['gate_failure']
     del state['run']['final']['lenses']
     (rig.repo / '.agent/implement/state.json').write_text(json.dumps(state))
@@ -68,6 +91,7 @@ def test_old_final_state_gains_an_unused_repair_allowance_without_rerunning_work
     assert rig.code == 0, rig.out
     assert len(rig.calls()) == snapshot.calls and len(rig.gates()) == snapshot.gates
     assert rig.final()['gate_repairs'] == 0 and rig.final()['gate_failure'] is None
+    assert rig.final()['gate_allowance'] == 1
     rig.run(plan(), '--push')
     assert rig.code == 0, rig.out
     body = rig.prs()[0]['body']
