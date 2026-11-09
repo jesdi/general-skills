@@ -29,7 +29,7 @@ def _commit(source: str, parent: str, words: str) -> str:
     """A commit on `parent` with the tree and the author of `source` and the message `words`; "" when git fails."""
     name, email, date = git(".", "log", "-1", "--format=%an%n%ae%n%aI", source).stdout.splitlines() or [""] * 3
     env = {**driver_merge.identity(source), "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_AUTHOR_DATE": date}
-    return driver_merge.commit_tree([f"{source}^{{tree}}", "-p", parent, "-m", words.strip() + "\n"], env).stdout.strip()
+    return driver_merge.commit_tree([f"{source}^{{tree}}", "-p", parent], words, env).stdout.strip()
 
 
 def rewrite(parent: str, steps: list[tuple[str, str]]) -> list[str]:

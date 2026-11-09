@@ -163,6 +163,7 @@ History rules:
 - A history that `origin` already has is never rewritten. When `origin` has the PR branch or one of its commits, the driver does no tidy and no rebase. The full gate, the final review and a fast-forward push still run.
 - The push happens only when the branch tip is the reviewed tip and that tip has a green full gate record.
 - With `commit.gpgsign` on, the driver signs every commit it makes (ticket merges, tidied and renamed commits) with the configured key. The push happens only when every commit that `origin` lacks has a good signature (`%G?` is `G`); otherwise the end of run is BLOCKED and nothing is pushed.
+- No pushed commit has a `Co-authored-by` trailer. `claude` agents run with Claude Code's commit attribution off, every commit the driver makes (merges, tidied and renamed commits) drops the trailer, and the push is BLOCKED when a commit that `origin` lacks still has one, for example in a history that `origin` already has. Reword it, then run with `--push` again.
 
 A repository with no `origin` remote skips only step 2 and step 6. The tidied commits stay on the commit that the PR branch had when the run started, and the review range starts there. One ledger sentence says that the rebase and the push were skipped. The driver prints the two tips and ends with exit 0. When you add `origin` after such an end of run, `--push` does not push: the branch is on no base of that remote, so the end of run is BLOCKED.
 

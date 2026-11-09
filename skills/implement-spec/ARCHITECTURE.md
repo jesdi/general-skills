@@ -104,7 +104,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 - The end of run rewrites the branch one time, before the first final review, and never after a review. A history
   that origin has is never rewritten. `refs/implement-spec/<key>/recovery` holds the tip before the rewrite.
 - A rewrite never changes a file: the driver compares trees (`driver_tidy.same_tree`) before it moves the branch.
-- The push sends the reviewed commit, not the branch name, with no force.
+- The push sends the reviewed commit, not the branch name, with no force. It refuses a commit that `origin` lacks with no good signature (when `commit.gpgsign` is on) or with a `Co-authored-by` trailer (`driver_merge.unpushable`).
 
 ### Work is never dropped
 
