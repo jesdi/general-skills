@@ -2,7 +2,7 @@
 
 A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
-     resume: {phase[, tip][, round]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
+     resume: {phase[, tip][, round][, gate_allowance]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
      ruling: the ruling sentence, once answered}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
@@ -25,10 +25,15 @@ class Resume(NamedTuple):
     phase: str
     tip: str | None = None  # the tip it goes on from, for a role that commits
     round: int | None = None  # the fix rounds done, for a fixer: its own round runs again
+    gate_allowance: int | None = None  # explicit operator grant for final integration repair
 
     def fields(self) -> dict:
         """The fields of the record; one that is None stays as it is."""
         return {name: value for name, value in self._asdict().items() if value is not None}
+
+    def checkpoint(self) -> dict:
+        """Retain completed work at a stop without applying a future operator grant."""
+        return self._replace(gate_allowance=None).fields()
 
 
 class Option(NamedTuple):
@@ -67,16 +72,16 @@ KINDS = {
             "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", False)}),
     # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
     "ticket-blocked": Kind(
-        "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding is open: {subject}",
+        "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding or integration gate remains red: {subject}",
         "An agent ran two times, using the same model for a timeout or moved branch and the next entry otherwise, "
-        "and stopped or was rejected both times; or the scoped review after the fix batch of the final review left "
-        "a finding open. {owner} is "
-        "BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
+        "and stopped or was rejected both times; or the final review left a finding open, or the integration gate "
+        "stayed red after its repair. {owner} is BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
         "retry",
         {"retry": Option(
             "The role runs again on its first entry from the tip the ticket left, with one rerun (the same model "
-            "for a timeout or moved branch, the next entry otherwise); for an open final-review finding, "
-            "one more fix batch and scoped review run.",
+            "for a timeout or moved branch, the next entry otherwise); an open final-review finding gets one more "
+            "fix batch and scoped review, and a red integration gate gets one more repair batch from its saved "
+            "log, followed by the full gate and review.",
             "Ruling: {ticket} runs again (retry): {subject}.", True),
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",

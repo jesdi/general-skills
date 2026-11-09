@@ -183,7 +183,6 @@ def test_accepted_reports_end_the_run_with_exit_0(repo, tmp_path, capsys):
         "Ticket 01: test-writer ran on claude-sonnet-5-5@medium", "Ticket 01: implementer ran on claude-sonnet-5-5@medium",
         f"Ticket 01: the fast gate is green on {tip}, record .agent/implement/01/gate-fast-{tip}.log.",
         "Ticket 01: reviewer ran on openai/gpt-6-astra@medium",
-        f"Ticket 01: the full gate is green on {tip}, record .agent/implement/01/gate-full-{tip}.log.",
         f"Ticket 01: merged into feat/x as a fast-forward at {tip}."]
     assert ledger[1].endswith(", cost 0.25 USD: report accepted.")
     assert branches() == ["feat/x"] and "nothing to commit" in subprocess.run(
@@ -215,7 +214,7 @@ def test_an_agent_that_writes_no_report_is_rerun_once_then_blocks(repo, tmp_path
 def test_a_field_of_another_role_is_ignored(repo, tmp_path, capsys, extra):
     repo()
     code, ledger = agents(tmp_path, capsys, f"{COMMIT}fields='\"green\": [], {extra}'\n{REPORT}")
-    assert code == 0 and len(ledger) == 5 and ledger[0].endswith("report accepted.")
+    assert code == 0 and len(ledger) == 4 and ledger[0].endswith("report accepted.")
 
 
 @pytest.mark.parametrize("status", ["BLOCKED", "NEEDS_CONTEXT"])
@@ -458,7 +457,7 @@ def two(repo, second="None", touches="`demo/y.py: g`"):
     return repo(t01=ticket("01", **REFACTOR), t02=ticket("02", second, touches=touches, **REFACTOR))
 
 
-def test_two_tickets_run_in_two_slots_and_the_second_merge_is_a_gated_merge_commit(repo, tmp_path, capsys):
+def test_two_tickets_run_in_two_slots_and_only_the_integrated_tip_gets_the_full_gate(repo, tmp_path, capsys):
     two(repo)
     log = tmp_path.parent / f"{tmp_path.name}-prepare.log"
     code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, "--prepare", f"pwd >> {log}")
@@ -466,10 +465,9 @@ def test_two_tickets_run_in_two_slots_and_the_second_merge_is_a_gated_merge_comm
     calls = dict(line.split() for line in Path(f"{tmp_path}-runner.calls").read_text().splitlines())
     assert calls == {"01": str(tmp_path.resolve()), "02": str((tmp_path / ".agent/worktrees/slot-2").resolve())}
     assert len(out_of("git", "rev-list", "--parents", "-n1", walked()).split()) == 3  # a merge commit
-    # A fast gate on each ticket tip, a full gate on the fast-forward and on the merge commit; the fifth gate is the
-    # full gate of the end of run, on the tidied tip.
-    assert len([line for line in ledger if "gate is green" in line]) == 4
-    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out
+    # Fast gates cover each ticket; the full gate covers the final tidied tip.
+    assert len([line for line in ledger if "gate is green" in line]) == 2
+    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out
     assert [line for line in ledger if "merged into feat/x as a merge commit" in line]
     assert {entry["phase"] for entry in state_of(tmp_path)["tickets"].values()} == {"merged"}
     assert branches() == ["feat/x"] and out_of("git", "status", "--porcelain") == ""
@@ -487,16 +485,15 @@ RESOLVE = """if [ $role = conflict ]; then git add -A; git commit -q -m resolved
 """
 
 
-def test_a_merge_conflict_goes_to_the_conflict_agent_once_and_its_commit_is_gated(repo, tmp_path, capsys):
+def test_a_merge_conflict_goes_to_the_conflict_agent_once_before_final_integration_gating(repo, tmp_path, capsys):
     two(repo)
     code, ledger, out = walk(tmp_path, capsys, RESOLVE + "FILE=work.txt\n" + WORK + TOGETHER + REPORT)
     assert code == 0, out
     (line,) = [line for line in ledger if "the conflict agent resolved the merge conflict in work.txt at " in line]
     number, tip = line[7:9], walked()
     assert line.endswith(f" at {tip[:7]}.") and len(out_of("git", "rev-list", "--parents", "-n1", tip).split()) == 3
-    assert (f"Ticket {number}: the full gate is green on {tip[:7]}, record .agent/implement/{number}/gate-full-{tip[:7]}.log."
-            in ledger)
-    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out and "| agents, conflict on claude-opus-5-5@medium | 1 |" in out
+    assert not [line for line in ledger if "the full gate" in line]
+    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out and "| agents, conflict on claude-opus-5-5@medium | 1 |" in out
     assert dict(state_of(tmp_path)["run"]["landed"])[number] == tip
     prompt = (tmp_path / f".agent/implement/{number}/conflict-0.prompt.md").read_text()
     assert "Files in conflict: work.txt\n" in prompt and prompt.rstrip().endswith("one ref store.")
@@ -547,17 +544,14 @@ def test_a_red_gate_is_a_finding_and_the_ticket_it_blocks_never_starts(repo, tmp
     assert walk(tmp_path, capsys, "exit 9\n")[0] == 2  # a BLOCKED ticket stays BLOCKED on a rerun
 
 
-def test_a_merge_gate_red_after_round_2_blocks_the_ticket_and_the_pr_branch_does_not_move(repo, tmp_path, capsys):
+def test_a_gate_that_rejects_merge_commits_runs_only_after_tidy(repo, tmp_path, capsys):
     two(repo)
-    gate = '[ -z "$(git rev-parse -q --verify HEAD^2)" ]'  # red on each merge commit
-    code, ledger, out = walk(tmp_path, capsys, WORK + FIXES + TOGETHER + REPORT, gate=gate)
-    assert code == 1, out
-    (line,) = [line for line in ledger if "BLOCKED" in line]
-    assert "BLOCKED at the merge: the full gate is red on " in line
-    assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 2  # no merge commit landed
-    # Red full gates at landing start rounds 1 and 2; the third blocks, with no third round.
-    assert [line.split()[-2] for line in ledger if "at the landing, so feat/x does not move" in line] == ["1", "2"]
-    assert len(branches()) == 2 and out_of("git", "status", "--porcelain") == ""
+    gate = '[ -z "$(git rev-parse -q --verify HEAD^2)" ]'
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    assert code == 0, out
+    assert len(out_of("git", "rev-list", "--parents", "-n1", walked()).split()) == 3
+    assert "| full gates run | 1 |" in out
+    assert {entry["phase"] for entry in state_of(tmp_path)["tickets"].values()} == {"merged"}
 
 
 def test_a_tree_that_is_not_clean_is_a_red_gate_and_the_slot_keeps_the_work(repo, tmp_path, capsys):
@@ -889,22 +883,28 @@ def test_a_run_outside_a_repository_takes_no_lock_and_makes_no_file(tmp_path, mo
     assert code == 3 and "git status failed" in out and [path.name for path in tmp_path.iterdir()] == [".agent"]
 
 
-def test_a_pr_branch_that_another_hand_moves_during_the_merge_gate_starts_the_landing_again(repo, tmp_path, capsys):
-    """Ticket 09: the locked-file check and the ref move are one step. The ref moves only from the tip the check
-    read; from a tip that moved, the merge, the check and the gate are made again."""
+def move_during_landing(monkeypatch, command):
+    """Simulate another writer after the locked-file check and before atomic ref publication."""
+    original = driver._refuse_breach
+
+    def checked(number, run, landing):
+        original(number, run, landing)
+        if len(out_of("git", "rev-list", "--parents", "-n1", landing.commit).split()) == 3:
+            subprocess.run(command, shell=True, check=True)
+
+    monkeypatch.setattr(driver, "_refuse_breach", checked)
+
+
+def test_a_pr_branch_that_another_hand_moves_during_landing_retries(repo, tmp_path, capsys, monkeypatch):
     two(repo)
     mark = tmp_path.parent / f"{tmp_path.name}-moved"
-    # The gate of the first merge commit puts one more commit on the PR branch, as another hand would.
-    gate = (f'[ -e {mark} ] || [ -z "$(git rev-parse -q --verify HEAD^2)" ] || {{ touch {mark}; git update-ref '
-            'refs/heads/feat/x "$(git commit-tree "feat/x^{tree}" -p feat/x -m other)"; }')
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    move_during_landing(monkeypatch, f'[ -e {mark} ] || {{ touch {mark}; {MOVE}; }}')
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
     assert code == 0 and mark.exists(), out
     subjects = out_of("git", "log", "--format=%s", walked()).splitlines()
     assert "other" in subjects and {"implementer 01", "implementer 02"} <= set(subjects)
     assert len([line for line in ledger if "merged into feat/x as a merge commit" in line]) == 1
-    # A fast gate on each ticket tip; a full gate on the fast-forward, the stale merge commit, the new one and at the
-    # end of run.
-    assert "| fast gates run | 2 |" in out and "| full gates run | 4 |" in out
+    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out
 
 
 # Ticket 09, review round 1 (m1, Codex 6): the restart has a bound, and only a stale ref starts it.
@@ -917,27 +917,18 @@ def merge_blocked(ledger):
     return line
 
 
-def test_a_pr_branch_that_moves_at_each_merge_gate_blocks_the_ticket_after_the_second_try(repo, tmp_path, capsys):
+def test_a_pr_branch_that_moves_at_each_landing_blocks_after_the_second_try(repo, tmp_path, capsys, monkeypatch):
     two(repo)
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=MERGE_GATE + MOVE)
+    move_during_landing(monkeypatch, MOVE)
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
     assert code == 1, out
     assert "BLOCKED at the merge: " in merge_blocked(ledger) and "feat/x" in merge_blocked(ledger)
-    # Two ticket tips fast; the fast-forward and two merge commits full: the landing is tried two times.
-    assert "| fast gates run | 2 |" in out and "| full gates run | 3 |" in out
+    # Landing is tried twice; a blocked ticket prevents the final full gate.
+    assert "| fast gates run | 2 |" in out and "| full gates run | 0 |" in out
     assert out_of("git", "log", "--format=%s", "feat/x").splitlines().count("other") == 2
 
 
-def test_a_red_merge_gate_does_not_start_the_landing_again_when_the_pr_branch_moved(repo, tmp_path, capsys):
-    two(repo)
-    mark = tmp_path.parent / f"{tmp_path.name}-red"
-    gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {MOVE}; exit 1; }}'
-    code, ledger, out = walk(tmp_path, capsys, WORK + FIXES + TOGETHER + REPORT, gate=gate)
-    assert code == 0 and not [line for line in ledger if "BLOCKED" in line], out
-    # The red gate starts fix round 1, not a second landing; the fix lands at the next landing.
-    assert len([line for line in ledger if "at the landing, so feat/x does not move and fix round 1 starts" in line]) == 1
-
-
-def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(repo, tmp_path, capsys):
+def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(repo, tmp_path, capsys, monkeypatch):
     """Requirement 11: the conflict agent runs once for each merge. The second try runs no agent."""
     two(repo)
     mark = tmp_path.parent / f"{tmp_path.name}-foreign"
@@ -946,25 +937,12 @@ def test_a_conflict_on_the_second_try_blocks_the_ticket_with_no_conflict_agent(r
                'blob=$(echo foreign | git hash-object -w --stdin); for nn in 01 02; do '
                'git update-index --add --cacheinfo 100644,$blob,work-$nn.txt; done; git update-ref refs/heads/feat/x '
                '"$(git commit-tree "$(git write-tree)" -p feat/x -m other)"; rm "$GIT_INDEX_FILE" )')
-    gate = MERGE_GATE + f'[ -e {mark} ] || {{ touch {mark}; {foreign}; }}'
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
+    move_during_landing(monkeypatch, f'[ -e {mark} ] || {{ touch {mark}; {foreign}; }}')
+    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT)
     assert code == 1 and mark.exists(), out
     assert "BLOCKED at the merge: the merge into the PR branch conflicts in work-0" in merge_blocked(ledger)
     assert not [line for line in ledger if "conflict ran on" in line]
-    assert "| fast gates run | 2 |" in out and "| full gates run | 2 |" in out
-
-
-# Fix round 1 of ticket 03.
-
-def test_a_merge_commit_the_slot_cannot_check_out_is_not_gated_and_does_not_land(repo, tmp_path, capsys):
-    two(repo)
-    gate = 'touch "$(git rev-parse --git-dir)/index.lock"'  # after its gate, the slot can check out nothing
-    code, ledger, out = walk(tmp_path, capsys, WORK + TOGETHER + REPORT, gate=gate)
-    assert code == 1, out
-    (line,) = [line for line in ledger if "BLOCKED" in line]
-    assert "BLOCKED at the merge: the slot is at " in line and "the full gate did not run" in line
-    assert len(out_of("git", "rev-list", "--parents", "-n1", "feat/x").split()) == 2  # no merge commit landed
-    assert "| fast gates run | 2 |" in out and "| full gates run | 1 |" in out  # the full one: the fast-forward
+    assert "| fast gates run | 2 |" in out and "| full gates run | 0 |" in out
 
 
 @pytest.mark.parametrize("gate, after", [
@@ -1169,3 +1147,20 @@ def test_parallel_checkout_waits_for_worktree_registration_to_finish(repo, tmp_p
     code, _, out = walk(tmp_path, capsys, WORK + REPORT)
     assert code == 0, out + "\n" + "\n".join(failures)
     assert failures == []
+
+
+def test_failed_landing_checkout_blocks_before_the_local_merge(repo, tmp_path, capsys):
+    repo(t01=ticket("01", **REFACTOR))
+    start = out_of("git", "rev-parse", "feat/x")
+    gate = 'touch "$(git rev-parse --git-dir)/index.lock"'
+    code, ledger, out = walk(tmp_path, capsys, WORK + REPORT, gate=gate)
+    assert code == 2, out
+    assert state_of(tmp_path)["tickets"]["01"]["phase"] == "blocked"
+    assert out_of("git", "rev-parse", "feat/x") == start
+    assert "| full gates run | 0 |" in out
+    assert any("landing checkout failed" in line for line in ledger)
+    (tmp_path / ".git/index.lock").unlink()
+    code, _, out = walk(tmp_path, capsys, WORK + REPORT, "--answer", "01-ticket-blocked-1=retry")
+    assert code == 0, out
+    assert state_of(tmp_path)["tickets"]["01"]["phase"] == "merged"
+    assert "| full gates run | 1 |" in out

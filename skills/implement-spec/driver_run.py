@@ -143,7 +143,7 @@ class Run:
         def change(state: dict) -> None:
             held = record_of(state, number)
             if ask:
-                held.update(ask.resume.fields())
+                held.update(ask.resume.checkpoint())
                 evidence = [ask.report, f"{OUT / 'ledger.md'}:{line}"]
                 driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence, ask.resume)
             held["phase"] = "blocked"

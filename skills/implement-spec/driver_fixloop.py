@@ -263,33 +263,6 @@ def _act_on(job: Job, found: list[dict]) -> bool:
     return False
 
 
-class Unlanded(Exception):
-    """The full gate is red on the commit that would land, and the next fix round of the ticket has started."""
-
-
-def red_landing(run: Run, number: str, slot: str, commit: str, record: str) -> None:
-    """The full gate is red on `commit`, the commit that would land: the PR branch does not move. At round 2 that
-    blocks. Before it, the record is a critical `gate` finding for the next round, which starts in the same write of
-    state.json that leaves the landing, so a resumed run starts that round's fixer and never gates `commit` again.
-    Call it with the ticket branch checked out in the slot: the fixer works there."""
-    entry = run.state.read()["tickets"][number]
-    if entry["round"] == ROUNDS:
-        raise Blocked(f"the full gate is red on {commit[:7]}, record {record}")
-    path = os.path.relpath(record, slot)
-    finding = {"severity": "critical", "file": path, "line": 0, "title": f"the full gate is red on {commit[:7]}",
-               "evidence": f"the output of the gate in {path}", "kind": "code", "source": "gate"}
-    # The fixer reads the findings of the last review: its minor findings stay there for the final review.
-    file = OUT / number / f"findings-{entry['round']}.json"
-    found = json.loads(file.read_text()) if file.exists() else []
-    if finding["title"] not in [old["title"] for old in found]:  # a run stopped before the round gated it again
-        file.write_text(json.dumps(found + [finding], indent=1) + "\n")
-    _log_findings(number, [finding])
-    run.state.ticket(number, phase="fix", round=entry["round"] + 1, landing=commit)
-    ledger(f"Ticket {number}: the full gate is red on {commit[:7]} at the landing, so {run.pr} does not move and fix "
-           f"round {entry['round'] + 1} starts.")
-    raise Unlanded()
-
-
 def _gate(job: Job) -> list[dict]:
     """Fast-gate the candidate tip. A red gate before round 2 is a finding for the next round;
     a red gate after round 2 or on a test-writer correction blocks. Returns the findings: the red gate,

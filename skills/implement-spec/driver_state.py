@@ -6,7 +6,7 @@
                      landing, disputes, corrected, settled}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
-full one. landing is the commit whose full gate was red at the landing while the fixer of the round it started has
+full one. landing is a legacy commit whose full gate was red at the landing while the fixer of the round it started has
 not reported, else None. disputes is {<locked file>::<test>: {test, requirement, ruling, reason}}, the reviewer's
 ruling on the test; corrected is {<locked file>::<test>: {test, requirement, reason}}, the reading of its one
 correction. A locked test has at most one of each per ticket. settled counts the arbitrations and review corrections
@@ -43,7 +43,7 @@ def _final() -> dict:
     """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
     return {"skipped": "", "phase": "pending", "recovery": None, "tidied": None, "onto": None, "base": None,
             "commits": {}, "reviewed": None, "round": 0, "open": [], "must_fix": [], "lenses": {}, "batch": None,
-            "green_gates": tiers(), "pushed": None, "body": None, "pr": None}
+            "gate_repairs": 0, "gate_allowance": 1, "gate_failure": None, "green_gates": tiers(), "pushed": None, "body": None, "pr": None}
 
 
 class State:

@@ -420,7 +420,8 @@ def test_a_conflict_with_the_fetched_base_runs_the_conflict_agent_once_then_the_
     rig = conflicted
     assert rig.code == 0, rig.output()
     (call,) = rig.final_calls("conflict")
-    (gate,) = [g for g in rig.gates() if g["commit"] == call["sha"]]
+    (gate,) = rig.gates("full")
+    assert gate["commit"] == rig.branch()
     assert gate["t0"] >= call["t1"], "the gate follows the resolution"
     base = ref(rig.origin, "refs/heads/main")
     git(rig.repo, "merge-base", "--is-ancestor", base, "feat/csv")
@@ -611,3 +612,58 @@ def test_a_cached_body_that_no_longer_validates_is_rewritten_before_gh_pr_create
     assert len(rig.final_calls("pr-writer")) == 2, "the invalid cached body was not rewritten"
     (pr,) = rig.prs()
     assert risk_valid(tmp_path, pr["body"].split("## Tickets")[0]) and "styles" not in pr["body"].split("## Tickets")[0]
+
+
+def test_full_gate_runs_only_after_every_ticket_is_integrated(tmp_path):
+    rig = Final(tmp_path, THREE).run(plan())
+    assert rig.code == 0, rig.output()
+    full = rig.gates('full')
+    assert len(full) == 1
+    assert full[0]['commit'] == rig.branch()
+    assert all(entry['phase'] == 'merged' for entry in rig.state()['tickets'].values())
+    assert len(rig.gates('fast')) == 3
+
+
+@pytest.mark.parametrize("review_fix", [False, True])
+def test_red_integration_gate_is_repaired_before_full_review_without_ticket_rounds(tmp_path, review_fix):
+    rig = Final(tmp_path)
+    rig.gate_conf(full={'subjects': ['feat(01): Export rows']})
+    repairs = [fixer('fixed\n', 'repair integration', ticket_of='01')]
+    if review_fix:
+        repairs.append(fixer('reviewed\n', 'repair review finding', ticket_of='01'))
+    steps = plan(**{'final/fixer': repairs, 'final/final-spec': [final(finding('FOLLOWUP')) if review_fix else final()]})
+    rig.run(steps, '--push')
+    assert rig.code == 0, rig.output()
+    assert rig.state()['tickets']['01']['round'] == 0
+    assert rig.state()['tickets']['01']['phase'] == 'merged'
+    assert len(rig.final_calls('fixer')) == 1 + int(review_fix)
+    call = rig.final_calls('fixer')[0]
+    assert 'gate-full-' in call['prompt']
+    assert rig.final_calls('final-spec')[0]['t0'] > call['t1']
+    assert [g['exit'] for g in rig.gates('full')] == ([1, 0, 0] if review_fix else [1, 0])
+    full_tip = rig.final_calls('final-spec')[0]['head']
+    state = rig.state()['run']['final']
+    body = rig.prs()[0]['body']
+    assert f"Full review: {state['onto']}..{full_tip}" in body
+    scoped = f'{full_tip}..{rig.branch()}' if review_fix else 'not needed'
+    assert f'Scoped review after the fix batch: {scoped}' in body
+    assert 'Fix commits of the integrated branch' in body
+
+
+@pytest.mark.parametrize('transient', [True, False])
+def test_final_gate_repair_can_prove_no_code_change_but_still_spends_its_attempt(tmp_path, transient):
+    rig = Final(tmp_path)
+    rig.gate_conf(full={'subjects': ['feat(01): Export rows']})
+    no_change = {'report': dict(status='DONE_WITH_CONCERNS', commits=[], files=[], green=['targeted checks pass'],
+                               concerns=['the full integration gate is red on $HEAD: inspected the exact log; no code change is needed'])}
+    if transient:
+        no_change['files'] = {str(rig.rig / 'gate.json'): '{}'}  # repair the external gate environment
+    rig.run(plan(**{'final/fixer': [no_change]}), '--push')
+    assert rig.code == (0 if transient else 2), rig.output()
+    state = rig.state()['run']['final']
+    assert state['gate_repairs'] == 1
+    assert rig.branch() == state['tidied']
+    assert len(rig.final_calls('fixer')) == 1
+    assert [g['exit'] for g in rig.gates('full')] == [1, 0 if transient else 1]
+    assert bool(rig.pushes()) == transient
+    assert len(rig.final_calls('final-spec')) == int(transient)

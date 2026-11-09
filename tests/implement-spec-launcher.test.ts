@@ -99,7 +99,7 @@ describe('implement-spec README.md', () => {
     const section = rest.slice(0, rest.search(/^## /m));
     const rows = section.split('\n').filter((l) => l.startsWith('| ') && !l.startsWith('| Check |'));
     const pointer = /`[\w./-]*\.(py|md|sh|json)`/;
-    const checks = [/red plus green/i, /changed only by the test-writer/i, /full gate at landing and at the end of run/i,
+    const checks = [/red plus green/i, /changed only by the test-writer/i, /final full integration gate/i,
       /ticket reviewer and the final correctness lens.*another provider/i];
     expect(rows).toHaveLength(checks.length);
     checks.forEach((check, index) => {

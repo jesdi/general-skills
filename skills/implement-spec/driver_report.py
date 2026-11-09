@@ -103,7 +103,7 @@ def _unchanged_errors(role: str, report: dict, context: dict) -> list[str]:
     uncommitted, the gate of the start is green, and a concern says why no change is needed: for a fixer, one
     concern names each finding."""
     done = report["status"] in ("DONE", "DONE_WITH_CONCERNS")
-    if role not in ("implementer", "fixer") or report["commits"] or not done:
+    if role not in ("implementer", "fixer", "final-gate-fixer") or report["commits"] or not done:
         return []
     titles = context.get("fix", [])
     errors = _moved_errors(context) + [
