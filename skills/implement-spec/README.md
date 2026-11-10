@@ -160,7 +160,7 @@ The end of run starts only when every ticket is merged and every slot is idle. I
 History rules:
 
 - The branch is rewritten once, before the first review, and never after it. Fixes of the final review stay as `fix(NN)` commits.
-- A history that `origin` already has is never rewritten. When `origin` has the PR branch or one of its commits, the driver does no tidy and no rebase. The full gate, the final review and a fast-forward push still run.
+- A history that `origin` already has is never rewritten. When `origin` has the PR branch or one of its commits, the driver does no tidy and no rebase. The full gate, the final review and a fast-forward push still run. The review range then starts at the merge-base of the branch and the base tip, so what the base gained since the branch left it is not shown as a change of the branch. A kept branch that shares no commit with the base stops the end of run.
 - The push happens only when the branch tip is the reviewed tip and that tip has a green full gate record.
 - With `commit.gpgsign` on, the driver signs every commit it makes (ticket merges, tidied and renamed commits) with the configured key. The push happens only when every commit that `origin` lacks has a good signature (`%G?` is `G`); otherwise the end of run is BLOCKED and nothing is pushed.
 - No pushed commit has a `Co-authored-by` trailer. `claude` agents run with Claude Code's commit attribution off, every commit the driver makes (merges, tidied and renamed commits) drops the trailer, and the push is BLOCKED when a commit that `origin` lacks still has one, for example in a history that `origin` already has. Reword it, then run with `--push` again.

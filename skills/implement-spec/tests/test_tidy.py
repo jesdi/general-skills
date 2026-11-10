@@ -577,6 +577,37 @@ def test_a_history_that_origin_already_has_is_not_rebased_and_not_tidied(tmp_pat
     assert f"- 01: {rig.branch()[:7]} Export rows" in rig.prs()[0]["body"] and stage(rig)["status"] == "done"
 
 
+def test_a_kept_history_whose_base_moved_is_reviewed_from_its_merge_base_not_the_new_base_tip(tmp_path):
+    """#165: the base gains a commit the kept branch does not hold. A two-dot range from the new base tip would show
+    that commit as a reversion made by the branch."""
+    rig = Inside(tmp_path, ONE)
+    stray(rig, "published before the run")
+    git(rig.repo, "push", "-q", "origin", "feat/csv")
+    rig.move_base({"docs.md": "base docs\n"})
+    rig.run(plan(), *UNATTENDED)
+    assert rig.code == 0, rig.out + "\n".join(rig.ledger())
+    tip, under = rig.branch(), rig.start
+    assert rig.final()["onto"] == under, "onto is the commit the kept branch sits on"
+    for role in ("final-spec", "final-correctness", "final-structure"):
+        (call,) = rig.final_calls(role)
+        assert f"Range: {under}..{tip}\n" in call["prompt"], role
+
+
+def test_a_kept_history_that_shares_no_commit_with_the_base_stops_before_any_review(tmp_path):
+    rig = Inside(tmp_path, ONE)
+    stray(rig, "published before the run")
+    git(rig.repo, "push", "-q", "origin", "feat/csv")
+    clone = rig.tmp / "orphan-clone"
+    git(rig.tmp, "clone", "-q", str(rig.origin), str(clone))
+    git(clone, "checkout", "-q", "--orphan", "elsewhere")
+    git(clone, "commit", "-q", "--allow-empty", "-m", "unrelated root")
+    git(clone, "push", "-q", "origin", "elsewhere")
+    rig.run(plan(), *UNATTENDED, "--base", "elsewhere")
+    assert rig.code == 1 and not rig.final_calls("final-spec"), rig.out
+    (line,) = rig.led("End of run: BLOCKED at feat/csv at")
+    assert "shares no history with elsewhere at " + ref(rig.origin, "refs/heads/elsewhere")[:7] in line
+
+
 def test_a_co_authored_commit_in_a_history_that_origin_already_has_blocks_the_push(tmp_path):
     rig = Inside(tmp_path, ONE)
     stray(rig, "published before the run")
