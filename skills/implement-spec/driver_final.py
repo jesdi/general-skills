@@ -7,7 +7,8 @@ open asks `final-ticket-blocked-<n>`: only a `retry` runs another batch and scop
     skipped    why the end-of-run work did not start
     recovery   the PR tip before the rewrite; Run.names names its ref. None when origin had the history already
     tidied     the tip the rewrite made, or the tip as the tickets left it when the history is kept
-    base, onto the --base branch (or the default branch of origin) and its tip under the history; with no origin: "" and the start of the run
+    base, onto the --base branch (or the default branch of origin) and its commit under the history: its tip, or the merge-base
+               with it when the history is kept; with no origin: "" and the start of the run
     commits    {ticket: its commit}
     reviewed   the last tip a review covered
     round      the reviews done
@@ -185,9 +186,14 @@ def _origin_has_commits(pr: str, tip: str, onto: str) -> bool:
 
 
 def _keep_published_history(run: Run, tip: str, base: str, onto: str) -> None:
-    """Record the history as it is: a history that origin has is never rewritten."""
+    """Record the history as it is: a history that origin has is never rewritten. It stays on its old base, so `onto`
+    is its merge-base with the base tip: a review range from the base tip would show what the base gained since as
+    reversions made by the branch."""
+    under = git(".", "merge-base", onto, tip).stdout.strip()
+    if not under:
+        raise Blocked(f"{run.pr} at {tip[:7]} shares no history with {base} at {onto[:7]}")
     commits = dict(run.state.read()["run"]["landed"])
-    run.state.update(lambda state: state["run"]["final"].update(tidied=tip, onto=onto, base=base, commits=commits))
+    run.state.update(lambda state: state["run"]["final"].update(tidied=tip, onto=under, base=base, commits=commits))
     ledger(f"End of run: origin has commits of {run.pr}, so its history is kept as it is: no tidy and no rebase, "
            f"because a published history is not rewritten. The gate and the final review run on {tip[:7]}.")
 
