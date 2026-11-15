@@ -223,3 +223,31 @@ def test_unattended_blocked_ticket_ends_with_stage_json_blocked_naming_it_and_ex
     rig.run(plan(**{"01/fixer": [fix("01", n) for n in (1, 2)]}), *UNATTENDED)
     assert rig.code == 1, rig.output()
     assert stage(rig) == {"stage": "implement", "status": "blocked", "blocked": ["01"]}
+
+
+# ---------------------------------------------------------------- the driver rules (--retries)
+
+def test_with_retries_the_driver_answers_retry_itself_and_lists_its_decision_at_the_end(tmp_path):
+    rig = Review(tmp_path, ONE).run(steps(blocked(), blocked(), impl("01")), "--retries", "2")
+    assert rig.code == 0, rig.output()
+    assert rig.led(RULED) and rig.led("Ruled by the driver, not the operator.")
+    assert len(rig.calls("01", "implementer")) == 3 and "feat: 01 rows" in rig.pr_subjects()
+    summary = (rig.repo / ".agent/implement/summary.md").read_text()
+    assert "| human stops | 0 |" in summary and "| stops the driver ruled on | 1 |" in summary
+    assert "Driver decisions, taken without the operator:\n- " + RULED in summary
+    assert not answers_file(rig).exists()
+
+
+def test_after_the_retries_are_spent_the_next_stop_of_the_ticket_asks_the_operator(tmp_path):
+    rig = Review(tmp_path, ONE).run(steps(*[blocked()] * 6, impl("01")), "--retries", "2")
+    assert rig.code == 2, rig.output()
+    assert [q["id"] for q in decisions(rig)["questions"]] == ["01-ticket-blocked-3"]
+    assert len(rig.calls("01", "implementer")) == 6
+    assert "| human stops | 1 |" in (rig.repo / ".agent/implement/summary.md").read_text()
+
+
+def test_the_driver_answers_only_a_recommended_retry():
+    import driver_decisions
+    ask = lambda id, recommended: {"id": id, "ticket": "01", "stop": 1, "answer": None, "recommended": recommended}
+    questions = [ask("a", "retry"), ask("b", "accept"), ask("c", "")]
+    assert driver_decisions.automatic(questions, 2) == {"a": "retry"}

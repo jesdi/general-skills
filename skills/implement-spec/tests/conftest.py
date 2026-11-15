@@ -27,6 +27,8 @@ def pr_skill(tmp_path_factory):
         patch.setenv("CLAUDE_CONFIG_DIR", str(home))
         # No test reads the operator's own provider config (driver_agents.load_models).
         patch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config-home")))
+        # The tests of a stop see its question: the driver answers none itself unless a test passes --retries.
+        patch.setenv("IMPLEMENT_SPEC_RETRIES", "0")
         yield home / "skills/pr/SKILL.md"
 
 

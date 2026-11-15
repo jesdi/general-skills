@@ -75,6 +75,17 @@ def test_retry_on_an_open_final_finding_runs_one_more_fix_batch_and_one_scoped_r
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
 
 
+def test_with_retries_the_driver_runs_the_one_more_fix_batch_itself_and_pushes_with_its_ruling(tmp_path):
+    rig = rig_of(tmp_path)
+    steps = plan(**{"final/final-spec": [final(ATOMIC)], "final/final-reviewer": [final(ATOMIC), final()],
+                    "final/fixer": [fixer(fn("02"), "fix the ledger"), fixer(fn("02"), "write the ledger atomically")]})
+    rig.run(steps, "--retries", "1", *UNATTENDED)
+    assert rig.code == 0 and rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"], rig.out
+    assert len(rig.final_calls("fixer")) == 2 and len(rig.final_calls("final-reviewer")) == 2
+    assert rig.led("Ruling: final runs again (retry)") and rig.led("Ruled by the driver, not the operator.")
+    assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
+
+
 def test_edit_on_an_open_final_finding_keeps_the_end_of_run_blocked_and_runs_no_agent(tmp_path):
     rig, steps = open_after_batch(tmp_path)
     calls = len(rig.calls())

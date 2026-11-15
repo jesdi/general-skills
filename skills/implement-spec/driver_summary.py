@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 
+import driver_decisions
+
 
 def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
     agents = Counter((agent["role"], agent["entry"]) for agent in run["agents"])
@@ -14,8 +16,20 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
             *((f"agents, {role} on {entry}", number) for (role, entry), number in agents.items()),
             *((f"wall time, {role}", f"{total:.1f} s") for role, total in seconds.items()),
             ("fix rounds per ticket", rounds),
-            ("human stops", run["stops"]),
+            *_stops(run),
             *_cost(run["agents"])]
+
+
+def _stops(run: dict) -> list[tuple[str, object]]:
+    """The stops that waited for the operator, and a row for those the driver ruled on itself, when it did."""
+    ruled = sum(driver_decisions.ruled(run.get("questions", [])).values())
+    return [("human stops", run["stops"] - ruled), *([("stops the driver ruled on", ruled)] if ruled else [])]
+
+
+def _decisions(run: dict) -> list[str]:
+    """What the driver decided without the operator, for the end of the summary."""
+    rulings = [q["ruling"] for q in driver_decisions.by_driver(run.get("questions", []))]
+    return ["", "Driver decisions, taken without the operator:", *(f"- {ruling}" for ruling in rulings)] * bool(rulings)
 
 
 def _cost(agents: list[dict]) -> list[tuple[str, object]]:
@@ -44,4 +58,4 @@ def render(state: dict) -> str:
     lines += [f"Ticket {number} is not merged: its phase is {entry['phase']}."
               for number, entry in tickets.items() if entry["phase"] != "merged"] + _end(run)
     table = ["| Measure | Value |", "|---|---|"] + [f"| {name} | {value} |" for name, value in _rows(run, tickets)]
-    return "\n".join(lines + ["", *table]) + "\n"
+    return "\n".join(lines + ["", *table] + _decisions(run)) + "\n"
