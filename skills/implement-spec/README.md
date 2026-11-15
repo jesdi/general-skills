@@ -41,6 +41,7 @@ A driver before this change named the ticket branches `ticket/<NN>` and the reco
 | `--prepare COMMAND` | A shell command that the driver runs once in each new slot 2..N, in `.agent/worktrees/slot-K/`. Use it to install or link the dependencies. |
 | `--timeout ROLE=MINUTES` | The timeout of one role. Repeatable. The rerun after a timeout gets twice the time. |
 | `--answer QUESTION=OPTION` | The answer to one open question. Repeatable. The driver writes it to `.agent/implement-answers.json`. |
+| `--retries N` | The stops of one ticket, or of the end of run, that the driver answers itself with the recommended option before it asks the operator. Default: `IMPLEMENT_SPEC_RETRIES`, else 2. `0` asks at the first stop. See "The driver rules first". |
 | `--unattended` | Print no question. Write `--stage-json` for the dispatcher, and push without `--push` when the final review has passed. |
 | `--stage-json FILE` | With `--unattended`: the file that says how the run ended. |
 | `--push` | Local mode: when the final review has passed, push the PR branch and open the PR. Without it nothing is pushed. |
@@ -60,7 +61,7 @@ Default timeouts in minutes: test-writer 30, implementer 90, reviewer 45, fixer 
 |---|---|
 | 0 | Done: every ticket is merged and no question is open. Also the end of a valid `--dry-run`. In local mode without `--push`, nothing is pushed. |
 | 1 | A ticket is BLOCKED, or the end of run is BLOCKED. The other tickets ran as far as they could. |
-| 2 | Parked: a question of kind `spec-ambiguous` or `ticket-blocked` is open. Exit 2 wins over exit 1. |
+| 2 | Parked: a question of kind `spec-ambiguous` is open, or one of kind `ticket-blocked` after the driver's own retries are spent (`--retries`). Exit 2 wins over exit 1. |
 | 3 | Invalid input or a failed precondition: a usage error, a ticket error, a model error, an uncommitted change, a slot that cannot be made, another driver that runs on the same PR branch, an open question of a kind this driver no longer has (see "Resume"). No agent starts. The one exception: a review page that cannot be written gives exit 3 at the end of a run, after agents ran. |
 | 4 | Stopped: the CLI of an agent failed and wrote no report (for example, the account cannot use the model, or its usage ran out). The agent gets no rerun on another entry: the driver starts no other agent and lets the running agents end. No ticket is BLOCKED by it: fix the CLI, or move the role to another entry in a provider config file (see Models), then run the same command again to resume. The preflight of that run skips an entry that still fails. |
 | 130 | The operator interrupted the run. The driver stops each agent. The work stays in the slots for the next run. |
@@ -83,7 +84,7 @@ Everything is under `.agent/`, which is never committed.
 | `<git common directory>/implement-spec/<key>.lock` | An empty file, not in the worktree. The driver that runs holds a kernel file lock on it (`driver_state.py` `lock`). Do not remove it during a run. |
 | `<git common directory>/implement-spec-worktrees.lock` | Shared by driver processes for `worktree`, `checkout`, `switch` and `branch` commands, so a checkout never reads another driver's half-written registration. Held only during that Git command, never during preparation, agents or gates. Git commands outside the driver do not participate. |
 | `.agent/implement/ledger.md` | One plain sentence for each event. Only the driver writes it, and it reads no fact from it. |
-| `.agent/implement/summary.md` | The result in sentences, and the measurement table: fast gates and full gates, agents, wall time, fix rounds, human stops, cost. |
+| `.agent/implement/summary.md` | The result in sentences, and the measurement table: fast gates and full gates, agents, wall time, fix rounds, human stops, the stops the driver ruled on, cost. Then `Driver decisions, taken without the operator:` with one ruling sentence for each question the driver answered itself. |
 | `.agent/implement/decisions.json` | The open questions and their `revision`. Written only after a stop. |
 | `.agent/implement/<NN>/` | One folder for each ticket. |
 | `.agent/implement/<NN>/<role>-<K>.json`, `.log`, `.prompt.md` | The report, the log and the prompt of one agent. K is the fix round. |
@@ -225,6 +226,10 @@ Every report has `status` (`DONE`, `DONE_WITH_CONCERNS`, `NEEDS_CONTEXT`, `BLOCK
 For each role that commits, every commit in `commits` must be new since the role started and on its branch. `severity` is `critical`, `important` or `minor`. `kind` is `code`, `test` or `fixture`. A read-only `codex` agent cannot write a file, so it gives the JSON as its last message and the CLI saves it as the report.
 
 ## Question kinds
+
+### The driver rules first
+
+A stop whose question recommends an option does not park the run. The driver answers it with that option, writes the same `Ruling:` sentence an operator's answer writes, ending in `Ruled by the driver, not the operator.`, and goes on in the same process, as the next invocation would after `--answer`. Today that is `retry` for `ticket-blocked`; `spec-ambiguous` recommends no option, so it still asks. The driver rules on at most `--retries` stops (default 2) of one ticket, and as many of the end of run. The next stop of that ticket asks the operator, with exit 2. The operator reads the driver's rulings where the run ends: in `summary.md` under `Driver decisions, taken without the operator:` and in the PR body with the other rulings. On the box, 23 answers of 23 were `retry` and each waited hours for the operator (jesdi/agent-ops retro, 2026-11-14).
 
 A question is a bounded choice for the operator. `driver_decisions.py` `KINDS` holds each kind with its fixed sentences.
 

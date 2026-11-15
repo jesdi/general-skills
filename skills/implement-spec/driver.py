@@ -2,7 +2,7 @@
 """implement-spec driver: validate the ticket set and the environment, then walk the ticket graph.
 
     sh run.sh --gate COMMAND --fast-gate COMMAND --spec FILE [--tickets DIR] [--models FILE] [--parallel N] [--prepare COMMAND]
-              [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--unattended [--stage-json FILE]] [--push]
+              [--timeout ROLE=MINUTES] [--answer QUESTION=OPTION] [--retries N] [--unattended [--stage-json FILE]] [--push]
               [--base BRANCH] [--dry-run]
 
 Run it in the PR worktree. Exit 0 = every ticket merged (and pushed, when unattended), 1 = a ticket or the end of
@@ -439,15 +439,9 @@ def _publish_questions(run: dict) -> str:
     return ""
 
 
-def _apply_answers(state: driver_state.State, args) -> list[str]:
-    """Turn each answer that counts into a ruling and let its ticket go on; [] or the errors that stop the run."""
-    _drop_merged(state)
-    run = state.read()["run"]
-    questions, document = run["questions"], driver_decisions.document(run)
-    if errors := driver_answers.given(args.answer, document):
-        return errors
-    answers, ignored = driver_answers.read(document)
-    rulings, moved = driver_decisions.apply(questions, answers)
+def _settle(state: driver_state.State, questions: list[dict], answers: dict, ignored: list[str], by: str = "") -> None:
+    """Turn each answer into a ruling and let its ticket go on."""
+    rulings, moved = driver_decisions.apply(questions, answers, by)
     # The ledger comes first: a run that stops between the two writes gives a ruling twice, and never an answer
     # that no ledger line names.
     for sentence in ignored + rulings:
@@ -459,8 +453,30 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
             driver_run.record_of(new, number).update(fields)
 
     state.update(change)
+
+
+def _apply_answers(state: driver_state.State, args) -> list[str]:
+    """Turn each answer that counts into a ruling and let its ticket go on; [] or the errors that stop the run."""
+    _drop_merged(state)
+    run = state.read()["run"]
+    questions, document = run["questions"], driver_decisions.document(run)
+    if errors := driver_answers.given(args.answer, document):
+        return errors
+    _settle(state, questions, *driver_answers.read(document))
     error = _publish_questions(run)
     return [error] if error else []
+
+
+def _rule(state: driver_state.State, budget: int) -> bool:
+    """The driver answers each open question that recommends an option with that option, at most `budget` stops per
+    ticket and for the end of run. True: it ruled, so the run goes on with no operator."""
+    questions = state.read()["run"]["questions"]
+    answers = driver_decisions.automatic(questions, budget)
+    if answers:
+        _settle(state, questions, answers, [], driver_decisions.DRIVER)
+        print(f"implement-spec: the driver ruled on {len(answers)} question{'s' * (len(answers) > 1)} with the "
+              "recommended option and goes on", flush=True)
+    return bool(answers)
 
 
 # ---------------------------------------------------------------- the end of the process
@@ -518,25 +534,42 @@ def _record_skipped(skipped: list[str]) -> None:
         ledger(sentence)
 
 
+def _once(tickets: list[Ticket], run: Run, slots: int) -> tuple[bool, list[str]] | int:
+    """Resume, apply the answers and do the work once: what `_work` returns, or exit 3 with each error printed."""
+    args = run.args
+    errors = _resume(tickets, run.state, run.pr, slots, args, run.kept) or _apply_answers(run.state, args)
+    if errors:
+        print("\n".join(errors))
+        return 3
+    if args.unattended and args.stage_json:
+        Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
+    try:
+        return _work(tickets, slots, run)
+    except driver_slots.PreparationError as error:
+        print(f"implement-spec: {error}; fix slot preparation and run the same command to resume")
+        return 3
+
+
 def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str], args, kept: dict[str, int],
          pr: str) -> int:
     state = driver_state.State(STATE)
     slots = 1 if args.only else min(args.parallel, len(tickets))
-    errors = _resume(tickets, state, pr, slots, args, kept)
-    errors = errors or _apply_answers(state, args)
-    if errors:
-        print("\n".join(errors))
-        return 3
-    run = Run(args, models, state, pr, kept)
     _record_skipped(skipped)
-    if args.unattended and args.stage_json:
-        Path(args.stage_json).unlink(missing_ok=True)  # the file tells how this run ends, never an earlier one
-    try:
-        end_blocked, lines = _work(tickets, slots, run)
-    except driver_slots.PreparationError as error:
-        print(f"implement-spec: {error}; fix slot preparation and run the same command to resume")
-        return 3
-    final = state.read()
+    while True:
+        run = Run(args, models, state, pr, kept)
+        done = _once(tickets, run, slots)
+        if isinstance(done, int):
+            return done
+        if run.halted or not _rule(state, args.retries):
+            break
+        # The driver's own answer resumes the run as the operator's would on the next invocation.
+        args.answer, kept = [], driver_state.kept(state.read())
+    return _finish(run, args, *done)
+
+
+def _finish(run: Run, args, end_blocked: bool, lines: list[str]) -> int:
+    """Write and print the summary, and return the exit code."""
+    final = run.state.read()
     summary = driver_summary.render(final)
     (OUT / "summary.md").write_text(summary)
     print(summary + "".join(line + "\n" for line in lines), end="")
@@ -583,6 +616,9 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--answer", action="append", type=driver_answers.pair, default=[],
                         metavar="QUESTION=OPTION", help="the answer to one open question of "
                         f"{DECISIONS}, repeatable; it goes to {driver_answers.FILE}")
+    parser.add_argument("--retries", type=int, default=int(os.environ.get("IMPLEMENT_SPEC_RETRIES", 2)), metavar="N",
+                        help="the stops of one ticket, or of the end of run, that the driver answers itself with the "
+                        "recommended option before it asks the operator (default: IMPLEMENT_SPEC_RETRIES, else 2)")
     parser.add_argument("--unattended", action="store_true", help="at a question, print no question: write "
                         "--stage-json for the dispatcher, which gives the answers file to the next run")
     parser.add_argument("--stage-json", metavar="FILE", help="with --unattended: where the driver writes how a "

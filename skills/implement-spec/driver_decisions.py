@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from typing import NamedTuple
 
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
+DRIVER = "driver"  # `by` of a question the driver answered itself
 FINAL = "final"  # the end of run asks its questions, and has its record and its files, under this name
 
 
@@ -162,19 +164,47 @@ def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
     return {name: value for one in fields for name, value in one.items()} if all(fields) else {}
 
 
-def apply(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, dict]]:
-    """Answer the open questions in `answers`. Returns (a ruling per answer, ticket or FINAL -> the fields that let its
-    record go on)."""
+def ruled(questions: list[dict]) -> Counter:
+    """ticket (or FINAL) -> the stops of it that the driver ruled on."""
+    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in by_driver(questions)})
+
+
+def automatic(questions: list[dict], budget: int) -> dict:
+    """The answers the driver gives itself: the recommended option of each open question that has one, while the
+    driver ruled on fewer than `budget` stops of its ticket (or of the end of run)."""
+    spent = ruled(questions)
+    asked = [q for q in questions if q["answer"] is None and q["recommended"]]
+    return {q["id"]: q["recommended"] for q in asked if spent[q["ticket"]] < budget}
+
+
+def _answer(q: dict, answers: dict, by: str) -> str:
+    """Answer `q` from `answers` and return its ruling, with the note of the operator."""
+    q["answer"], q["by"] = answers[q["id"]], by
+    q["ruling"] = ruling(q) + " Ruled by the driver, not the operator." * (by == DRIVER)
+    note = answers.get(f"{q['id']}.note")
+    return q["ruling"] + f" Note of the operator: {note}" * bool(note)
+
+
+def apply(questions: list[dict], answers: dict, by: str = "") -> tuple[list[str], dict[str, dict]]:
+    """Answer the open questions in `answers`; `by` is DRIVER for the answers of `automatic`. Returns (a ruling per
+    answer, ticket or FINAL -> the fields that let its record go on)."""
     rulings, stops = [], {}
     for q in questions:
         if q["answer"] is None and q["id"] in answers:
-            q["answer"] = answers[q["id"]]
-            q["ruling"] = ruling(q)
-            note = answers.get(f"{q['id']}.note")
-            rulings.append(q["ruling"] + f" Note of the operator: {note}" * bool(note))
+            rulings.append(_answer(q, answers, by))
             stops[q["ticket"]] = q["stop"]
+    return rulings, _moved(questions, stops)
+
+
+def _moved(questions: list[dict], stops: dict) -> dict[str, dict]:
+    """ticket or FINAL -> the fields that let its record go on, for each of `stops` whose answers settle it."""
     moved = {ticket: _settled(questions, ticket, stop) for ticket, stop in stops.items()}
-    return rulings, {ticket: fields for ticket, fields in moved.items() if fields}
+    return {ticket: fields for ticket, fields in moved.items() if fields}
+
+
+def by_driver(questions: list[dict]) -> list[dict]:
+    """The questions the driver answered itself."""
+    return [q for q in questions if q.get("by") == DRIVER]
 
 
 def text(open_questions: list[dict], answers: str, page: str) -> str:
