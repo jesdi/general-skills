@@ -14,6 +14,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_run.py` | `Run` (what all ticket threads share), one agent with its one rerun, the gate call, the ledger, `Blocked` |
 | `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, test-writer correction, fix rounds |
 | `driver_dispute.py` | A disputed locked test: the arbitration, its correction, the once-per-test record, `spec-ambiguous` |
+| `driver_arbiter.py` | The arbiter agent that rules on the open questions the driver's retries leave (`driver_decisions.arbitrated`) |
 | `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push |
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
@@ -35,8 +36,9 @@ and do not know about the run, except `driver_run.py`, which the deciding module
 ## Conventions
 
 - **A step that cannot go on raises `Blocked`.** The message says why. `with during("the merge"):` puts the step
-  in front. Only two places catch it for good: `driver._run_ticket` (the ticket becomes BLOCKED) and
-  `driver_final.run` (the end of run becomes BLOCKED). Another `except Blocked` only cleans up and raises again.
+  in front. Only three places catch it for good: `driver._run_ticket` (the ticket becomes BLOCKED),
+  `driver_final.run` (the end of run becomes BLOCKED) and `driver_arbiter.rule` (the operator answers the questions
+  the arbiter could not rule on). Another `except Blocked` only cleans up and raises again.
 - **A CLI that fails with no report raises `Halted`**, not `Blocked`: the setup of the run is wrong, not the
   ticket. `driver._run_ticket` and `driver._work` catch it: the run starts no other agent and ends with exit 4,
   and the ticket keeps its phase for the next run. A cleanup of an `except Blocked` that leaves git as it was (an

@@ -202,10 +202,13 @@ def _dispute_errors(role: str, report: dict, context: dict) -> list[str]:
 
 
 def _ruling_errors(report: dict, context: dict) -> list[str]:
-    """An arbitration rules on each disputed test."""
-    given = {ruling["test"] for ruling in report.get("rulings", [])}
-    return [f"rulings: no ruling on {test}: give one ruling per disputed test, its id as the list gives it"
-            for test in context.get("disputed", []) if test not in given]
+    """An arbitration rules on each disputed test, the arbiter on each open question."""
+    errors = []
+    for key, asked, what in (("test", "disputed", "disputed test"), ("question", "questions", "open question")):
+        given = {ruling.get(key) for ruling in report.get("rulings", [])}
+        errors += [f"rulings: no ruling on {one}: give one ruling per {what}, its id as the list gives it"
+                   for one in context.get(asked, []) if one not in given]
+    return errors
 
 
 def locked_files(listed: list[str]) -> list[str]:

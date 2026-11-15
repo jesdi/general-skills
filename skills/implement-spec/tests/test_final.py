@@ -15,7 +15,8 @@ Interface choices (ticket 06):
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
 - the final fixer's `commits` hold `{"sha", "ticket"}` objects, and the driver renames each fixer commit to
   `fix(NN): <its subject>` before the gate and the scoped review run (no rewrite after a review).
-- a finding open after the scoped review: question `final-ticket-blocked-<n>`, options `retry` and `edit`.
+- a finding open after the scoped review: question `final-finding-open-<n>`, options `retry`, `accept` and
+  `follow-up`.
 - local stop: stdout lines `Branch tip: <sha>`, `Reviewed tip: <sha>` and the rerun command, which has `--push`.
 - the PR body lists, per ticket, a line with the ticket number and its commit's first 7 hex, and every ruling line.
 - stage.json at a clean unattended end is `{"stage": "implement", "status": "done"}`.
@@ -36,7 +37,7 @@ import pytest
 
 from test_cli import SKILL, git, ticket
 from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
-from test_stops import UNATTENDED, stage
+from test_stops import DONE, UNATTENDED, stage
 from test_walk import fix, impl, plan
 
 SCOPED = HOOKED
@@ -330,7 +331,7 @@ def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
 
     assert rig.code == 2, rig.output()
     (question,) = rig.state()["run"]["questions"]
-    assert question["id"] == "final-ticket-blocked-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
+    assert question["id"] == "final-finding-open-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
     assert [item["title"] for item in rig.state()["run"]["final"]["open"]] == ["MERGED-QUOTING-REGRESSION"]
     assert not rig.pushes() and not rig.prs()
     rig.run(steps)
@@ -468,7 +469,7 @@ def test_unattended_with_everything_validated_pushes_once_opens_the_pr_and_write
     assert rig.pushes() == [f"refs/heads/feat/csv {tip}"] and ref(rig.origin, "refs/heads/feat/csv") == tip
     (pr,) = rig.prs()
     assert [l for l in pr["body"].splitlines() if "01" in l and tip[:7] in l], pr["body"]
-    assert stage(rig) == {"stage": "implement", "status": "done"}
+    assert stage(rig) == DONE
 
 
 def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):

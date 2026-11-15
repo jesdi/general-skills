@@ -1,7 +1,8 @@
 """The end of a run, when every ticket is merged and every slot is idle: tidy the PR branch into one commit per
 ticket, rebase it onto the fetched base tip, gate it, run the final review, let one fix batch land as `fix(NN)`
 commits with a scoped review, then stop before the push, or push and open the PR. A finding the scoped review leaves
-open asks `final-ticket-blocked-<n>`: only a `retry` runs another batch and scoped review.
+open asks `final-finding-open-<n>`: a `retry` runs another batch and scoped review, an `accept` or a `follow-up` ships
+the PR with it, as draft when it is critical.
 
 `run.final` of state.json is the resume contract (`driver_state._final` makes it with every key):
     skipped    why the end-of-run work did not start
@@ -17,6 +18,7 @@ open asks `final-ticket-blocked-<n>`: only a `retry` runs another batch and scop
     batch      the tip of the fix batch that the driver validated and named
     phase      `blocked` at a stop with questions, until a `retry` answer makes it `pending` again
     green_gates, pushed, pr
+    draft      the PR opened as draft
 """
 from __future__ import annotations
 
@@ -388,17 +390,27 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
     for finding in found:
         ledger(f"Final review round {done + 1}: {finding['severity']} finding of kind {finding['kind']} from "
                f"{finding['source']} at {finding['file']}:{finding['line']}: {finding['title']}.")
-    to_fix = [finding for finding in found if finding["severity"] in driver_review.OPEN]
-    run.state.update(lambda state: state["run"]["final"].update(reviewed=tip, round=done + 1, open=to_fix))
+    found_open = [finding for finding in found if finding["severity"] in driver_review.OPEN]
+    run.state.update(lambda state: state["run"]["final"].update(reviewed=tip, round=done + 1, open=found_open))
     ledger(f"Final review round {done + 1}: the range {covered} is reviewed, the reviewed tip is {tip[:7]}, and "
-           f"{len(to_fix)} critical or important finding{'s are' if len(to_fix) != 1 else ' is'} open.")
-    if to_fix and done:
-        # Another batch is the operator's call: one `final-ticket-blocked` question per finding.
-        titles = [_title(finding) for finding in to_fix]
-        run.ask(FINAL, "ticket-blocked", [f"a finding open after the scoped review: {title}" for title in titles],
-                str(file), FINAL_RESUME)
+           f"{len(found_open)} critical or important finding{'s are' if len(found_open) != 1 else ' is'} open.")
+    if done:
+        _ask_open(run, file, found_open)
+
+
+def _ask_open(run: Run, file: Path, found_open: list[dict]) -> None:
+    """After the scoped review, another batch is a ruling: one `finding-open` question per finding that no answer
+    ships with, and the end of run stops."""
+    if titles := [_title(finding) for finding in _to_fix(run, found_open)]:
+        run.ask(FINAL, "finding-open", titles, str(file), FINAL_RESUME)
         raise Blocked(f"the scoped review leaves {len(titles)} finding{'s' * (len(titles) > 1)} open: "
                       + "; ".join(titles))
+
+
+def _to_fix(run: Run, found: list[dict]) -> list[dict]:
+    """The findings of `found` that a fix batch is due for: those that no `accept` or `follow-up` ships with."""
+    waived = driver_decisions.waived(run.state.read()["run"]["questions"])
+    return [finding for finding in found if _title(finding) not in waived]
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
@@ -531,23 +543,37 @@ def _undo_rejected_batch(run: Run, tip: str) -> str:
     return ""
 
 
-def _fixer_call(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> Call:
-    """Build a final fixer call from review findings or the saved integration-gate failure."""
+def _findings_list(run: Run, final: dict) -> str:
+    """The lines of the findings a fix batch is due for, for the final fixer's prompt."""
+    return "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in _to_fix(run, final["open"]))
+
+
+def _fixer_values(run: Run, final: dict, tip: str, gate_record: str) -> dict[str, str]:
+    """The prompt values of the final fixer: the review findings, and the saved gate failure for a gate repair."""
     folder = OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
               "locked": " ".join(driver_locked.every(run.state.read()["tickets"])),
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
-              "findings_list": "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in final["open"])}
-    name = ""
-    if gate_record:
-        values.update(driver_final_gate.pointers(final, gate_record, tip))
-        name = f"gate-fixer-{final['gate_repairs']}"
+              "findings_list": _findings_list(run, final)}
+    return {**values, **(driver_final_gate.pointers(final, gate_record, tip) if gate_record else {})}
+
+
+def _fixer_check(tickets: list[Ticket], final: dict, values: dict[str, str], gate_record: str) -> dict:
+    """What the final fixer's report is checked against: a gate repair fixes the gate, a review batch the must-fix
+    findings."""
+    return {"owners": [ticket.number for ticket in tickets],
+            "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]],
+            "fix": [values["gate_title"]] if gate_record else []}
+
+
+def _fixer_call(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> Call:
+    """Build a final fixer call from review findings or the saved integration-gate failure."""
+    values = _fixer_values(run, final, tip, gate_record)
+    name = f"gate-fixer-{final['gate_repairs']}" if gate_record else ""
     tidied = final["tidied"]
     return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate_record else "final-fixer",
                 fix_round=final["round"], name=name,
-                check={"owners": [ticket.number for ticket in tickets],
-                       "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]],
-                       "fix": [values["gate_title"]] if gate_record else []},
+                check=_fixer_check(tickets, final, values, gate_record),
                 locked=lambda _: driver_locked.for_end_of_run(run.state.read()["tickets"], tidied))
 
 
@@ -601,7 +627,7 @@ def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
                     _fix_batch(run, tickets, final, tip, record)
                     continue
             _review(run, final, tip)
-        elif final["open"]:  # after the full review, or after a `retry` of a finding the scoped review left open
+        elif _to_fix(run, final["open"]):  # after the full review, or after a `retry` of a finding left open
             _fix_batch(run, tickets, final, tip)
         else:
             return
@@ -688,16 +714,43 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
     return body
 
 
-def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
-    """Open the PR, ready for review, and return its URL."""
-    body = _write_body(run, final, tickets)
-    made = subprocess.run(["gh", "pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run),
-                           "--body-file", str(body)], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+def _gh(argv: list[str], what: str) -> str:
+    """Run `gh` and return the URL it prints last."""
+    made = subprocess.run(["gh", *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if made.returncode:
-        raise Blocked(f"gh pr create failed: {(made.stderr or made.stdout).strip()}")
-    url = (made.stdout.split() or [""])[-1]
-    run.state.update(lambda state: state["run"]["final"].update(pr=url))
-    ledger(f"The PR of {run.pr} into {final['base']} is open: {url}.")
+        raise Blocked(f"gh {what} failed: {(made.stderr or made.stdout).strip()}")
+    return (made.stdout.split() or [""])[-1]
+
+
+def _draft(final: dict) -> str:
+    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling, and no
+    ruling settles a must-fix one."""
+    held = [_title(finding) for finding in final["open"] if finding["severity"] == "critical" or finding.get("must_fix")]
+    return f"a critical or must-fix finding is open: {'; '.join(held)}" if held else ""
+
+
+def _file_follow_ups(run: Run, final: dict) -> None:
+    """File each finding ruled `follow-up` as an issue, once: the PR body then links it."""
+    for q in driver_decisions.follow_ups(run.state.read()["run"]["questions"]):
+        body = (f"A finding the final review of {run.pr} left open, shipped with its PR by this ruling:\n\n"
+                f"{q['ruling']}\n\nEvidence: {q['evidence'][0]}\n")
+        url = _gh(["issue", "create", "--title", q["subject"], "--body", body], "issue create")
+
+        def record(state: dict, ruled: str = q["id"], issue: str = url) -> None:
+            next(one for one in state["run"]["questions"] if one["id"] == ruled)["issue"] = issue
+
+        run.state.update(record)
+        ledger(f"End of run: the follow-up {q['subject']} is filed as {url}.")
+
+
+def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
+    """Open the PR, ready for review or as draft, and return its URL."""
+    _file_follow_ups(run, final)
+    body, draft = _write_body(run, final, tickets), _draft(final)
+    url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
+               str(body), *["--draft"] * bool(draft)], "pr create")
+    run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))
+    ledger(f"The PR of {run.pr} into {final['base']} is open{f' as a draft: {draft}' * bool(draft)}: {url}.")
     return url
 
 

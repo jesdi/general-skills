@@ -40,7 +40,7 @@ LENSES = {
     "final-structure": Lens("structure", "deep-quality-review", "SKILL.md", False, False)}
 # Minutes per role.
 TIMEOUTS = {"test-writer": 30, "implementer": 90, "reviewer": 45, "fixer": 60, "final-reviewer": 60,
-            **dict.fromkeys(LENSES, 60), "conflict": 30, "pr-writer": 20}
+            **dict.fromkeys(LENSES, 60), "conflict": 30, "pr-writer": 20, "arbiter": 30}
 PROVIDERS = {"anthropic": ("claude", ("low", "medium", "high", "xhigh", "max")),
              "openai": ("codex", ("minimal", "low", "medium", "high", "xhigh"))}
 # USD per million tokens at the API list price; the cached part of the input costs `cached_input`. A
@@ -49,7 +49,7 @@ PRICES = {"gpt-6-astra": {"input": 10.0, "cached_input": 1.0, "output": 50.0},
           "gpt-6.1-sol": {"input": 2.0, "cached_input": 0.10, "output": 10.0}}
 # The name of each token count in the agent record, and its key in the `usage` of a codex turn.
 _USAGE = {"input": "input_tokens", "cached_input": "cached_input_tokens", "output": "output_tokens"}
-READ_ONLY = ("reviewer", "final-reviewer", *LENSES, "pr-writer")
+READ_ONLY = ("reviewer", "final-reviewer", *LENSES, "pr-writer", "arbiter")
 PREFLIGHT = "implement-spec preflight: reply with the word OK. Read no file and run no command.\n"
 # The time limit of one preflight call: a CLI that gives no answer in this time fails the preflight.
 PREFLIGHT_MINUTES = 5
@@ -129,11 +129,11 @@ def _is_list(entries: object) -> bool:
     return isinstance(entries, list) and bool(entries) and all(isinstance(entry, str) for entry in entries)
 
 
-def other_provider_entries(models: dict[str, list[str]]) -> list[str]:
-    """The entries of the `final-reviewer` list on another provider than the implementer's first entry: the correctness
-    lens and the scoped review run and rerun on these when there is one."""
+def other_provider_entries(models: dict[str, list[str]], role: str = "final-reviewer") -> list[str]:
+    """The entries of the `role` list on another provider than the implementer's first entry: the correctness lens and
+    the scoped review run and rerun on those of `final-reviewer` when there is one, the arbiter on its own."""
     own = split(models["implementer"][0])[0]
-    return [entry for entry in models["final-reviewer"] if split(entry)[0] != own]
+    return [entry for entry in models[role] if split(entry)[0] != own]
 
 
 def other_provider_entry(models: dict[str, list[str]]) -> str:
@@ -145,6 +145,11 @@ def correctness_entries(models: dict[str, list[str]]) -> list[str]:
     """The entries of the correctness lens and the scoped review: the other-provider ones, or, when the config has none
     or none passed the preflight, the whole `final-reviewer` list (the ledger and the PR body say so)."""
     return other_provider_entries(models) or models["final-reviewer"]
+
+
+def arbiter_entries(models: dict[str, list[str]]) -> list[str]:
+    """The entries of the arbiter: its other-provider ones, else its whole list."""
+    return other_provider_entries(models, "arbiter") or models["arbiter"]
 
 
 def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:

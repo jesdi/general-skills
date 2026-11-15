@@ -182,7 +182,7 @@ def test_unattended_writes_the_stage_file_and_prints_no_question(tmp_path, capsy
     assert stage(rig) == {"stage": "implement", "status": "awaiting-review", "artifact": PAGE, "open_questions": 1}
     write_answers(rig, {Q1: "retry"})
     rig.run(steps(blocked(), blocked(), impl("01")), *UNATTENDED)
-    assert rig.code == 0 and stage(rig) == {"stage": "implement", "status": "done"}, "no stage file of the earlier run stays"
+    assert rig.code == 0 and stage(rig) == {"stage": "implement", "status": "done", "draft": False, "decisions": 0}, "no stage file of the earlier run stays"
     assert "feat: 01 rows" in rig.pr_subjects()
 
 
@@ -454,8 +454,8 @@ def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path)
     assert entries(rig, "01", "fixer") == [SONNET, OPUS_5_5, SONNET]
 
 
-def test_only_two_kinds_exist():
-    assert list(driver_decisions.KINDS) == ["spec-ambiguous", "ticket-blocked"]
+def test_only_three_kinds_exist():
+    assert list(driver_decisions.KINDS) == ["spec-ambiguous", "ticket-blocked", "finding-open"]
 
 
 # ---------------------------------------------------------------- a test-writer report; a question of a merged ticket
