@@ -251,15 +251,26 @@ def last_message(report: str | Path) -> str:
     return f"{report}.last"
 
 
+def _spoken(log: Path) -> str:
+    """The JSON object in the `result` of the last claude stream-json line: a report the agent gave as its answer
+    and did not write; "" when there is none."""
+    with contextlib.suppress(OSError, ValueError, AttributeError, IndexError):
+        said = str(json.loads(log.read_text(errors="replace").splitlines()[-1]).get("result"))
+        found = said[said.index("{"):said.rindex("}") + 1]
+        json.loads(found)
+        return found
+    return ""
+
+
 def settle_report(report: Path) -> None:
-    """The report is the one the agent wrote when it parses, else the saved last message, when there is one."""
-    last = Path(last_message(report))
-    if not last.exists():
-        return
+    """The report is the one the agent wrote when it parses; else the last message codex saved, or the JSON object a
+    claude agent gave as its answer in the log next to the report, when there is one."""
     with contextlib.suppress(OSError, ValueError):
         json.loads(report.read_text())
         return
-    report.write_text(last.read_text())
+    last = Path(last_message(report))
+    if said := last.read_text() if last.exists() else _spoken(report.with_suffix(".log")):
+        report.write_text(said)
 
 
 def render(name: str, values: dict[str, str]) -> str:

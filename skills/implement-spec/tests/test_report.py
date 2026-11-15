@@ -206,3 +206,19 @@ def test_a_read_only_role_lists_no_commits_so_the_commits_it_reviewed_are_not_re
     template = "final-lens" if role in LENSES else role  # the lenses share one prompt
     assert check(template, report, start=shas["impl"]) == []
     assert check(template, {**report, "commits": [shas["tests"], shas["impl"]]}, start=shas["impl"]) == []
+
+
+def test_a_report_a_claude_agent_gave_as_its_answer_and_did_not_write_is_taken_from_its_log(tmp_path):
+    import driver_agents
+    report, log = tmp_path / "reviewer-0.json", tmp_path / "reviewer-0.log"
+    said = "Here is my report:\n```json\n{\"status\": \"DONE\", \"findings\": []}\n```"
+    log.write_text(json.dumps({"type": "assistant"}) + "\n" + json.dumps({"type": "result", "result": said}) + "\n")
+    driver_agents.settle_report(report)
+    assert json.loads(report.read_text()) == {"status": "DONE", "findings": []}
+    report.write_text('{"status": "BLOCKED"}')  # a written report that parses stays
+    driver_agents.settle_report(report)
+    assert json.loads(report.read_text()) == {"status": "BLOCKED"}
+    report.unlink()
+    log.write_text("no json here\n")
+    driver_agents.settle_report(report)
+    assert not report.exists()
