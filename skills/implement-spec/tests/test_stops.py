@@ -244,3 +244,10 @@ def test_after_the_retries_are_spent_the_next_stop_of_the_ticket_asks_the_operat
     assert [q["id"] for q in decisions(rig)["questions"]] == ["01-ticket-blocked-3"]
     assert len(rig.calls("01", "implementer")) == 6
     assert "| human stops | 1 |" in (rig.repo / ".agent/implement/summary.md").read_text()
+
+
+def test_the_driver_answers_only_a_recommended_retry():
+    import driver_decisions
+    ask = lambda id, recommended: {"id": id, "ticket": "01", "stop": 1, "answer": None, "recommended": recommended}
+    questions = [ask("a", "retry"), ask("b", "accept"), ask("c", "")]
+    assert driver_decisions.automatic(questions, 2) == {"a": "retry"}

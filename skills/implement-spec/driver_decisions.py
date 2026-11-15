@@ -170,10 +170,11 @@ def ruled(questions: list[dict]) -> Counter:
 
 
 def automatic(questions: list[dict], budget: int) -> dict:
-    """The answers the driver gives itself: the recommended option of each open question that has one, while the
-    driver ruled on fewer than `budget` stops of its ticket (or of the end of run)."""
+    """The answers the driver gives itself: `retry` for each open question that recommends it, while the driver ruled
+    on fewer than `budget` stops of its ticket (or of the end of run). No other option is the driver's to take: a
+    kind that recommends one still asks the operator."""
     spent = ruled(questions)
-    asked = [q for q in questions if q["answer"] is None and q["recommended"]]
+    asked = [q for q in questions if q["answer"] is None and q["recommended"] == "retry"]
     return {q["id"]: q["recommended"] for q in asked if spent[q["ticket"]] < budget}
 
 
