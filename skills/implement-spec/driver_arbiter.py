@@ -26,13 +26,12 @@ def rule(run: Run) -> tuple[dict[str, str], dict[str, str]]:
     asked = driver_decisions.arbitrated(run.state.read()["run"]["questions"])
     if not asked:
         return {}, {}
-    entries = driver_agents.arbiter_entries(run.models)
-    call = Call("arbiter", FINAL, ".", _values(run, asked), entry=entries[0], entries=entries,
+    entries = driver_agents.preferred_entries(run.models, "arbiter")
+    call = Call("arbiter", FINAL, ".", _values(run, asked), entry=entries[0], entries=entries, asks=False,
                 name=f"arbiter-{asked[0]['stop']}", check={"questions": [q["id"] for q in asked]})
     try:
         report = run.read_only(FINAL, ".", run.pr, call.values["start_sha"], lambda: run.agent(call))
     except Blocked as blocked:
-        run.asks.pop(FINAL, None)  # the operator answers the questions the arbiter left, not one about the arbiter
         ledger(f"End of run: the arbiter could not rule, so the operator decides: {blocked}.")
         return {}, {}
     return _answers(report["rulings"], call.check["questions"])

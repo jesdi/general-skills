@@ -496,27 +496,27 @@ def _arbitrate(run: Run) -> tuple[dict[str, str], dict[str, str]]:
 
 # ---------------------------------------------------------------- the end of the process
 
-def _write_stage(path: str, code: int, open_questions: int, blocked: list[str], run: dict) -> None:
+def _write_stage(path: str, code: int, open_questions: int, blocked: list[str], record: dict) -> None:
     """stage.json tells the dispatcher of an unattended run how the run ended; a done run says whether its PR is a
     draft and how many questions were ruled with no operator."""
     if code == 2:
         body = {"status": "awaiting-review", "artifact": str(PAGE), "open_questions": open_questions}
     elif code == 0:
-        body = {"status": "done", "draft": run["final"]["draft"],
-                "decisions": len(driver_decisions.by_driver(run["questions"]))}
+        body = {"status": "done", "draft": record["final"]["draft"],
+                "decisions": len(driver_decisions.without_operator(record["questions"]))}
     else:
         body = {"status": "blocked", "blocked": blocked}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps({"stage": "implement", **body}, indent=1) + "\n")
 
 
-def _tell(args, code: int, open_questions: list[dict], blocked: list[str], run: dict) -> None:
+def _tell(args, code: int, open_questions: list[dict], blocked: list[str], record: dict) -> None:
     """Print the open questions for the operator, or write stage.json for the dispatcher of an unattended run."""
     if not args.unattended:
         print(driver_decisions.text(open_questions, str(driver_answers.FILE), str(PAGE)), end="")
-    elif args.stage_json and (code or run["final"]["pushed"]):
+    elif args.stage_json and (code or record["final"]["pushed"]):
         # Exit 0 with nothing pushed is not `done` for the dispatcher: it gets no file.
-        _write_stage(args.stage_json, code, len(open_questions), blocked, run)
+        _write_stage(args.stage_json, code, len(open_questions), blocked, record)
 
 
 def _halted_exit(halted: list[str], final: dict) -> int:

@@ -37,7 +37,7 @@ def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final
                     "final/final-reviewer": [final()], "final/fixer": [batch]}))
     assert rig.code == 2, rig.out
     (question,) = decisions(rig)["questions"]
-    assert question["id"] == Q and "quote escaping (csv.py:30)" in question["title"]
+    assert question["id"] == Q and "quote escaping (csv.py)" in question["title"]
     assert len(rig.final_calls("final-reviewer")) == 1
 
 
@@ -59,7 +59,7 @@ def test_a_finding_open_after_the_scoped_review_asks_one_finding_open_and_pushes
     rig, _ = open_after_batch(tmp_path)
     assert rig.code == 2 and not rig.pushes() and not rig.prs(), rig.out
     (question,) = decisions(rig)["questions"]
-    assert question["id"] == Q and "ledger write not atomic (ledger.py:12)" in question["title"]
+    assert question["id"] == Q and "ledger write not atomic (ledger.py)" in question["title"]
     assert [o["id"] for o in question["options"]] == ["retry", "accept", "follow-up"]
     assert question["recommended"] == "retry"
     assert rig.led("End of run: the operator decides on 1 question of kind finding-open")
@@ -92,7 +92,7 @@ def test_accept_on_an_open_final_finding_ships_it_with_no_fix_batch_and_lists_th
     rig.run(steps, "--answer", f"{Q}=accept", *UNATTENDED)
     assert rig.code == 0 and rig.pushes() and len(rig.final_calls("fixer")) == 1, rig.out
     (pr,) = rig.prs()
-    assert "- Ruling: final ships with the finding open (accept): ledger write not atomic (ledger.py:12).\n" in pr["body"]
+    assert "- Ruling: final ships with the finding open (accept): ledger write not atomic (ledger.py).\n" in pr["body"]
     assert "--draft" not in pr["argv"] and not rig.final_calls("arbiter")
 
 

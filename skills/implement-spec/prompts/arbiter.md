@@ -10,7 +10,7 @@ The run is out of retries. Each question below is a finding that the scoped revi
 Read each finding in its evidence file, the code it points at, and what the ledger says about the fix batches that tried it. Then rule on each question.
 `accept`: the PR ships with the finding open and listed in its rulings. Take it when the finding is wrong, already handled, or too small to hold the PR.
 `follow-up`: the PR ships, and the driver files the finding as an issue. Take it when the finding is real and worth a change of its own.
-A critical finding opens the PR as draft whichever you rule; say so in the cost when it matters.
+A critical finding, or a must-fix one carried from a ticket that merged at its fix cap, opens the PR as draft whichever you rule; say so in the cost when it matters.
 In `question`, copy the question id as the list gives it. In `reason`, say why, so that the operator can check your ruling from it alone. In `cost`, say what goes wrong if your ruling is wrong.
 Do not commit, do not change a file and do not dispatch subagents. Leave the tree as you found it.
 

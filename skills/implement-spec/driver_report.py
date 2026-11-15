@@ -202,18 +202,30 @@ def _dispute_errors(role: str, report: dict, context: dict) -> list[str]:
 
 
 def _ruling_errors(report: dict, context: dict) -> list[str]:
-    """An arbitration rules on each disputed test, the arbiter on each open question."""
-    errors = []
-    for key, asked, what in (("test", "disputed", "disputed test"), ("question", "questions", "open question")):
-        given = {ruling.get(key) for ruling in report.get("rulings", [])}
-        errors += [f"rulings: no ruling on {one}: give one ruling per {what}, its id as the list gives it"
-                   for one in context.get(asked, []) if one not in given]
-    return errors
+    """An arbitration rules on each disputed test."""
+    given = {ruling.get("test") for ruling in report.get("rulings", [])}
+    return [f"rulings: no ruling on {test}: give one ruling per disputed test, its id as the list gives it"
+            for test in context.get("disputed", []) if test not in given]
+
+
+def _arbiter_errors(report: dict, context: dict) -> list[str]:
+    """The arbiter rules on each open question."""
+    given = {ruling.get("question") for ruling in report.get("rulings", [])}
+    return [f"rulings: no ruling on {question}: give one ruling per open question, its id as the list gives it"
+            for question in context.get("questions", []) if question not in given]
 
 
 def locked_files(listed: list[str]) -> list[str]:
     """The files of a `locked` list: a test node id `<file>::<test>` names its file. In order, each file once."""
     return list(dict.fromkeys(entry.partition("::")[0] for entry in listed))
+
+
+def _own_fields(report: dict, rules: dict) -> dict:
+    """The schema types only the role's own fields: any other field of the report is dropped."""
+    report = {name: value for name, value in report.items() if name in rules["properties"]}
+    if "locked" in report:
+        report["locked"] = locked_files(report["locked"])
+    return report
 
 
 def validate(role: str, path: str, context: dict) -> list[str]:
@@ -225,12 +237,10 @@ def validate(role: str, path: str, context: dict) -> list[str]:
     found = sorted(jsonschema.Draft202012Validator(rules).iter_errors(report), key=lambda e: str(list(e.path)))
     if found:
         return [f"{'.'.join(map(str, e.path)) or 'report'}: {e.message}" for e in found]
-    # The schema types only the role's own fields: any other field of the report is dropped.
-    report = {name: value for name, value in report.items() if name in rules["properties"]}
-    if "locked" in report:
-        report["locked"] = locked_files(report["locked"])
+    report = _own_fields(report, rules)
     return (_rejected_errors(report, context) + _space_errors(report) + _commit_errors(report, context)
             + _owner_errors(report, context) + _must_fix_errors(report, context)
             + _unchanged_errors(role, report, context) + _correction_errors(report, context)
             + driver_locked.errors(role, report, context) + _red_errors(report, context)
-            + _dispute_errors(role, report, context) + _ruling_errors(report, context))
+            + _dispute_errors(role, report, context) + _ruling_errors(report, context)
+            + _arbiter_errors(report, context))

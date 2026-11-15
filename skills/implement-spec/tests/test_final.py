@@ -82,9 +82,16 @@ for i, a in enumerate(argv[:-1]):
         body = argv[i + 1]
     if a in ("--body-file", "-F"):
         body = sys.stdin.read() if argv[i + 1] == "-" else Path(argv[i + 1]).read_text()
-with (Path(__file__).resolve().parent.parent / "gh.jsonl").open("a") as log:
-    log.write(json.dumps(dict(argv=argv, body=body)) + "\\n")
-print("https://github.example/pull/1")
+log = Path(__file__).resolve().parent.parent / "gh.jsonl"
+if argv[:2] == ["issue", "list"]:  # an issue whose body has the searched marker, as `gh issue create` logged it
+    marker = argv[argv.index("--search") + 1].split('"')[1]
+    rows = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    print(next(("https://github.example/issues/1" for row in rows
+                if row["argv"][:2] == ["issue", "create"] and marker in row["body"]), ""))
+    sys.exit(0)
+with log.open("a") as out:
+    out.write(json.dumps(dict(argv=argv, body=body)) + "\\n")
+print("https://github.example/issues/1" if argv[:2] == ["issue", "create"] else "https://github.example/pull/1")
 """
 HOOK = '#!/bin/sh\nwhile read old new ref; do echo "$ref $new" >> "%s"; done\n'
 
@@ -318,7 +325,7 @@ def test_green_ticket_carries_cap_finding_into_required_final_fix(tmp_path):
     assert len(rig.final_calls("fixer")) == 1
 
 
-def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
+def test_unresolved_must_fix_asks_and_is_not_published_while_the_operator_is_asked(tmp_path):
     rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
     recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
     batch = fixer(fn("02"), "attempt quoting fix", ticket_of="02")
@@ -605,7 +612,7 @@ def test_a_cached_body_that_no_longer_validates_is_rewritten_before_gh_pr_create
     steps = plan(**{"final/pr-writer": [writer(risk_body()), writer(risk_body())]})
     rig, _ = pushed_run(tmp_path, monkeypatch, steps, "claude", gh_fails=True)
     assert rig.code != 0 and "gh pr create failed" in rig.out and len(rig.final_calls("pr-writer")) == 1, rig.out
-    cached = rig.repo / ".agent/implement/final/pr-body.md"
+    cached = rig.repo / ".agent/implement/final/pr-writer-body.md"
     cached.write_text(cached.read_text().replace("touches: [docs]", "touches: [styles]"))
     (tmp_path / "bin/gh").write_text(GH)
     rig.rerun()

@@ -142,6 +142,11 @@ def _title(finding: dict) -> str:
     return f"{finding['title']} ({finding['file']}:{finding['line']})"
 
 
+def _key(finding: dict) -> str:
+    """A finding as a `finding-open` question names it: its title and file, not its line, which a fix batch moves."""
+    return f"{finding['title']} ({finding['file']})"
+
+
 def _last(commits: dict[str, str]) -> str:
     return list(commits.values())[-1]
 
@@ -401,7 +406,7 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
 def _ask_open(run: Run, file: Path, found_open: list[dict]) -> None:
     """After the scoped review, another batch is a ruling: one `finding-open` question per finding that no answer
     ships with, and the end of run stops."""
-    if titles := [_title(finding) for finding in _to_fix(run, found_open)]:
+    if titles := [_key(finding) for finding in _to_fix(run, found_open)]:
         run.ask(FINAL, "finding-open", titles, str(file), FINAL_RESUME)
         raise Blocked(f"the scoped review leaves {len(titles)} finding{'s' * (len(titles) > 1)} open: "
                       + "; ".join(titles))
@@ -410,7 +415,7 @@ def _ask_open(run: Run, file: Path, found_open: list[dict]) -> None:
 def _to_fix(run: Run, found: list[dict]) -> list[dict]:
     """The findings of `found` that a fix batch is due for: those that no `accept` or `follow-up` ships with."""
     waived = driver_decisions.waived(run.state.read()["run"]["questions"])
-    return [finding for finding in found if _title(finding) not in waived]
+    return [finding for finding in found if _key(finding) not in waived]
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
@@ -692,26 +697,35 @@ def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:
     raise Blocked(f"the merge-risk block of the PR body is invalid after a second run of the pr-writer: {errors}")
 
 
-def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
-    """Write the PR body: what the pr-writer wrote with the method of the pr skill, then the facts of the run. A body
-    written for the reviewed tip is kept when its merge-risk block still validates, so a PR that failed to open costs
-    no second agent."""
-    body, tip = OUT / FINAL / "pr-body.md", final["reviewed"]
-    method, risk, facts = pr_skill(), pr_risk_skill(), _facts(run, final, tickets)
-    if final["body"] == tip and body.is_file() and risk and not _risk_errors(risk, body.read_text()):
-        return body
+def _body_skills() -> tuple[Path, Path]:
+    """The `pr` skill the body follows and the `pr-risk` skill its merge-risk block follows; Blocked when one is
+    missing."""
+    method, risk = pr_skill(), pr_risk_skill()
     if not method:
         raise Blocked("the pr skill is missing: the PR body follows it; install it with "
                       "`npx skills add mattpocock/skills --skill pr`")
     if not risk:
         raise Blocked(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
                       f"{PR_RISK_INSTALL}")
+    return method, risk
+
+
+def _writer_body(run: Run, final: dict, tickets: list[Ticket]) -> str:
+    """What the pr-writer wrote with the method of the pr skill, its merge-risk block validated. A body written for
+    the reviewed tip is kept when its merge-risk block still validates, so a PR that failed to open costs no second
+    agent."""
+    body, tip = OUT / FINAL / "pr-writer-body.md", final["reviewed"]
+    risk = pr_risk_skill()
+    if final["body"] == tip and body.is_file() and risk and not _risk_errors(risk, body.read_text()):
+        return body.read_text()
+    method, risk = _body_skills()
+    facts = _facts(run, final, tickets)
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
               "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
-    body.write_text(f"{_run_pr_writer(run, tip, risk, values).strip()}\n\n{facts}")
+    body.write_text(_run_pr_writer(run, tip, risk, values).strip() + "\n")
     run.state.update(lambda state: state["run"]["final"].update(body=tip))
-    return body
+    return body.read_text()
 
 
 def _gh(argv: list[str], what: str) -> str:
@@ -729,12 +743,18 @@ def _draft(final: dict) -> str:
     return f"a critical or must-fix finding is open: {'; '.join(held)}" if held else ""
 
 
-def _file_follow_ups(run: Run, final: dict) -> None:
-    """File each finding ruled `follow-up` as an issue, once: the PR body then links it."""
-    for q in driver_decisions.follow_ups(run.state.read()["run"]["questions"]):
+def _file_follow_ups(run: Run) -> None:
+    """File each finding ruled `follow-up` as an issue, once: the PR body then links it. The issue carries a marker
+    of the run and the question, so a run that stopped after `gh` filed it and before state.json kept its URL finds it
+    again instead of filing it twice."""
+    state = run.state.read()["run"]
+    for q in driver_decisions.follow_ups(state["questions"]):
+        marker = f"implement-spec follow-up {state['revision']}/{q['id']}"
         body = (f"A finding the final review of {run.pr} left open, shipped with its PR by this ruling:\n\n"
-                f"{q['ruling']}\n\nEvidence: {q['evidence'][0]}\n")
-        url = _gh(["issue", "create", "--title", q["subject"], "--body", body], "issue create")
+                f"{q['ruling']}\n\nEvidence: {q['evidence'][0]}\n\n{marker}\n")
+        url = (_gh(["issue", "list", "--state", "all", "--search", f'"{marker}" in:body', "--json", "url", "--jq",
+                    ".[].url"], "issue list")
+               or _gh(["issue", "create", "--title", q["subject"], "--body", body], "issue create"))
 
         def record(state: dict, ruled: str = q["id"], issue: str = url) -> None:
             next(one for one in state["run"]["questions"] if one["id"] == ruled)["issue"] = issue
@@ -743,9 +763,18 @@ def _file_follow_ups(run: Run, final: dict) -> None:
         ledger(f"End of run: the follow-up {q['subject']} is filed as {url}.")
 
 
+def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
+    """Write the PR body: the pr-writer's, then the facts of the run. The follow-up issues are filed once the
+    pr-writer's body is valid, so a run that cannot open its PR files none, and the facts link them."""
+    writer = _writer_body(run, final, tickets)
+    _file_follow_ups(run)
+    body = OUT / FINAL / "pr-body.md"
+    body.write_text(f"{writer.strip()}\n\n{_facts(run, final, tickets)}")
+    return body
+
+
 def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
     """Open the PR, ready for review or as draft, and return its URL."""
-    _file_follow_ups(run, final)
     body, draft = _write_body(run, final, tickets), _draft(final)
     url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
                str(body), *["--draft"] * bool(draft)], "pr create")

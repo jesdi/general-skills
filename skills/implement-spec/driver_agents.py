@@ -129,7 +129,7 @@ def _is_list(entries: object) -> bool:
     return isinstance(entries, list) and bool(entries) and all(isinstance(entry, str) for entry in entries)
 
 
-def other_provider_entries(models: dict[str, list[str]], role: str = "final-reviewer") -> list[str]:
+def other_provider_entries(models: dict[str, list[str]], role: str) -> list[str]:
     """The entries of the `role` list on another provider than the implementer's first entry: the correctness lens and
     the scoped review run and rerun on those of `final-reviewer` when there is one, the arbiter on its own."""
     own = split(models["implementer"][0])[0]
@@ -138,18 +138,18 @@ def other_provider_entries(models: dict[str, list[str]], role: str = "final-revi
 
 def other_provider_entry(models: dict[str, list[str]]) -> str:
     """The other-provider entry of the `final-reviewer` list, its first one; "" when there is none."""
-    return next(iter(other_provider_entries(models)), "")
+    return next(iter(other_provider_entries(models, "final-reviewer")), "")
 
 
 def correctness_entries(models: dict[str, list[str]]) -> list[str]:
     """The entries of the correctness lens and the scoped review: the other-provider ones, or, when the config has none
     or none passed the preflight, the whole `final-reviewer` list (the ledger and the PR body say so)."""
-    return other_provider_entries(models) or models["final-reviewer"]
+    return preferred_entries(models, "final-reviewer")
 
 
-def arbiter_entries(models: dict[str, list[str]]) -> list[str]:
-    """The entries of the arbiter: its other-provider ones, else its whole list."""
-    return other_provider_entries(models, "arbiter") or models["arbiter"]
+def preferred_entries(models: dict[str, list[str]], role: str) -> list[str]:
+    """The entries of `role` on another provider than the implementer's first entry, else its whole list."""
+    return other_provider_entries(models, role) or models[role]
 
 
 def lens_entries(models: dict[str, list[str]], role: str) -> list[str]:

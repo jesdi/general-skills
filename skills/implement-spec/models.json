@@ -6,5 +6,5 @@
   "final-reviewer": ["openai/gpt-6-astra@medium", "claude-opus-5-5@medium"],
   "conflict": ["claude-opus-5-5@medium"],
   "pr-writer": ["claude-opus-5-5@medium"],
-  "arbiter": ["openai/gpt-6-astra@high", "claude-opus-5-5@high"]
+  "arbiter": ["openai/gpt-6-astra@xhigh", "claude-opus-5-5@xhigh"]
 }

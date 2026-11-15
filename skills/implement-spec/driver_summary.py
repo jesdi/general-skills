@@ -22,13 +22,13 @@ def _rows(run: dict, tickets: dict) -> list[tuple[str, object]]:
 
 def _stops(run: dict) -> list[tuple[str, object]]:
     """The stops that waited for the operator, and a row for those the driver ruled on itself, when it did."""
-    ruled = sum(driver_decisions.ruled(run.get("questions", [])).values())
+    ruled = len({(q["ticket"], q["stop"]) for q in driver_decisions.without_operator(run.get("questions", []))})
     return [("human stops", run["stops"] - ruled), *([("stops the driver ruled on", ruled)] if ruled else [])]
 
 
 def _decisions(run: dict) -> list[str]:
     """What the driver decided without the operator, for the end of the summary."""
-    rulings = [q["ruling"] for q in driver_decisions.by_driver(run.get("questions", []))]
+    rulings = driver_decisions.rulings(driver_decisions.without_operator(run.get("questions", [])))
     return ["", "Driver decisions, taken without the operator:", *(f"- {ruling}" for ruling in rulings)] * bool(rulings)
 
 

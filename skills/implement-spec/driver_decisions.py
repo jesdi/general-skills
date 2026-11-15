@@ -195,7 +195,7 @@ def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
 
 def ruled(questions: list[dict]) -> Counter:
     """ticket (or FINAL) -> the stops of it that the driver ruled on."""
-    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in by_driver(questions)})
+    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in questions if q.get("by") == DRIVER})
 
 
 def automatic(questions: list[dict], budget: int) -> dict:
@@ -234,7 +234,7 @@ def _moved(questions: list[dict], stops: dict) -> dict[str, dict]:
     return {ticket: fields for ticket, fields in moved.items() if fields}
 
 
-def by_driver(questions: list[dict]) -> list[dict]:
+def without_operator(questions: list[dict]) -> list[dict]:
     """The questions the driver or its arbiter answered, with no operator."""
     return [q for q in questions if q.get("by") in (DRIVER, ARBITER)]
 
