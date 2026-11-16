@@ -4,7 +4,7 @@ Use this only when an older run stopped after two implementer attempts and left 
 
 Stop the driver and prevent the dispatcher from resuming it during recovery. In the PR worktree, preserve any dirty files with a binary patch and exact file copies outside tracked paths. Do not reset the checkout or overwrite locked tests. Keep the branch and driver records; recovery adds a question, not a passing gate.
 
-Read the ticket's ledger and reports. Confirm that the implementer stopped before any accepted implementation and that its recorded tip is still the test-writer commit. The command below accepts only that narrow checkpoint: schema 5, round zero, no gate results, no prior question for this ticket, two recorded implementer attempts, and an intact test-writer commit on the ticket branch. Other phases, uncertain evidence, or prior operator decisions require investigation; do not guess a phase or delete state to start over.
+Read the ticket's ledger and reports. Confirm that the implementer stopped before any accepted implementation and that its recorded tip is still the test-writer commit. The command below accepts only that narrow checkpoint: schema 5 or 6, round zero, no gate results, no prior question for this ticket, two recorded implementer attempts, and an intact test-writer commit on the ticket branch. Other phases, uncertain evidence, or prior operator decisions require investigation; do not guess a phase or delete state to start over.
 
 Run the following from the PR worktree, replacing the skill path, ticket number and full verified test-writer SHA. It takes the driver's locks, backs up state, records a question through the existing helper and leaves the ticket BLOCKED. No checkout, branch or gate is changed.
 
@@ -35,7 +35,7 @@ with held:
     entry = data['tickets'][number]
     attempts = [a['role'] for a in data['run']['agents'] if a['ticket'] == number]
     branch = driver_names.Names(pr).ticket(number)
-    valid = (data['run']['schema'] == 5 and entry['phase'] == 'blocked'
+    valid = (data['run']['schema'] in (5, 6) and entry['phase'] == 'blocked'
              and entry['round'] == 0 and entry['tip'] == entry['test_writer_sha'] == tip
              and entry['locked'] and not any(entry['green_gates'].values())
              and not any(q['ticket'] == number for q in data['run']['questions'])
@@ -47,8 +47,8 @@ with held:
     with backup.open('xb') as out:
         out.write(before)
     def recover(current):
-        driver_decisions.stop(current['run'], 'ticket-blocked', number,
-            ['Operator verified the repaired environment and pre-implementation checkpoint.'],
+        driver_decisions.stop(current['run'], number, [('ticket-blocked',
+            'Operator verified the repaired environment and pre-implementation checkpoint.')],
             ['.agent/implement/ledger.md'], driver_decisions.Resume('implement', tip))
     updated = state.update(recover)
     question = updated['run']['questions'][-1]['id']

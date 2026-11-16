@@ -454,8 +454,31 @@ def test_the_rerun_of_fix_round_2_wraps_to_the_first_implementer_entry(tmp_path)
     assert entries(rig, "01", "fixer") == [SONNET, OPUS_5_5, SONNET]
 
 
-def test_only_three_kinds_exist():
-    assert list(driver_decisions.KINDS) == ["spec-ambiguous", "ticket-blocked", "finding-open"]
+def test_only_four_kinds_exist():
+    assert list(driver_decisions.KINDS) == ["spec-ambiguous", "ticket-blocked", "finding-open", "finding-must-fix"]
+
+
+def test_a_must_fix_finding_asks_its_own_kind_whose_ships_are_the_operators_only():
+    """No agent ships a critical or must-fix finding: it asks `finding-must-fix`, not the arbiter's `finding-open`."""
+    must_fix = driver_decisions.KINDS["finding-must-fix"]
+    assert list(must_fix.options) == ["retry", "accept", "follow-up"] and must_fix.recommended == "retry"
+    assert must_fix.options is driver_decisions.KINDS["finding-open"].options and "only you may" in must_fix.why
+    assert [q["kind"] for q in driver_decisions.arbitrated([
+        {"answer": None, "kind": kind} for kind in driver_decisions.KINDS])] == ["finding-open"]
+    assert "critical" not in driver_decisions.KINDS["finding-open"].why
+    kind = driver_decisions.finding_kind
+    assert [kind({"severity": "critical"}), kind({"severity": "important", "must_fix": True}),
+            kind({"severity": "important"})] == ["finding-must-fix", "finding-must-fix", "finding-open"]
+
+
+def test_one_stop_asks_questions_of_two_kinds_and_the_ledger_names_both():
+    run = {"stops": 0, "questions": []}
+    asked = [("finding-must-fix", "leak (auth.py)"), ("finding-open", "slow (db.py)")]
+    driver_decisions.stop(run, "final", asked, ["findings-1.json"], driver_decisions.Resume("final"))
+    assert [(q["id"], q["stop"]) for q in run["questions"]] == [("final-finding-must-fix-1", 1),
+                                                               ("final-finding-open-1", 1)]
+    assert driver_decisions.decides(asked) == ("the operator decides on 1 question of kind finding-must-fix and "
+                                               "1 question of kind finding-open")
 
 
 # ---------------------------------------------------------------- a test-writer report; a question of a merged ticket

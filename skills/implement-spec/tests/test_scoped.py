@@ -1,6 +1,7 @@
 """Fewer roles, ticket 04: after the fix batch of the final review, one scoped re-review runs, the `final-reviewer`
-role on the other-provider entry of the `final-reviewer` list. A finding it leaves open asks `final-finding-open`:
-only a `retry` starts another batch and scoped review; `accept` and `follow-up` ship the PR with it.
+role on the other-provider entry of the `final-reviewer` list. A finding it leaves open asks `final-finding-open`, or
+`final-finding-must-fix` for a critical or must-fix one: only a `retry` starts another batch and scoped review;
+`accept` and `follow-up` ship the PR with it.
 
 In process, on the rig of test_tidy and test_lenses."""
 import json
@@ -28,7 +29,7 @@ def test_the_scoped_review_is_one_agent_on_the_other_provider_over_the_fix_batch
     assert [(f["title"], f["source"]) for f in findings_file(rig, 1)] == [("Q-ONE", "final-reviewer")]
 
 
-def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final_finding_open(tmp_path):
+def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final_finding_must_fix(tmp_path):
     rig = Inside(tmp_path, RISKY, MODELS)
     escaping = {**finding("quote escaping", file="csv.py", line=30), "basis": "regression"}
     batch = fixer(fn("02"), "escape quotes", ticket_of="02")
@@ -37,7 +38,7 @@ def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final
                     "final/final-reviewer": [final()], "final/fixer": [batch]}))
     assert rig.code == 2, rig.out
     (question,) = decisions(rig)["questions"]
-    assert question["id"] == Q and "quote escaping (csv.py)" in question["title"]
+    assert question["id"] == "final-finding-must-fix-1" and "quote escaping (csv.py)" in question["title"]
     assert len(rig.final_calls("final-reviewer")) == 1
 
 
@@ -87,13 +88,13 @@ def test_with_retries_the_driver_runs_the_one_more_fix_batch_itself_and_pushes_w
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
 
 
-def test_accept_on_an_open_final_finding_ships_it_with_no_fix_batch_and_lists_the_operator_ruling(tmp_path):
+def test_accept_on_an_open_final_finding_ships_it_as_draft_with_no_fix_batch_and_lists_the_operator_ruling(tmp_path):
     rig, steps = open_after_batch(tmp_path)
     rig.run(steps, "--answer", f"{Q}=accept", *UNATTENDED)
     assert rig.code == 0 and rig.pushes() and len(rig.final_calls("fixer")) == 1, rig.out
     (pr,) = rig.prs()
     assert "- Ruling: final ships with the finding open (accept): ledger write not atomic (ledger.py).\n" in pr["body"]
-    assert "--draft" not in pr["argv"] and not rig.final_calls("arbiter")
+    assert "--draft" in pr["argv"] and not rig.final_calls("arbiter")
 
 
 # ---------------------------------------------------------------- the locked files

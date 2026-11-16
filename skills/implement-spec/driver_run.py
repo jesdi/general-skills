@@ -107,8 +107,7 @@ class Call:
 
 class Ask(NamedTuple):
     """The questions a ticket thread, or the end of run, wants the operator to answer when it blocks."""
-    kind: str
-    subjects: list[str]  # one question per subject
+    asked: list[tuple[str, str]]  # one question per (kind, subject)
     report: str  # the evidence
     resume: Resume  # the record gets its tip and round with the stop, and all of it with a `retry` or a `keep-test`
 
@@ -131,12 +130,13 @@ class Run:
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
 
-    def ask(self, number: str, kind: str, subjects: list[str], report: str, resume: Resume) -> None:
-        """The questions of `number`'s stop. The end of run adds those of each lens that stopped to one stop."""
+    def ask(self, number: str, asked: list[tuple[str, str]], report: str, resume: Resume) -> None:
+        """The questions of `number`'s stop, one per (kind, subject) of `asked`. The end of run adds those of each lens
+        that stopped, or of each finding, to one stop."""
         with _ASKS:
             if earlier := self.asks.get(number):
-                subjects = earlier.subjects + subjects
-            self.asks[number] = Ask(kind, subjects, report, resume)
+                asked = earlier.asked + asked
+            self.asks[number] = Ask(asked, report, resume)
 
     def block(self, number: str, line: int) -> None:
         """Make the record of `number` BLOCKED and add the questions it asked for, in one write of state.json. The
@@ -148,12 +148,12 @@ class Run:
             if ask:
                 held.update(ask.resume.checkpoint())
                 evidence = [ask.report, f"{OUT / 'ledger.md'}:{line}"]
-                driver_decisions.stop(state["run"], ask.kind, number, ask.subjects, evidence, ask.resume)
+                driver_decisions.stop(state["run"], number, ask.asked, evidence, ask.resume)
             held["phase"] = "blocked"
 
         self.state.update(change)
-        if ask and ask.subjects:
-            ledger(f"{_owner(number)}: {driver_decisions.decides(ask.kind, len(ask.subjects))} in "
+        if ask and ask.asked:
+            ledger(f"{_owner(number)}: {driver_decisions.decides(ask.asked)} in "
                    f"{OUT / 'decisions.json'}.")
 
     def agent(self, call: Call) -> dict:
@@ -319,7 +319,7 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
     its state is."""
     tip = call.values["start_sha"] if call.retry else driver_slots.head(call.slot)
     resume = FINAL_RESUME if call.number == FINAL else retry_point(call.retry or call.role, tip, call.fix_round)
-    run.ask(call.number, "ticket-blocked", [f"the {call.role}: {error}"], str(report), resume)
+    run.ask(call.number, [("ticket-blocked", f"the {call.role}: {error}")], str(report), resume)
 
 
 def _give_up(run: Run, call: Call, report: Path, error: str) -> NoReturn:

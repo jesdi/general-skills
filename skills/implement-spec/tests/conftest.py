@@ -29,6 +29,7 @@ def pr_skill(tmp_path_factory):
         patch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config-home")))
         # The tests of a stop see its question: the driver answers none itself unless a test passes --retries.
         patch.setenv("IMPLEMENT_SPEC_RETRIES", "0")
+        patch.setenv("IMPLEMENT_SPEC_MUST_FIX_RETRIES", "0")
         # and no arbiter rules in their place, unless a test passes --no-ask.
         patch.setenv("IMPLEMENT_SPEC_ASK", "1")
         yield home / "skills/pr/SKILL.md"

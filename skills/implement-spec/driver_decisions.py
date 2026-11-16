@@ -16,7 +16,10 @@ from typing import NamedTuple
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
 DRIVER = "driver"  # `by` of a question the driver answered itself
 ARBITER = "arbiter"  # `by` of a question the arbiter agent answered
-SHIPS = ("accept", "follow-up")  # the answers to `finding-open` that ship the PR with the finding open
+SHIPS = ("accept", "follow-up")  # the answers to a finding question that ship the PR with the finding open
+FINDING_OPEN = "finding-open"  # the kind of an important finding: the arbiter may ship it, as draft
+MUST_FIX = "finding-must-fix"  # the kind of a critical or must-fix finding: no agent ships it
+FINDINGS = (FINDING_OPEN, MUST_FIX)  # the kinds of a final-review finding that the scoped review leaves open
 FINAL = "final"  # the end of run asks its questions, and has its record and its files, under this name
 
 
@@ -53,6 +56,19 @@ class Kind(NamedTuple):
     why: str
     recommended: str  # "" for a kind that recommends no option
     options: dict[str, Option]
+    arbiter: bool = False  # the arbiter rules on it once the driver's retries are spent; else only the operator ships
+
+
+FINDING_OPTIONS = {  # both finding kinds: they differ only in who may ship the finding (`Kind.arbiter`)
+    "retry": Option(
+        "One more fix batch and scoped review.",
+        "Ruling: {ticket} runs again (retry): {subject}.", True),
+    "accept": Option(
+        "Push and open the PR as draft, with the finding open and listed in its rulings.",
+        "Ruling: {ticket} ships with the finding open (accept): {subject}.", True),
+    "follow-up": Option(
+        "As `accept`, and the driver files the finding as an issue before it opens the PR.",
+        "Ruling: {ticket} ships with the finding open, filed as a follow-up issue (follow-up): {subject}.", True)}
 
 
 KINDS = {
@@ -91,22 +107,28 @@ KINDS = {
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", False)}),
-    # Only the end of run asks it: the subject is the finding's title.
-    "finding-open": Kind(
+    # Only the end of run asks the two finding kinds: the subject is the finding's title and file (`subject`).
+    FINDING_OPEN: Kind(
         "End of run: a final-review finding is open after the scoped review: {subject}",
-        "The scoped review after the fix batch left this critical or important finding open. Nothing is pushed until "
-        "it is ruled on.",
-        "retry",
-        {"retry": Option(
-            "One more fix batch and scoped review.",
-            "Ruling: {ticket} runs again (retry): {subject}.", True),
-         "accept": Option(
-            "Push and open the PR with the finding open and listed in its rulings; a critical one opens it as draft.",
-            "Ruling: {ticket} ships with the finding open (accept): {subject}.", True),
-         "follow-up": Option(
-            "As `accept`, and the driver files the finding as an issue before it opens the PR.",
-            "Ruling: {ticket} ships with the finding open, filed as a follow-up issue (follow-up): {subject}.", True)}),
+        "The scoped review after the fix batch left this important finding open. Nothing is pushed until it is ruled "
+        "on.",
+        "retry", FINDING_OPTIONS, arbiter=True),
+    MUST_FIX: Kind(
+        "End of run: a critical or must-fix finding is open after the scoped review: {subject}",
+        "The scoped review after the fix batch left this critical or must-fix finding open, and the driver's own fix "
+        "batches are spent. No agent ships it: only you may. Nothing is pushed until it is ruled on.",
+        "retry", FINDING_OPTIONS),
 }
+
+
+def finding_kind(finding: dict) -> str:
+    """The kind of the question that an open final-review finding asks."""
+    return MUST_FIX if finding["severity"] == "critical" or finding.get("must_fix") else FINDING_OPEN
+
+
+def subject(finding: dict) -> str:
+    """A final-review finding as its question names it: its title and file, not its line, which a fix batch moves."""
+    return f"{finding['title']} ({finding['file']})"
 
 
 def drop_merged(state: dict) -> list[dict]:
@@ -121,8 +143,9 @@ def drop_merged(state: dict) -> list[dict]:
 
 def question_id(kind: str, ticket: str, asked: list[dict]) -> str:
     """The id of the next question of `kind` for `ticket`: `<NN>-<kind>-<n>` (`final-<kind>-<n>` for the end of run);
-    n counts in `asked`, the whole run."""
-    return f"{ticket}-{kind}-{1 + sum((q['ticket'], q['kind']) == (ticket, kind) for q in asked)}"
+    n counts the ids of `asked`, the whole run, so a question whose kind changed (driver_legacy) keeps its id."""
+    prefix = f"{ticket}-{kind}-"
+    return f"{prefix}{1 + sum(q['id'].startswith(prefix) for q in asked)}"
 
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
@@ -136,15 +159,18 @@ def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: l
             "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume.fields(), "answer": None}
 
 
-def stop(run: dict, kind: str, ticket: str, subjects: list[str], evidence: list[str], resume: Resume) -> None:
-    """Count one stop in `run` and add one open question of `kind` per subject. No subject is no stop."""
-    run["stops"] += bool(subjects)
-    for subject in subjects:
+def stop(run: dict, ticket: str, asked: list[tuple[str, str]], evidence: list[str], resume: Resume) -> None:
+    """Count one stop in `run` and add one open question per (kind, subject) of `asked`. Nothing asked is no stop."""
+    run["stops"] += bool(asked)
+    for kind, subject in asked:
         run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"], resume))
 
 
-def decides(kind: str, subjects: int) -> str:
-    return f"the operator decides on {subjects} question{'s' * (subjects > 1)} of kind {kind}"
+def decides(asked: list[tuple[str, str]]) -> str:
+    """What the operator decides on at a stop that asks `asked`, (kind, subject) pairs."""
+    counts = Counter(kind for kind, _ in asked)
+    return "the operator decides on " + " and ".join(
+        f"{n} question{'s' * (n > 1)} of kind {kind}" for kind, n in counts.items())
 
 
 def document(run: dict) -> dict:
@@ -161,14 +187,21 @@ def rulings(questions: list[dict]) -> list[str]:
             for q in questions if q["answer"] is not None]
 
 
-def waived(questions: list[dict]) -> set[str]:
-    """The findings, by subject, that a `finding-open` answer ships with: no fix batch is due for them."""
-    return {q["subject"] for q in questions if q["kind"] == "finding-open" and q["answer"] in SHIPS}
+def waived(questions: list[dict], finding: dict) -> bool:
+    """An answer to a question on `finding` ships it: no fix batch is due. A finding that is critical or must-fix now
+    is shipped only by the operator's answer, not by the driver's or the arbiter's (`by`) to it as an important one."""
+    by = [q.get("by") for q in questions if _ships(q, subject(finding))]  # "" or none for the operator
+    return not all(by) if finding_kind(finding) == MUST_FIX else bool(by)
+
+
+def _ships(q: dict, named: str) -> bool:
+    """`q` is a finding question on the subject `named`, answered with an option that ships it."""
+    return q["kind"] in FINDINGS and q["answer"] in SHIPS and q["subject"] == named
 
 
 def follow_ups(questions: list[dict]) -> list[dict]:
-    """The `finding-open` questions answered `follow-up` with no issue filed yet."""
-    return [q for q in questions if (q["kind"], q["answer"]) == ("finding-open", "follow-up") and not q.get("issue")]
+    """The finding questions answered `follow-up` with no issue filed yet."""
+    return [q for q in questions if q["kind"] in FINDINGS and q["answer"] == "follow-up" and not q.get("issue")]
 
 
 def ruling(q: dict) -> str:
@@ -198,13 +231,21 @@ def ruled(questions: list[dict]) -> Counter:
     return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in questions if q.get("by") == DRIVER})
 
 
-def automatic(questions: list[dict], budget: int) -> dict:
+def automatic(questions: list[dict], retries: int, must_fix_retries: int) -> dict:
     """The answers the driver gives itself: `retry` for each open question that recommends it, while the driver ruled
-    on fewer than `budget` stops of its ticket (or of the end of run). No other option is the driver's to take: a
-    kind that recommends one still asks the operator."""
-    spent = ruled(questions)
-    asked = [q for q in questions if q["answer"] is None and q["recommended"] == "retry"]
-    return {q["id"]: q["recommended"] for q in asked if spent[q["ticket"]] < budget}
+    on fewer than `retries` stops of its ticket (or of the end of run). A `finding-must-fix` question counts only the
+    stops with one that the driver ruled, up to `retries + must_fix_retries`: that many fix batches run while a
+    critical or must-fix finding is open, whatever else stopped the end of run. No other option is the driver's to
+    take: a kind that recommends one still asks the operator."""
+    every = (ruled(questions), retries)
+    scopes = {MUST_FIX: (ruled([q for q in questions if q["kind"] == MUST_FIX]), retries + must_fix_retries)}
+    return {q["id"]: "retry" for q in questions if _due(q, *scopes.get(q["kind"], every))}
+
+
+def _due(q: dict, spent: Counter, budget: int) -> bool:
+    """`q` is open, recommends `retry`, and the driver ruled on fewer than `budget` stops of its ticket, as `spent`
+    counts them."""
+    return q["answer"] is None and q["recommended"] == "retry" and spent[q["ticket"]] < budget
 
 
 def _answer(q: dict, answers: dict, by: str, why: str) -> str:
@@ -240,8 +281,8 @@ def without_operator(questions: list[dict]) -> list[dict]:
 
 
 def arbitrated(questions: list[dict]) -> list[dict]:
-    """The open questions the arbiter rules on once the driver's retries are spent."""
-    return [q for q in questions if q["answer"] is None and q["kind"] == "finding-open"]
+    """The open questions the arbiter rules on once the driver's retries are spent: those of a `Kind.arbiter` kind."""
+    return [q for q in questions if q["answer"] is None and KINDS[q["kind"]].arbiter]
 
 
 def text(open_questions: list[dict], answers: str, page: str) -> str:

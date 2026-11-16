@@ -2,7 +2,8 @@
 ticket, rebase it onto the fetched base tip, gate it, run the final review, let one fix batch land as `fix(NN)`
 commits with a scoped review, then stop before the push, or push and open the PR. A finding the scoped review leaves
 open asks `final-finding-open-<n>`: a `retry` runs another batch and scoped review, an `accept` or a `follow-up` ships
-the PR with it, as draft when it is critical.
+the PR with it, as draft. A critical or must-fix one asks `final-finding-must-fix-<n>` instead, which only the
+operator ships.
 
 `run.final` of state.json is the resume contract (`driver_state._final` makes it with every key):
     skipped    why the end-of-run work did not start
@@ -140,11 +141,6 @@ def _prompt_values(run: Run) -> dict[str, str]:
 
 def _title(finding: dict) -> str:
     return f"{finding['title']} ({finding['file']}:{finding['line']})"
-
-
-def _key(finding: dict) -> str:
-    """A finding as a `finding-open` question names it: its title and file, not its line, which a fix batch moves."""
-    return f"{finding['title']} ({finding['file']})"
 
 
 def _last(commits: dict[str, str]) -> str:
@@ -404,18 +400,20 @@ def _settle_review(run: Run, done: int, tip: str, covered: str, found: list[dict
 
 
 def _ask_open(run: Run, file: Path, found_open: list[dict]) -> None:
-    """After the scoped review, another batch is a ruling: one `finding-open` question per finding that no answer
-    ships with, and the end of run stops."""
-    if titles := [_key(finding) for finding in _to_fix(run, found_open)]:
-        run.ask(FINAL, "finding-open", titles, str(file), FINAL_RESUME)
+    """After the scoped review, another batch is a ruling: one question per finding that no answer ships with, of the
+    kind of the finding, and the end of run stops."""
+    if due := _to_fix(run, found_open):
+        titles = [driver_decisions.subject(finding) for finding in due]
+        run.ask(FINAL, [*zip(map(driver_decisions.finding_kind, due), titles)], str(file), FINAL_RESUME)
         raise Blocked(f"the scoped review leaves {len(titles)} finding{'s' * (len(titles) > 1)} open: "
                       + "; ".join(titles))
 
 
 def _to_fix(run: Run, found: list[dict]) -> list[dict]:
-    """The findings of `found` that a fix batch is due for: those that no `accept` or `follow-up` ships with."""
-    waived = driver_decisions.waived(run.state.read()["run"]["questions"])
-    return [finding for finding in found if _key(finding) not in waived]
+    """The findings of `found` that a fix batch is due for: those that no `accept` or `follow-up` ships with
+    (driver_decisions.waived)."""
+    questions = run.state.read()["run"]["questions"]
+    return [finding for finding in found if not driver_decisions.waived(questions, finding)]
 
 
 def _review(run: Run, final: dict, tip: str) -> None:
@@ -737,10 +735,9 @@ def _gh(argv: list[str], what: str) -> str:
 
 
 def _draft(final: dict) -> str:
-    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling, and no
-    ruling settles a must-fix one."""
-    held = [_title(finding) for finding in final["open"] if finding["severity"] == "critical" or finding.get("must_fix")]
-    return f"a critical or must-fix finding is open: {'; '.join(held)}" if held else ""
+    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling."""
+    shipped = [_title(finding) for finding in final["open"]]
+    return f"a finding ships open: {'; '.join(shipped)}" if shipped else ""
 
 
 def _file_follow_ups(run: Run) -> None:

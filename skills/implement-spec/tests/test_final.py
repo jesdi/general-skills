@@ -15,8 +15,8 @@ Interface choices (ticket 06):
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
 - the final fixer's `commits` hold `{"sha", "ticket"}` objects, and the driver renames each fixer commit to
   `fix(NN): <its subject>` before the gate and the scoped review run (no rewrite after a review).
-- a finding open after the scoped review: question `final-finding-open-<n>`, options `retry`, `accept` and
-  `follow-up`.
+- a finding open after the scoped review: question `final-finding-open-<n>`, or `final-finding-must-fix-<n>` for a
+  critical or must-fix one, options `retry`, `accept` and `follow-up`.
 - local stop: stdout lines `Branch tip: <sha>`, `Reviewed tip: <sha>` and the rerun command, which has `--push`.
 - the PR body lists, per ticket, a line with the ticket number and its commit's first 7 hex, and every ruling line.
 - stage.json at a clean unattended end is `{"stage": "implement", "status": "done"}`.
@@ -338,7 +338,7 @@ def test_unresolved_must_fix_asks_and_is_not_published_while_the_operator_is_ask
 
     assert rig.code == 2, rig.output()
     (question,) = rig.state()["run"]["questions"]
-    assert question["id"] == "final-finding-open-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
+    assert question["id"] == "final-finding-must-fix-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
     assert [item["title"] for item in rig.state()["run"]["final"]["open"]] == ["MERGED-QUOTING-REGRESSION"]
     assert not rig.pushes() and not rig.prs()
     rig.run(steps)

@@ -2,6 +2,7 @@
 import json
 import subprocess
 
+import driver_decisions
 import driver_dispute
 import driver_legacy
 import driver_state
@@ -164,3 +165,27 @@ def test_resume_keys_the_rulings_and_corrections_of_a_schema_4_run_by_their_test
     assert [one["key"] for one in json.loads(evidence.read_text())] == ["tests/test_01.py::test_x", "tests/test_02.py"]
     assert driver_dispute.kept(state.read()["run"]["questions"][:1], "01") == {"tests/test_01.py::test_x",
                                                                              "tests/test_02.py"}
+
+
+def test_resume_makes_the_open_finding_questions_of_a_schema_5_run_on_a_must_fix_finding_must_fix(repo, tmp_path):
+    """Schema 5 had no `finding-must-fix`: an open `finding-open` question on a critical or must-fix finding of the
+    last review becomes one, with its id and its decisions.json revision; one on an important finding, or an answered
+    one, does not. A later `finding-open` question gets the next id, not the one the changed question keeps."""
+    state, _, _ = older_run(repo, tmp_path)
+    found = [{"title": "leak", "file": "auth.py", "severity": "critical"},
+             {"title": "quoting", "file": "csv.py", "severity": "important", "must_fix": True},
+             {"title": "slow", "file": "db.py", "severity": "important"}]
+    asked = []
+    for one in found:
+        asked.append(driver_decisions.question("finding-open", "final", f"{one['title']} ({one['file']})", [], asked,
+                                               1, driver_decisions.Resume("final")))
+    answered = {**asked[0], "id": "final-finding-open-4", "answer": "retry", "ruling": "r"}
+    edit(state, final={"recovery": None, "open": found}, questions=[*asked, answered], revision="run-1", stops=1)
+    before = driver_decisions.document(state.read()["run"])
+    assert resume(state, tmp_path)[0] == []
+    run = state.read()["run"]
+    assert [(q["id"], q["kind"]) for q in run["questions"]] == [
+        ("final-finding-open-1", "finding-must-fix"), ("final-finding-open-2", "finding-must-fix"),
+        ("final-finding-open-3", "finding-open"), ("final-finding-open-4", "finding-open")]
+    assert driver_decisions.document(run) == before and run["schema"] == driver_state.SCHEMA
+    assert driver_decisions.question_id("finding-open", "final", run["questions"]) == "final-finding-open-5"
