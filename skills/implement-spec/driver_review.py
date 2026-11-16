@@ -30,14 +30,15 @@ def route(findings: list[dict], locked: list[str], protected: list[str]) -> tupl
 
 
 def restore(slot: str, branch: str, tip: str) -> None:
-    """Put the slot back on `branch` at `tip` with a clean tree. Only for a read-only role: its edits, commits and
-    untracked files go. Ignored files stay."""
-    git(slot, "checkout", "-q", "-f", "-B", branch, tip)
+    """Put the slot back on `branch` ("": a detached HEAD) at `tip` with a clean tree. Only for a read-only role: its
+    edits, commits and untracked files go. Ignored files stay."""
+    git(slot, "checkout", "-q", "-f", *(["-B", branch] if branch else ["--detach"]), tip)
     git(slot, "clean", "-q", "-fd")
 
 
 def disturbed(slot: str, branch: str, tip: str) -> str:
-    """"" when the slot is still on `branch` at `tip` with a clean tree, else what the read-only agents left."""
+    """"" when the slot is still on `branch` ("": a detached HEAD) at `tip` with a clean tree, else what the read-only
+    agents left."""
     if on_branch(slot) != branch or head(slot) != tip:
         return f"the slot is no longer on {branch} at {tip[:7]}"
     left = [line[3:] for line in git(slot, "status", "--porcelain").stdout.splitlines()]

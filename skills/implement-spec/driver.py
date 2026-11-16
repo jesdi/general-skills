@@ -475,11 +475,12 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
     return [error] if error else []
 
 
-def _rule(run: Run) -> bool:
+def _rule(run: Run, tickets: list[Ticket]) -> bool:
     """The driver answers each open question that recommends `retry` with it, at most `--retries` stops per ticket and
     for the end of run, and `--must-fix-retries` more stops with a `finding-must-fix` question; then, unless `--ask`,
-    the arbiter rules on the open `finding-open` questions, and else the driver rules on an end-of-run stop by its draft
-    policy (driver_final.draft_ruling). True: one of them ruled, so the run goes on with no operator."""
+    the arbiter rules on the open `finding-open` questions and a ticket's `spec-ambiguous` ones, and else the driver
+    rules on an end-of-run stop by its draft policy (driver_final.draft_ruling) and answers a ticket's stop
+    `leave-out`. True: one of them ruled, so the run goes on with no operator."""
     questions = run.state.read()["run"]["questions"]
     answers = driver_decisions.automatic(questions, run.args.retries, run.args.must_fix_retries)
     _settle_rulings(run, questions, answers, driver_decisions.DRIVER, {})
@@ -491,7 +492,36 @@ def _rule(run: Run) -> bool:
         return True
     drafted = driver_final.draft_ruling(run)
     _settle_rulings(run, run.state.read()["run"]["questions"], drafted, driver_decisions.DRIVER, {})
-    return bool(drafted)
+    return bool(drafted or _leave_out(run, tickets))
+
+
+def _leave_out(run: Run, tickets: list[Ticket]) -> dict[str, str]:
+    """Answer the open questions of a ticket `leave-out` (driver_decisions.leave_out_answers) and set aside the work of
+    each ticket it leaves out. Returns the answers."""
+    questions = run.state.read()["run"]["questions"]
+    answers = driver_decisions.leave_out_answers(questions, tickets, run.args.retries)
+    _settle_rulings(run, questions, answers, driver_decisions.DRIVER, {})
+    _set_aside(run, tickets)  # an error stops the next pass, which sets aside again
+    return answers
+
+
+def _set_aside(run: Run, tickets: list[Ticket]) -> list[str]:
+    """Save the uncommitted work that a left-out ticket left in its slot as a patch next to its reports, and take the
+    slot off its branch with a clean tree: the other tickets and the end of run get the slot. [] or the errors that
+    stop the run: a slot that git cannot clean stays as it is."""
+    state, errors = run.state.read(), []
+    for number in sorted(driver_decisions.left_out(state["run"]["questions"], tickets)):
+        slot, patch = state["tickets"][number]["slot"], driver_slots.fresh(OUT / number / "left-out.patch")
+        if not driver_state.holds_work(state, number):
+            continue
+        if error := driver_slots.set_aside(driver_slots.path(slot), patch):
+            errors.append(f"implement-spec: ticket {number} is left out, but its uncommitted work stays in slot "
+                          f"{slot}: {error}")
+            continue
+        run.kept.pop(number, None)
+        ledger(f"Ticket {number}: left out; its uncommitted work in slot {slot} is saved as {patch}, and the slot is "
+               "free.")
+    return errors
 
 
 def _settle_rulings(run: Run, questions: list[dict], answers: dict, by: str, why: dict[str, str]) -> None:
@@ -548,14 +578,21 @@ def _halted_exit(halted: list[str], final: dict) -> int:
     return 4
 
 
-def _exit_code(final: dict, args, end_blocked: bool) -> int:
+def _blocked(final: dict, tickets: list[Ticket], end_blocked: bool) -> list[str]:
+    """The tickets that end the run BLOCKED, with FINAL when the end of run is: no left-out ticket, which the end of
+    run ships without."""
+    left = driver_decisions.left_out(final["run"]["questions"], tickets)
+    blocked = [number for number, entry in final["tickets"].items()
+               if entry["phase"] == "blocked" and number not in left]
+    return blocked + [FINAL] * end_blocked
+
+
+def _exit_code(final: dict, args, tickets: list[Ticket], end_blocked: bool) -> int:
     """Publish the open questions, tell the operator or the dispatcher, and return the exit code."""
     if error := _publish_questions(final["run"]):
         print(error)
         return 3
-    blocked = [number for number, entry in final["tickets"].items() if entry["phase"] == "blocked"]
-    if end_blocked:
-        blocked.append(FINAL)
+    blocked = _blocked(final, tickets, end_blocked)
     open_questions = driver_decisions.document(final["run"])["questions"]
     code = 2 if driver_decisions.parked(final["run"]["questions"]) else int(bool(blocked))
     _tell(args, code, open_questions, blocked, final["run"])
@@ -568,11 +605,16 @@ def _record_skipped(skipped: list[str]) -> None:
         ledger(sentence)
 
 
+def _prepared(tickets: list[Ticket], run: Run, slots: int) -> list[str]:
+    """Resume, apply the answers and set aside the work of each left-out ticket: [] or the errors that stop the run."""
+    return (_resume(tickets, run.state, run.pr, slots, run.args, run.kept) or _apply_answers(run.state, run.args)
+            or _set_aside(run, tickets))
+
+
 def _once(tickets: list[Ticket], run: Run, slots: int) -> tuple[bool, list[str]] | int:
     """Resume, apply the answers and do the work once: what `_work` returns, or exit 3 with each error printed."""
     args = run.args
-    errors = _resume(tickets, run.state, run.pr, slots, args, run.kept) or _apply_answers(run.state, args)
-    if errors:
+    if errors := _prepared(tickets, run, slots):
         print("\n".join(errors))
         return 3
     if args.unattended and args.stage_json:
@@ -590,11 +632,11 @@ def _run(tickets: list[Ticket], models: dict[str, list[str]], skipped: list[str]
     slots = 1 if args.only else min(args.parallel, len(tickets))
     _record_skipped(skipped)
     while True:
-        run = Run(args, models, state, pr, kept)
+        run = Run(args, models, state, pr, kept, tickets)
         done = _once(tickets, run, slots)
         if isinstance(done, int):
             return done
-        if run.halted or not _rule(run):
+        if run.halted or not _rule(run, tickets):
             break
         # The driver's own answer resumes the run as the operator's would on the next invocation.
         args.answer, kept = [], driver_state.kept(state.read())
@@ -609,7 +651,7 @@ def _finish(run: Run, args, end_blocked: bool, lines: list[str]) -> int:
     print(summary + "".join(line + "\n" for line in lines), end="")
     if run.halted:
         return _halted_exit(run.halted, final)
-    return _exit_code(final, args, end_blocked)
+    return _exit_code(final, args, run.tickets, end_blocked)
 
 
 # ---------------------------------------------------------------- the command line
@@ -660,7 +702,8 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
                         "IMPLEMENT_SPEC_MUST_FIX_RETRIES, else 2)")
     parser.add_argument("--ask", action=argparse.BooleanOptionalAction,
                         default=os.environ.get("IMPLEMENT_SPEC_ASK") == "1", help="once the retries are spent, ask "
-                        "the operator instead of the arbiter agent (default: IMPLEMENT_SPEC_ASK=1, else off)")
+                        "the operator instead of the arbiter agent, and instead of the `ship-draft` or `leave-out` of "
+                        "the driver (default: IMPLEMENT_SPEC_ASK=1, else off)")
     parser.add_argument("--unattended", action="store_true", help="at a question, print no question: write "
                         "--stage-json for the dispatcher, which gives the answers file to the next run")
     parser.add_argument("--stage-json", metavar="FILE", help="with --unattended: where the driver writes how a "

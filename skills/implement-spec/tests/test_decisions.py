@@ -67,7 +67,7 @@ def test_a_stop_prints_the_question_and_an_answer_is_applied_once(tmp_path, caps
 def test_an_answer_with_an_option_the_question_does_not_offer_exits_3(tmp_path, capsys):
     rig = stopped(tmp_path)
     rig.run(steps(blocked(), blocked(), impl("01")), "--answer", f"{Q1}=nope")
-    assert rig.code == 3 and f"--answer {Q1}=nope: {Q1} offers retry, edit" in capsys.readouterr().out
+    assert rig.code == 3 and f"--answer {Q1}=nope: {Q1} offers retry, leave-out, edit" in capsys.readouterr().out
     assert not (rig.repo / driver_answers.FILE).exists()
 
 
@@ -305,7 +305,7 @@ def test_each_answer_is_checked_on_its_own_and_a_note_goes_with_its_question(one
                        "The answer for 02-spec-ambiguous-1.note in .agent/implement-answers.json is ignored: there is "
                        "no open question 02-spec-ambiguous-1."]
     found, (ignored,) = answers(one, answers={Q1: ["retry"], f"{Q1}.note": 5})
-    assert found == {} and ignored.endswith("the question offers retry, edit.")
+    assert found == {} and ignored.endswith("the question offers retry, leave-out, edit.")
 
 
 def test_no_open_question_or_no_file_reads_nothing_and_given_writes_only_valid_answers(one):
@@ -383,7 +383,7 @@ def test_a_second_stop_blocks_the_ticket_with_one_ticket_blocked_question(tmp_pa
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
     (question,) = rig.state()["run"]["questions"]
     assert (question["id"], question["kind"], question["recommended"]) == (TB1, "ticket-blocked", "retry")
-    assert [o["id"] for o in question["options"]] == ["retry", "edit"]
+    assert [o["id"] for o in question["options"]] == ["retry", "leave-out", "edit"]
     assert "implementer" in question["subject"] and NO_ACCESS in question["subject"]
     assert question["evidence"][0] == ".agent/implement/01/implementer-0.json"
     assert entries(rig, "01", "implementer") == [SONNET, OPUS_5_5]
@@ -464,7 +464,8 @@ def test_a_must_fix_finding_asks_its_own_kind_whose_ships_are_the_operators_only
     assert list(must_fix.options) == ["retry", "accept", "follow-up"] and must_fix.recommended == "retry"
     assert must_fix.options is driver_decisions.KINDS["finding-open"].options and "only you may" in must_fix.why
     assert [q["kind"] for q in driver_decisions.arbitrated([
-        {"answer": None, "kind": kind} for kind in driver_decisions.KINDS])] == ["finding-open"]
+        {"answer": None, "kind": kind, "ticket": "final", "stop": 1} for kind in driver_decisions.KINDS], 2)] == [
+        "spec-ambiguous", "finding-open"]
     assert "critical" not in driver_decisions.KINDS["finding-open"].why
     kind = driver_decisions.finding_kind
     assert [kind({"severity": "critical"}), kind({"severity": "important", "must_fix": True}),

@@ -115,12 +115,21 @@ def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
 
 def kept(state: dict) -> dict[str, int]:
     """ticket number -> slot, per ticket stopped mid-role or at an open question, with uncommitted work in the slot."""
-    found = {}
     asking = {question["ticket"] for question in state.get("run", {}).get("questions", []) if question["answer"] is None}
-    for number, entry in state.get("tickets", {}).items():
-        if (entry["phase"] in ("test-writer", "implement") or number in asking) and entry["slot"]:
-            slot = path(entry["slot"])
-            on = on_branch(slot)
-            if on == Names(state["run"]["pr_branch"]).ticket(number) and git(slot, "status", "--porcelain").stdout.strip():
-                found[number] = entry["slot"]
-    return found
+    return {number: entry["slot"] for number, entry in state.get("tickets", {}).items()
+            if _stopped(entry, number in asking) and holds_work(state, number)}
+
+
+def _stopped(entry: dict, asking: bool) -> bool:
+    """The ticket stopped mid-role, or at an open question when `asking`."""
+    return entry["phase"] in ("test-writer", "implement") or asking
+
+
+def holds_work(state: dict, number: str) -> bool:
+    """Whether the slot of ticket `number` holds its uncommitted work: the slot is on its ticket branch, and dirty."""
+    entry = state["tickets"][number]
+    if not entry["slot"]:
+        return False
+    slot = path(entry["slot"])
+    return (on_branch(slot) == Names(state["run"]["pr_branch"]).ticket(number)
+            and bool(git(slot, "status", "--porcelain").stdout.strip()))

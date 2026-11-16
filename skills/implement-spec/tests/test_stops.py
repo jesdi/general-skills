@@ -94,7 +94,7 @@ def test_a_blocked_ticket_writes_one_question_with_pointers(local):
     assert local.code == 2, local.output()
     (q,) = decisions(local)["questions"]
     assert q["id"] == Q1
-    assert {o["id"] for o in q["options"]} == {"retry", "edit"}
+    assert {o["id"] for o in q["options"]} == {"retry", "leave-out", "edit"}
     assert q["recommended"] == "retry"
     assert q["title"] and q["why"]
     evidence = "\n".join(q["evidence"])

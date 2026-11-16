@@ -173,7 +173,7 @@ def test_a_second_dispute_on_the_same_test_asks_spec_ambiguous_with_both_reading
     assert len(arbitrations(rig)) == 1, "no second arbitration"
     (question,) = asked(rig)
     assert question["id"] == AMBIGUOUS and question["recommended"] == ""
-    assert [option["id"] for option in question["options"]] == ["keep-test", "correct-test", "edit-spec"]
+    assert [option["id"] for option in question["options"]] == ["keep-test", "correct-test", "leave-out", "edit-spec"]
     for part in (second, "R3", "R3 says double quotes", "the example in R3 uses '"):
         assert part in question["subject"], part
     page = (rig.repo / ".agent/implement-review.html").read_text()

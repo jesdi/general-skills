@@ -236,7 +236,7 @@ def _rebase_check(run: Run, stop: str, context: dict) -> driver_locked.Locked | 
             return None
         context["commits"] = [head(".")]
     recovery = git(".", "rev-parse", run.names.recovery).stdout.strip()
-    return driver_locked.for_end_of_run(run.state.read()["tickets"], recovery)
+    return driver_locked.for_end_of_run(_shipped(run), recovery)
 
 
 def _run_rebase_conflict_agent(run: Run, values: dict) -> str:
@@ -557,16 +557,16 @@ def _fixer_values(run: Run, final: dict, tip: str, gate_record: str) -> dict[str
     """The prompt values of the final fixer: the review findings, and the saved gate failure for a gate repair."""
     folder = OUT / FINAL
     values = {**_prompt_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
-              "locked": " ".join(driver_locked.every(run.state.read()["tickets"])),
+              "locked": " ".join(driver_locked.every(_shipped(run))),
               "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
               "findings_list": _findings_list(run, final)}
     return {**values, **(driver_final_gate.pointers(final, gate_record, tip) if gate_record else {})}
 
 
-def _fixer_check(tickets: list[Ticket], final: dict, values: dict[str, str], gate_record: str) -> dict:
-    """What the final fixer's report is checked against: a gate repair fixes the gate, a review batch the must-fix
-    findings."""
-    return {"owners": [ticket.number for ticket in tickets],
+def _fixer_check(owners: list[str], final: dict, values: dict[str, str], gate_record: str) -> dict:
+    """What the final fixer's report is checked against: a commit of a merged ticket in `owners`, a gate repair that
+    fixes the gate, a review batch that fixes the must-fix findings."""
+    return {"owners": owners,
             "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]],
             "fix": [values["gate_title"]] if gate_record else []}
 
@@ -578,8 +578,8 @@ def _fixer_call(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_rec
     tidied = final["tidied"]
     return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate_record else "final-fixer",
                 fix_round=final["round"], name=name,
-                check=_fixer_check(tickets, final, values, gate_record),
-                locked=lambda _: driver_locked.for_end_of_run(run.state.read()["tickets"], tidied))
+                check=_fixer_check(list(_shipped(run)), final, values, gate_record),
+                locked=lambda _: driver_locked.for_end_of_run(_shipped(run), tidied))
 
 
 def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> dict:
@@ -667,6 +667,13 @@ def _coverage(final: dict, tip: str) -> dict[str, str]:
     return fields
 
 
+def _ticket_map(final: dict, titles: dict[str, str], left: list[str]) -> str:
+    """The ticket-to-commit map, then the tickets `left` out of the run."""
+    out = "; ".join(f"{number} {titles[number]}" for number in left)
+    return ("\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items())
+            + f"\n\nLeft out of the run, so not in this PR: {out}." * bool(left))
+
+
 def _facts(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
     """The end of the PR body for the pushed tip `tip`: the ticket-to-commit map, the fix commits, the rulings and the
     review coverage."""
@@ -674,7 +681,7 @@ def _facts(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
     fixes = git(".", "log", "--reverse", "--format=- %h %s", f"{final['tidied']}..{tip}").stdout.strip()
     rulings = driver_decisions.rulings(run.state.read()["run"]["questions"])
     return driver_agents.render("pr-body", {
-        "map": "\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items()),
+        "map": _ticket_map(final, titles, _left_out(run)),
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
         **_coverage(final, tip),
         "providers": _review_providers(run.state.read()["run"]["agents"])})
@@ -750,12 +757,14 @@ def _gh(argv: list[str], what: str) -> str:
     return (made.stdout.split() or [""])[-1]
 
 
-def _draft(final: dict, questions: list[dict]) -> str:
+def _draft(final: dict, questions: list[dict], left: list[str]) -> str:
     """Why the PR opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling ships
-    with, and the findings still open that the draft or an agent's ruling ships."""
+    with, the tickets `left` out, and the findings still open that the draft or an agent's ruling ships."""
     reasons = []
     if final["ship"]:
         reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in final['ship']['stops'])}")
+    if left:
+        reasons.append(f"tickets are left out of the run: {', '.join(left)}")
     if shipped := _shipped_open(final, questions):
         reasons.append(f"a finding ships open: {'; '.join(shipped)}")
     return "; ".join(reasons)
@@ -803,12 +812,25 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> Path:
 
 def _open_pr(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
     """Open the PR of the pushed tip `tip`, ready for review or as draft, and return its URL."""
-    body, draft = _write_body(run, final, tickets, tip), _draft(final, run.state.read()["run"]["questions"])
+    questions = run.state.read()["run"]["questions"]
+    body, draft = _write_body(run, final, tickets, tip), _draft(final, questions, _left_out(run))
     url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
                str(body), *["--draft"] * bool(draft)], "pr create")
     run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))
     ledger(f"The PR of {run.pr} into {final['base']} is open{f' as a draft: {draft}' * bool(draft)}: {url}.")
     return url
+
+
+def _left_out(run: Run) -> list[str]:
+    """The tickets left out of the run (driver_decisions.left_out), which the end of run ships without."""
+    return sorted(driver_decisions.left_out(run.state.read()["run"]["questions"], run.tickets))
+
+
+def _shipped(run: Run) -> dict:
+    """The records of the tickets the end of run ships, every one but the left-out ones: its to own and lock. Each of
+    them is merged, as the end of run starts only then."""
+    left = set(_left_out(run))
+    return {number: entry for number, entry in run.state.read()["tickets"].items() if number not in left}
 
 
 def _require_pushable(run: Run, tip: str) -> None:
@@ -942,10 +964,13 @@ def _close(run: Run, tickets: list[Ticket]) -> list[str]:
     return [f"Branch tip: {run.tip()}", f"Reviewed tip: {final['reviewed']}", f"Nothing is pushed. {how}"]
 
 
-def _unmerged_tickets(state: dict) -> str:
+def _unmerged_tickets(state: dict, tickets: list[Ticket]) -> str:
     """"" or why the end-of-run work does not start. A ticket that is not merged can still merge after an answer,
-    and its branch starts from the history as it is: a tidy would rewrite its branch point."""
-    waiting = [number for number, entry in state["tickets"].items() if entry["phase"] != "merged"]
+    and its branch starts from the history as it is: a tidy would rewrite its branch point. A left-out ticket, and
+    each ticket it blocks, does not count: no answer in this run merges it."""
+    left = driver_decisions.left_out(state["run"]["questions"], tickets)
+    waiting = [number for number, entry in state["tickets"].items()
+               if entry["phase"] != "merged" and number not in left]
     return f"these tickets are not merged: {', '.join(waiting)}" if waiting else ""
 
 
@@ -953,7 +978,7 @@ def run(run: Run, tickets: list[Ticket]) -> tuple[bool, list[str]]:
     """Do the end of the run, from where state.json says it is. Call it only when no slot runs a ticket.
     Returns (the end of run is BLOCKED, the lines the operator reads last)."""
     state = run.state.read()
-    reason, before = _unmerged_tickets(state), state["run"]["final"]["skipped"]
+    reason, before = _unmerged_tickets(state, tickets), state["run"]["final"]["skipped"]
     run.state.update(lambda new: new["run"]["final"].update(skipped=reason))
     if reason:
         if reason != before:

@@ -209,10 +209,13 @@ def _ruling_errors(report: dict, context: dict) -> list[str]:
 
 
 def _arbiter_errors(report: dict, context: dict) -> list[str]:
-    """The arbiter rules on each open question."""
-    given = {ruling.get("question") for ruling in report.get("rulings", [])}
-    return [f"rulings: no ruling on {question}: give one ruling per open question, its id as the list gives it"
-            for question in context.get("questions", []) if question not in given]
+    """The arbiter rules on each open question, with an option that the question offers it."""
+    asked, given = context.get("questions", {}), {ruling.get("question"): ruling.get("ruling")
+                                                  for ruling in report.get("rulings", [])}
+    return ([f"rulings: no ruling on {question}: give one ruling per open question, its id as the list gives it"
+             for question in asked if question not in given]
+            + [f"rulings: {question} takes {' or '.join(asked[question])}, not {ruling}"
+               for question, ruling in given.items() if ruling not in asked.get(question, (ruling,))])
 
 
 def locked_files(listed: list[str]) -> list[str]:
