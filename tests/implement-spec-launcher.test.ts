@@ -81,6 +81,7 @@ describe('implement-spec README.md', () => {
     const kinds: Record<string, string[]> = {
       'spec-ambiguous': ['keep-test', 'correct-test', 'edit-spec'],
       'ticket-blocked': ['retry', 'edit'],
+      'finding-open': ['retry', 'accept', 'follow-up'],
     };
     const rows = section.split('\n').filter((l) => /^\| `[a-z-]+` \|/.test(l));
     expect(rows.map((l) => l.split('`')[1])).toEqual(Object.keys(kinds));
@@ -88,7 +89,7 @@ describe('implement-spec README.md', () => {
       const row = rows.find((l) => l.startsWith(`| \`${kind}\``));
       for (const option of options) expect(row, `${kind}: ${option}`).toContain(`\`${option}\``);
     }
-    expect(section).toMatch(/`final-finding`.*`ticket-blocked` question of the end of run.*`final-ticket-blocked-<n>`/);
+    expect(section).toMatch(/older run may hold an open `final-ticket-blocked-<n>` question on a finding/);
   });
 
   it('lists exactly the four non-negotiable checks, each with a pointer to a file', () => {

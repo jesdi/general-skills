@@ -95,6 +95,9 @@ class Call:
     # The role that a `retry` of its `ticket-blocked` question runs again from the start commit, when the agent runs
     # for that role (an arbitration, a correction): its own work is not kept.
     retry: str = ""
+    # An agent whose rerun stops or is rejected too asks `ticket-blocked`; one that does not only raises Blocked: the
+    # arbiter, whose failure leaves its questions to the operator.
+    asks: bool = True
     # A BLOCKED report that disputes a locked test is accepted, not a stop: `driver_dispute.agent` settles it.
     may_dispute: bool = False
     # Reads the locked-file check of its report when the agent ends, given the validation context, to which it may add
@@ -321,7 +324,8 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
 
 def _give_up(run: Run, call: Call, report: Path, error: str) -> NoReturn:
     """Every exhausted rerun asks before another attempt, including timeouts and moved branches."""
-    _ask_blocked(run, call, report, error)
+    if call.asks:
+        _ask_blocked(run, call, report, error)
     raise Blocked(error)
 
 

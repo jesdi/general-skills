@@ -15,7 +15,8 @@ Interface choices (ticket 06):
 - a tidied commit has the subject `feat(NN): <ticket title>` and a body line `Ticket: <ticket file name>`.
 - the final fixer's `commits` hold `{"sha", "ticket"}` objects, and the driver renames each fixer commit to
   `fix(NN): <its subject>` before the gate and the scoped review run (no rewrite after a review).
-- a finding open after the scoped review: question `final-ticket-blocked-<n>`, options `retry` and `edit`.
+- a finding open after the scoped review: question `final-finding-open-<n>`, options `retry`, `accept` and
+  `follow-up`.
 - local stop: stdout lines `Branch tip: <sha>`, `Reviewed tip: <sha>` and the rerun command, which has `--push`.
 - the PR body lists, per ticket, a line with the ticket number and its commit's first 7 hex, and every ruling line.
 - stage.json at a clean unattended end is `{"stage": "implement", "status": "done"}`.
@@ -36,7 +37,7 @@ import pytest
 
 from test_cli import SKILL, git, ticket
 from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
-from test_stops import UNATTENDED, stage
+from test_stops import DONE, UNATTENDED, stage
 from test_walk import fix, impl, plan
 
 SCOPED = HOOKED
@@ -81,9 +82,16 @@ for i, a in enumerate(argv[:-1]):
         body = argv[i + 1]
     if a in ("--body-file", "-F"):
         body = sys.stdin.read() if argv[i + 1] == "-" else Path(argv[i + 1]).read_text()
-with (Path(__file__).resolve().parent.parent / "gh.jsonl").open("a") as log:
-    log.write(json.dumps(dict(argv=argv, body=body)) + "\\n")
-print("https://github.example/pull/1")
+log = Path(__file__).resolve().parent.parent / "gh.jsonl"
+if argv[:2] == ["issue", "list"]:  # an issue whose body has the searched marker, as `gh issue create` logged it
+    marker = argv[argv.index("--search") + 1].split('"')[1]
+    rows = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    print(next(("https://github.example/issues/1" for row in rows
+                if row["argv"][:2] == ["issue", "create"] and marker in row["body"]), ""))
+    sys.exit(0)
+with log.open("a") as out:
+    out.write(json.dumps(dict(argv=argv, body=body)) + "\\n")
+print("https://github.example/issues/1" if argv[:2] == ["issue", "create"] else "https://github.example/pull/1")
 """
 HOOK = '#!/bin/sh\nwhile read old new ref; do echo "$ref $new" >> "%s"; done\n'
 
@@ -317,7 +325,7 @@ def test_green_ticket_carries_cap_finding_into_required_final_fix(tmp_path):
     assert len(rig.final_calls("fixer")) == 1
 
 
-def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
+def test_unresolved_must_fix_asks_and_is_not_published_while_the_operator_is_asked(tmp_path):
     rig = Final(tmp_path, THREE, {"implementer": [OPUS, FABLE]})
     recurring = review("02", [{**finding("MERGED-QUOTING-REGRESSION"), "basis": "regression"}])
     batch = fixer(fn("02"), "attempt quoting fix", ticket_of="02")
@@ -330,7 +338,7 @@ def test_unresolved_must_fix_cannot_be_accepted_or_published(tmp_path):
 
     assert rig.code == 2, rig.output()
     (question,) = rig.state()["run"]["questions"]
-    assert question["id"] == "final-ticket-blocked-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
+    assert question["id"] == "final-finding-open-1" and "MERGED-QUOTING-REGRESSION" in question["subject"]
     assert [item["title"] for item in rig.state()["run"]["final"]["open"]] == ["MERGED-QUOTING-REGRESSION"]
     assert not rig.pushes() and not rig.prs()
     rig.run(steps)
@@ -468,7 +476,7 @@ def test_unattended_with_everything_validated_pushes_once_opens_the_pr_and_write
     assert rig.pushes() == [f"refs/heads/feat/csv {tip}"] and ref(rig.origin, "refs/heads/feat/csv") == tip
     (pr,) = rig.prs()
     assert [l for l in pr["body"].splitlines() if "01" in l and tip[:7] in l], pr["body"]
-    assert stage(rig) == {"stage": "implement", "status": "done"}
+    assert stage(rig) == DONE
 
 
 def test_unattended_with_a_blocked_ticket_pushes_nothing_and_exits_1(tmp_path):
@@ -604,7 +612,7 @@ def test_a_cached_body_that_no_longer_validates_is_rewritten_before_gh_pr_create
     steps = plan(**{"final/pr-writer": [writer(risk_body()), writer(risk_body())]})
     rig, _ = pushed_run(tmp_path, monkeypatch, steps, "claude", gh_fails=True)
     assert rig.code != 0 and "gh pr create failed" in rig.out and len(rig.final_calls("pr-writer")) == 1, rig.out
-    cached = rig.repo / ".agent/implement/final/pr-body.md"
+    cached = rig.repo / ".agent/implement/final/pr-writer-body.md"
     cached.write_text(cached.read_text().replace("touches: [docs]", "touches: [styles]"))
     (tmp_path / "bin/gh").write_text(GH)
     rig.rerun()

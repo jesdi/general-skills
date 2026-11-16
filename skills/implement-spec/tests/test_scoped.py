@@ -1,6 +1,6 @@
 """Fewer roles, ticket 04: after the fix batch of the final review, one scoped re-review runs, the `final-reviewer`
-role on the other-provider entry of the `final-reviewer` list. A finding it leaves open asks `final-ticket-blocked`:
-only a `retry` starts another batch and scoped review.
+role on the other-provider entry of the `final-reviewer` list. A finding it leaves open asks `final-finding-open`:
+only a `retry` starts another batch and scoped review; `accept` and `follow-up` ship the PR with it.
 
 In process, on the rig of test_tidy and test_lenses."""
 import json
@@ -28,7 +28,7 @@ def test_the_scoped_review_is_one_agent_on_the_other_provider_over_the_fix_batch
     assert [(f["title"], f["source"]) for f in findings_file(rig, 1)] == [("Q-ONE", "final-reviewer")]
 
 
-def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final_ticket_blocked(tmp_path):
+def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final_finding_open(tmp_path):
     rig = Inside(tmp_path, RISKY, MODELS)
     escaping = {**finding("quote escaping", file="csv.py", line=30), "basis": "regression"}
     batch = fixer(fn("02"), "escape quotes", ticket_of="02")
@@ -37,14 +37,14 @@ def test_a_must_fix_the_scoped_review_leaves_out_of_resolved_must_fix_asks_final
                     "final/final-reviewer": [final()], "final/fixer": [batch]}))
     assert rig.code == 2, rig.out
     (question,) = decisions(rig)["questions"]
-    assert question["id"] == Q and "quote escaping (csv.py:30)" in question["title"]
+    assert question["id"] == Q and "quote escaping (csv.py)" in question["title"]
     assert len(rig.final_calls("final-reviewer")) == 1
 
 
 # ---------------------------------------------------------------- a finding open after the scoped review
 
 ATOMIC = finding("ledger write not atomic", file="ledger.py", line=12)
-Q = "final-ticket-blocked-1"
+Q = "final-finding-open-1"
 
 
 def open_after_batch(tmp_path):
@@ -55,13 +55,14 @@ def open_after_batch(tmp_path):
     return rig.run(steps, *UNATTENDED), steps
 
 
-def test_a_finding_open_after_the_scoped_review_asks_one_final_ticket_blocked_and_pushes_nothing(tmp_path):
+def test_a_finding_open_after_the_scoped_review_asks_one_finding_open_and_pushes_nothing(tmp_path):
     rig, _ = open_after_batch(tmp_path)
     assert rig.code == 2 and not rig.pushes() and not rig.prs(), rig.out
     (question,) = decisions(rig)["questions"]
-    assert question["id"] == Q and "ledger write not atomic (ledger.py:12)" in question["title"]
-    assert [o["id"] for o in question["options"]] == ["retry", "edit"] and question["recommended"] == "retry"
-    assert rig.led("End of run: the operator decides on 1 question of kind ticket-blocked")
+    assert question["id"] == Q and "ledger write not atomic (ledger.py)" in question["title"]
+    assert [o["id"] for o in question["options"]] == ["retry", "accept", "follow-up"]
+    assert question["recommended"] == "retry"
+    assert rig.led("End of run: the operator decides on 1 question of kind finding-open")
 
 
 def test_retry_on_an_open_final_finding_runs_one_more_fix_batch_and_one_scoped_review(tmp_path):
@@ -86,12 +87,13 @@ def test_with_retries_the_driver_runs_the_one_more_fix_batch_itself_and_pushes_w
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
 
 
-def test_edit_on_an_open_final_finding_keeps_the_end_of_run_blocked_and_runs_no_agent(tmp_path):
+def test_accept_on_an_open_final_finding_ships_it_with_no_fix_batch_and_lists_the_operator_ruling(tmp_path):
     rig, steps = open_after_batch(tmp_path)
-    calls = len(rig.calls())
-    rig.run(steps, "--answer", f"{Q}=edit", *UNATTENDED)
-    assert rig.code == 1 and len(rig.calls()) == calls and not rig.pushes() and not rig.prs(), rig.out
-    assert rig.led("End of run: BLOCKED at the operator keeps the end of run BLOCKED for an edit (edit)")
+    rig.run(steps, "--answer", f"{Q}=accept", *UNATTENDED)
+    assert rig.code == 0 and rig.pushes() and len(rig.final_calls("fixer")) == 1, rig.out
+    (pr,) = rig.prs()
+    assert "- Ruling: final ships with the finding open (accept): ledger write not atomic (ledger.py).\n" in pr["body"]
+    assert "--draft" not in pr["argv"] and not rig.final_calls("arbiter")
 
 
 # ---------------------------------------------------------------- the locked files
@@ -128,7 +130,7 @@ def test_a_run_of_an_older_driver_after_its_first_round_resumes_into_the_fix_bat
     (folder / "findings-0.json").write_text(json.dumps(old))
     before = len(rig.ledger())
 
-    rig.run(steps, "--answer", f"{Q}=retry")
+    rig.run(steps, "--answer", "final-ticket-blocked-1=retry")
     assert rig.code == 0, rig.out
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
     assert len(rig.final_calls("fixer")) == 3 and len(rig.final_calls("final-reviewer")) == 1

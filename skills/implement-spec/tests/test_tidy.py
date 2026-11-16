@@ -21,7 +21,7 @@ from test_cli import git
 from test_final import FILES, FINAL_MODELS, RESOLVE, THREE, TITLES, final, fixer, fn, ref, stop_lines
 from test_fixloop import inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_review import FABLE, ONE, finding
-from test_stops import UNATTENDED, decisions, stage
+from test_stops import DONE, UNATTENDED, decisions, stage
 from test_walk import fix, plan, tw
 
 
@@ -344,7 +344,7 @@ def test_a_base_that_moved_with_no_conflict_is_rebased_onto_with_no_agent_and_on
     assert [p.name for p in (rig.repo / ".agent/implement/final").glob("gate-*.log")] == [f"gate-full-{rig.branch()[:7]}.log"]
     assert rig.final()["commits"] == {nn: row["sha"] for nn, row in zip(order, rows)}
     assert rig.final()["onto"] == base and f"Range: {base}..{rig.branch()}\n" in rig.final_calls("final-spec")[0]["prompt"]
-    assert rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"] and stage(rig) == {"stage": "implement", "status": "done"}
+    assert rig.pushes() == [f"refs/heads/feat/csv {rig.branch()}"] and stage(rig) == DONE
 
 
 def test_a_resolved_rebase_keeps_ticket_messages_and_gates_only_the_final_tidied_tip(tmp_path):
@@ -470,7 +470,7 @@ def test_a_push_or_a_pr_that_fails_is_tried_again_and_nothing_is_sent_twice(tmp_
     calls = len(rig.calls())
     rig.run(plan(), *UNATTENDED)
     assert rig.code == 0 and len(rig.pushes()) == 1 and len(rig.prs()) == 1 and len(rig.calls()) == calls, rig.out
-    assert stage(rig) == {"stage": "implement", "status": "done"} and rig.final()["pr"] == "https://github.example/pull/1"
+    assert stage(rig) == DONE and rig.final()["pr"] == "https://github.example/pull/1"
 
 
 def test_a_reviewed_tip_with_no_green_gate_record_is_not_pushed(tmp_path):

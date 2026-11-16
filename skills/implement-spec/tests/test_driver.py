@@ -1032,7 +1032,7 @@ def test_the_preflight_asks_each_entry_once_and_drops_each_entry_whose_cli_fails
     models["implementer"][1] = "openai/gpt-6.1-sol@medium"
     models["final-reviewer"] = ["openai/gpt-astra@medium", "claude-opus-5-5@medium"]
     kept, errors, skipped = driver_agents.preflight(models)
-    assert errors == [] and len((bin_dir / "asked").read_text().splitlines()) == 5
+    assert errors == [] and len((bin_dir / "asked").read_text().splitlines()) == 7
     assert kept["implementer"] == ["claude-sonnet-5-5@medium"] and kept["final-reviewer"] == ["claude-opus-5-5@medium"]
     assert kept["test-writer"] == ["claude-sonnet-5-5@medium"] and kept["reviewer"] == models["reviewer"]
     assert skipped == [

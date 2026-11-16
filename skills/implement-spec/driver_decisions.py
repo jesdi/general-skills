@@ -3,7 +3,8 @@
 A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
      resume: {phase[, tip][, round][, gate_allowance]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
-     ruling: the ruling sentence, once answered}
+     ruling: the ruling sentence, once answered; by: DRIVER or ARBITER when no operator answered it;
+     issue: the URL of the follow-up issue the driver filed for a `follow-up` answer}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from typing import NamedTuple
 
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
 DRIVER = "driver"  # `by` of a question the driver answered itself
+ARBITER = "arbiter"  # `by` of a question the arbiter agent answered
+SHIPS = ("accept", "follow-up")  # the answers to `finding-open` that ship the PR with the finding open
 FINAL = "final"  # the end of run asks its questions, and has its record and its files, under this name
 
 
@@ -72,12 +75,12 @@ KINDS = {
          "edit-spec": Option(
             "Keep the ticket BLOCKED, so the spec can be edited to say which reading it means.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec (edit-spec): {subject}.", False)}),
-    # The end of run asks it too, with the ticket `final`: for an agent, or for a finding open after the scoped review.
+    # The end of run asks it too, with the ticket `final`: for an agent, or for the integration gate.
     "ticket-blocked": Kind(
-        "{owner}: an agent stopped or was rejected, and its rerun too, or a final-review finding or integration gate remains red: {subject}",
+        "{owner}: an agent stopped or was rejected, and its rerun too, or the integration gate remains red: {subject}",
         "An agent ran two times, using the same model for a timeout or moved branch and the next entry otherwise, "
-        "and stopped or was rejected both times; or the final review left a finding open, or the integration gate "
-        "stayed red after its repair. {owner} is BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
+        "and stopped or was rejected both times; or the integration gate stayed red after its repair. {owner} is "
+        "BLOCKED, each ticket that it blocks waits, and nothing is pushed.",
         "retry",
         {"retry": Option(
             "The role runs again on its first entry from the tip the ticket left, with one rerun (the same model "
@@ -88,6 +91,21 @@ KINDS = {
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", False)}),
+    # Only the end of run asks it: the subject is the finding's title.
+    "finding-open": Kind(
+        "End of run: a final-review finding is open after the scoped review: {subject}",
+        "The scoped review after the fix batch left this critical or important finding open. Nothing is pushed until "
+        "it is ruled on.",
+        "retry",
+        {"retry": Option(
+            "One more fix batch and scoped review.",
+            "Ruling: {ticket} runs again (retry): {subject}.", True),
+         "accept": Option(
+            "Push and open the PR with the finding open and listed in its rulings; a critical one opens it as draft.",
+            "Ruling: {ticket} ships with the finding open (accept): {subject}.", True),
+         "follow-up": Option(
+            "As `accept`, and the driver files the finding as an issue before it opens the PR.",
+            "Ruling: {ticket} ships with the finding open, filed as a follow-up issue (follow-up): {subject}.", True)}),
 }
 
 
@@ -138,8 +156,19 @@ def document(run: dict) -> dict:
 
 
 def rulings(questions: list[dict]) -> list[str]:
-    """The ruling sentence of each answered question, without the note of the operator."""
-    return [q["ruling"] for q in questions if q["answer"] is not None]
+    """The ruling sentence of each answered question, without the note of the operator, with its follow-up issue."""
+    return [q["ruling"] + (f" Follow-up issue: {q['issue']}" if q.get("issue") else "")
+            for q in questions if q["answer"] is not None]
+
+
+def waived(questions: list[dict]) -> set[str]:
+    """The findings, by subject, that a `finding-open` answer ships with: no fix batch is due for them."""
+    return {q["subject"] for q in questions if q["kind"] == "finding-open" and q["answer"] in SHIPS}
+
+
+def follow_ups(questions: list[dict]) -> list[dict]:
+    """The `finding-open` questions answered `follow-up` with no issue filed yet."""
+    return [q for q in questions if (q["kind"], q["answer"]) == ("finding-open", "follow-up") and not q.get("issue")]
 
 
 def ruling(q: dict) -> str:
@@ -166,7 +195,7 @@ def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
 
 def ruled(questions: list[dict]) -> Counter:
     """ticket (or FINAL) -> the stops of it that the driver ruled on."""
-    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in by_driver(questions)})
+    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in questions if q.get("by") == DRIVER})
 
 
 def automatic(questions: list[dict], budget: int) -> dict:
@@ -178,21 +207,23 @@ def automatic(questions: list[dict], budget: int) -> dict:
     return {q["id"]: q["recommended"] for q in asked if spent[q["ticket"]] < budget}
 
 
-def _answer(q: dict, answers: dict, by: str) -> str:
+def _answer(q: dict, answers: dict, by: str, why: str) -> str:
     """Answer `q` from `answers` and return its ruling, with the note of the operator."""
     q["answer"], q["by"] = answers[q["id"]], by
-    q["ruling"] = ruling(q) + " Ruled by the driver, not the operator." * (by == DRIVER)
+    q["ruling"] = ruling(q) + (f" Ruled by the {by}, not the operator{why}." if by else "")
     note = answers.get(f"{q['id']}.note")
     return q["ruling"] + f" Note of the operator: {note}" * bool(note)
 
 
-def apply(questions: list[dict], answers: dict, by: str = "") -> tuple[list[str], dict[str, dict]]:
-    """Answer the open questions in `answers`; `by` is DRIVER for the answers of `automatic`. Returns (a ruling per
-    answer, ticket or FINAL -> the fields that let its record go on)."""
+def apply(questions: list[dict], answers: dict, by: str = "", why: dict[str, str] | None = None
+          ) -> tuple[list[str], dict[str, dict]]:
+    """Answer the open questions in `answers`; `by` is DRIVER for the answers of `automatic` and ARBITER for those of
+    the arbiter, whose `why` gives the end of the ruling sentence per question. Returns (a ruling per answer, ticket or
+    FINAL -> the fields that let its record go on)."""
     rulings, stops = [], {}
     for q in questions:
         if q["answer"] is None and q["id"] in answers:
-            rulings.append(_answer(q, answers, by))
+            rulings.append(_answer(q, answers, by, (why or {}).get(q["id"], "")))
             stops[q["ticket"]] = q["stop"]
     return rulings, _moved(questions, stops)
 
@@ -203,9 +234,14 @@ def _moved(questions: list[dict], stops: dict) -> dict[str, dict]:
     return {ticket: fields for ticket, fields in moved.items() if fields}
 
 
-def by_driver(questions: list[dict]) -> list[dict]:
-    """The questions the driver answered itself."""
-    return [q for q in questions if q.get("by") == DRIVER]
+def without_operator(questions: list[dict]) -> list[dict]:
+    """The questions the driver or its arbiter answered, with no operator."""
+    return [q for q in questions if q.get("by") in (DRIVER, ARBITER)]
+
+
+def arbitrated(questions: list[dict]) -> list[dict]:
+    """The open questions the arbiter rules on once the driver's retries are spent."""
+    return [q for q in questions if q["answer"] is None and q["kind"] == "finding-open"]
 
 
 def text(open_questions: list[dict], answers: str, page: str) -> str:

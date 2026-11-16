@@ -40,6 +40,7 @@ from test_walk import impl, plan
 
 STOP = "no write access to fixtures/"
 UNATTENDED = ("--unattended", "--stage-json", ".agent/stage.json")
+DONE = {"stage": "implement", "status": "done", "draft": False, "decisions": 0}  # a ready PR, no ruling
 Q1 = "01-ticket-blocked-1"
 RULED = "Ruling: 01 runs again (retry)"
 
@@ -214,7 +215,7 @@ def test_unattended_rerun_with_a_submitted_answers_file_at_the_current_revision_
     assert rig.code == 0, rig.output()
     assert Q1 not in rig.out + rig.err and rig.led(RULED)
     assert len(rig.calls("01", "implementer")) == 3 and "feat: 01 rows" in rig.pr_subjects()
-    assert stage(rig) == {"stage": "implement", "status": "done"}
+    assert stage(rig) == DONE
 
 
 def test_unattended_blocked_ticket_ends_with_stage_json_blocked_naming_it_and_exit_1(tmp_path):

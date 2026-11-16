@@ -13,7 +13,7 @@ RUN = SKILL / "run.sh"
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 TOOLS = ("sh", "uname", "dirname", "readlink", "git", "env", "mktemp", "curl", "tar", "gzip", "mv", "rm", "mkdir",
          "sha256sum", "shasum", "cat", "chmod", "ln", "date", "basename")
-ROLES = ("test-writer", "implementer", "reviewer", "fixer", "final-reviewer", "conflict", "pr-writer")
+ROLES = ("test-writer", "implementer", "reviewer", "fixer", "final-reviewer", "conflict", "pr-writer", "arbiter")
 NONE = "None (can start immediately)"
 
 

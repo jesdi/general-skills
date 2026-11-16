@@ -202,7 +202,7 @@ def test_reviewer_fields(world):
 def test_a_read_only_role_lists_no_commits_so_the_commits_it_reviewed_are_not_refused(world, role):
     # Issue #129: the final reviewer read `commits` as the commits under review, and each was refused as not new.
     shas, check, _ = world
-    report = {"status": "DONE", "files": [], "concerns": [], "findings": [], "body": "b"}
+    report = {"status": "DONE", "files": [], "concerns": [], "findings": [], "body": "b", "rulings": []}
     template = "final-lens" if role in LENSES else role  # the lenses share one prompt
     assert check(template, report, start=shas["impl"]) == []
     assert check(template, {**report, "commits": [shas["tests"], shas["impl"]]}, start=shas["impl"]) == []
