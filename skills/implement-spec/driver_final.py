@@ -623,11 +623,13 @@ def replay(ticket: Ticket, slot: str, run: Run, tip: str, resolve: Callable[[str
     (driver._restart_replay). A
     conflict is open in the slot as a cherry-pick for `resolve`, the conflict agent of the ticket (from the PR tip, the
     files in conflict), whose stop leaves the slot on `tip` and whose `retry` runs it again. Returns the ticket tip;
-    the slot is on it."""
-    final = run.state.read()["run"]["final"]
-    if not final["recovery"] or driver_merge.ancestor(final["tidied"], tip):
+    the slot is on it. A branch built on the PR tip as it stands carries no rewritten history and lands as it is: its
+    work can be the very commit of the history before the rewrite (the same change in the same second), where the
+    fork from the recovery point is the ticket tip itself and the replay would land nothing."""
+    final, pr_tip = run.state.read()["run"]["final"], run.tip()
+    if not final["recovery"] or driver_merge.ancestor(final["tidied"], tip) or driver_merge.ancestor(pr_tip, tip):
         return tip
-    number, pr_tip, branch = ticket.number, run.tip(), run.names.ticket(ticket.number)
+    number, branch = ticket.number, run.names.ticket(ticket.number)
     run.state.ticket(number, replayed=tip)
     fork = git(".", "merge-base", final["recovery"], tip).stdout.strip()
     tree = git(".", "merge-tree", "--write-tree", "--no-messages", f"--merge-base={fork}", pr_tip, tip)
