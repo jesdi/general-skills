@@ -26,6 +26,8 @@ Run the driver. It makes every choice of the run: it answers its own `retry` que
 2. When it exits, relay `.agent/implement/summary.md`, with its `Driver decisions` list whole, and the exit code: 0 is done, 1 is a BLOCKED ticket, 2 is parked on questions, 3 is invalid input, 4 is stopped by a CLI failure (after the fix, the same command resumes). Relay the lines the driver printed after the summary too. With exit 0 and a PR URL such as `https://github.com/jesdi/demo/pull/61`, tell the operator to start the babysitter: run `/babysit-pr https://github.com/jesdi/demo/pull/61`. When the driver opened the PR as a draft, say so and why: no agent merges a draft, so it waits for the operator's review.
 3. With exit 2, and with exit 1 when the driver printed questions, show the operator those questions. When the operator answers, run the same command again with one `--answer <question id>=<option id>` for each answer.
 
+4. To overturn a ruling of the driver or the arbiter from the `Driver decisions` list, the operator gives its question id and another option: run the same command again with `--answer <question id>=<option id>`. The driver says why when it refuses one (exit 3).
+
 Answer no question the driver left open: it has spent its own retries on it. Do not edit `.agent/implement/`, the code or the branches during a run.
 
 [README.md](README.md) has each flag, the exit codes, the files of a run and the method.

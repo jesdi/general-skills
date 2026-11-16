@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
@@ -33,6 +34,7 @@ import driver_graph
 import driver_legacy
 import driver_locked
 import driver_merge
+import driver_overturn
 import driver_review_page
 import driver_run
 import driver_slots
@@ -152,10 +154,18 @@ class _Landing:
     commit: str  # what the PR branch moves to: `pr_tip` (merged already), `ticket_tip` (fast-forward) or a merge
 
 
-def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list[str]) -> str:
-    """Run the conflict agent on the merge that is open in the slot. Returns the new ticket tip."""
+MERGE_OPEN = "The merge of the PR branch into the ticket branch is open in this worktree"
+REPLAY_OPEN = ("The ticket's own work, replayed onto the PR branch after the end of run rewrote it, is open in this "
+               "worktree as a cherry-pick")
+
+
+def _resolve_conflict(ticket: Ticket, slot: str, run: Run, tip: str, files: list[str], opened: str = MERGE_OPEN
+                      ) -> str:
+    """Run the conflict agent on the merge (or the replay, driver_final.replay) that is open in the slot. Returns the
+    new ticket tip."""
     number = ticket.number
-    values = {**_prompt_values(ticket, slot, run), "start_sha": tip, "pr_sha": run.tip(), "files": " ".join(files)}
+    values = {**_prompt_values(ticket, slot, run), "start_sha": tip, "pr_sha": run.tip(), "files": " ".join(files),
+              "opened": opened}
     try:
         with during("the conflict agent"):
             run.agent(Call("conflict", number, slot, values))
@@ -213,16 +223,26 @@ def _landing_slot(number: str, slot: str, run: Run, tip: str) -> None:
         _block_landing(number, run, tip, f"the landing slot has uncommitted work: {status.stdout.strip()}")
 
 
+def _restart_replay(slot: str, branch: str, tip: str) -> subprocess.CompletedProcess:
+    """A run stopped in a replay (driver_final.replay) before its tip was recorded: the ticket branch goes back to the
+    tip the replay started from, and a cherry-pick left open is dropped, so the replay runs again."""
+    git(slot, "cherry-pick", "--quit")
+    return git(slot, "checkout", "-q", "-f", "-B", branch, tip)
+
+
 def _checked_landing(ticket: Ticket, slot: str, run: Run, may_resolve: bool) -> _Landing:
     """The reviewed commit to land, with locked-file invariants checked. Call it under the merge lock."""
     number = ticket.number
     # An earlier try left the slot on its merge commit.
     branch = run.names.ticket(number)
-    tip = run.state.ticket(number, phase="merge")["tip"]
-    checkout = git(slot, "checkout", "-q", branch)
+    entry = run.state.ticket(number, phase="merge")
+    tip = entry["tip"]
+    checkout = _restart_replay(slot, branch, tip) if entry["replayed"] == tip else git(slot, "checkout", "-q", branch)
     if checkout.returncode:
         _block_landing(number, run, tip, f"the landing checkout failed: {checkout.stderr.strip()}")
     _landing_slot(number, slot, run, tip)
+    tip = driver_final.replay(ticket, slot, run, tip, lambda start, files: _resolve_conflict(
+        ticket, slot, run, start, files, REPLAY_OPEN))
     landing = _merge_commit(ticket, slot, run, tip, may_resolve)
     _landing_slot(number, slot, run, landing.ticket_tip)
     _refuse_breach(number, run, landing)
@@ -250,6 +270,7 @@ def _record_landing(state: dict, number: str, landing: _Landing) -> None:
     state["tickets"][number]["phase"] = "merged"
     earlier = [landed for landed in state["run"]["landed"] if landed[0] != number]
     state["run"]["landed"] = earlier + [[number, pr_tip]]
+    driver_final.landed_after_tidy(state, number, pr_tip)
 
 
 def _merge(ticket: Ticket, slot: str, run: Run) -> None:
@@ -447,9 +468,25 @@ def _settle(state: driver_state.State, questions: list[dict], answers: dict, ign
     rulings, moved = driver_decisions.apply(questions, answers, by, why)
     if ship := driver_final.ship_record(state.read()["run"], [q for q in questions if q["id"] in answers]):
         moved.setdefault(FINAL, {})["ship"] = ship
+    _record(state, questions, rulings, moved, ignored)
+
+
+def _overturn(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, dict]]:
+    """Overturn the rulings `answers` names (driver_decisions.overturn). A `ship-draft` ruling overturned clears
+    `run.final.ship`, so the end of run goes on from its stop."""
+    shipped = {q["id"] for q in questions if q["answer"] == "ship-draft"}
+    rulings, moved = driver_decisions.overturn(questions, answers)
+    if shipped & answers.keys():
+        moved.setdefault(FINAL, {})["ship"] = None
+    return rulings, moved
+
+
+def _record(state: driver_state.State, questions: list[dict], rulings: list[str], moved: dict[str, dict],
+            ignored: list[str] | tuple[str, ...] = ()) -> None:
+    """Write the ruling sentences to the ledger, then the questions and the records they let go on to state.json."""
     # The ledger comes first: a run that stops between the two writes gives a ruling twice, and never an answer
     # that no ledger line names.
-    for sentence in ignored + rulings:
+    for sentence in [*ignored, *rulings]:
         ledger(sentence)
 
     def change(new: dict) -> None:
@@ -461,16 +498,20 @@ def _settle(state: driver_state.State, questions: list[dict], answers: dict, ign
 
 
 def _apply_answers(state: driver_state.State, args) -> list[str]:
-    """Turn each answer that counts into a ruling and let its ticket go on; [] or the errors that stop the run."""
+    """Turn each answer that counts, and each overturn of a ruling, into a ruling and let its ticket go on; [] or the
+    errors that stop the run."""
     _drop_merged(state)
-    run = state.read()["run"]
+    whole = state.read()
+    run = whole["run"]
     questions, document = run["questions"], driver_decisions.document(run)
-    if errors := driver_answers.given(args.answer, document):
+    answers, overturns = driver_overturn.split(args.answer, document)
+    if errors := driver_overturn.refusals(overturns, whole) or driver_answers.given(answers, document):
         return errors
-    answers, ignored = driver_answers.read(document)
-    if errors := driver_final.refused_ship(run, answers):
+    given, ignored = driver_answers.read(document)
+    if errors := driver_final.refused_ship(run, {**given, **dict(overturns)}):
         return errors
-    _settle(state, questions, answers, ignored)
+    _record(state, questions, *_overturn(questions, dict(overturns)))
+    _settle(state, questions, given, ignored)
     error = _publish_questions(run)
     return [error] if error else []
 

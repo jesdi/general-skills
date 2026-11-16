@@ -360,3 +360,16 @@ def cost(log: Path, entry: str, used: dict[str, int]) -> float | None:
                       + used["output"] * price["output"]) / 1e6, 4)
     found = re.findall(r'"total_cost_usd":\s*([0-9.]+)', log.read_text(errors="replace"))
     return float(found[-1]) if found else None
+
+
+# The final review runs through the review-diff skill, which must sit next to this one: `installed` looks nowhere else.
+REVIEW_DIFF = SKILL.parent / "review-diff" / "SKILL.md"
+
+
+def installed(name: str) -> Path | None:
+    """The SKILL.md of a skill: next to this skill, else in the skill folder of the Claude home or of the shared
+    home of Codex and OpenCode. review-diff is only next to this skill."""
+    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    homes = (REVIEW_DIFF.parent.parent,) if name == REVIEW_DIFF.parent.name else (
+        SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
+    return next((home / name / "SKILL.md" for home in homes if (home / name / "SKILL.md").is_file()), None)

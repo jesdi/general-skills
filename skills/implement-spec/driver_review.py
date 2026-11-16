@@ -14,6 +14,11 @@ from driver_slots import git, head, on_branch
 OPEN = ("critical", "important")  # the severities that start a fix round
 
 
+def title(finding: dict) -> str:
+    """A finding as a line names it: `<title> (<file>:<line>)`."""
+    return f"{finding['title']} ({finding['file']}:{finding['line']})"
+
+
 def _corrected(finding: dict, locked: list[str], protected: list[str]) -> bool:
     """Whether a correction, not a fixer, takes the finding: see `route`."""
     return finding["kind"] == "fixture" or finding["severity"] in OPEN and (

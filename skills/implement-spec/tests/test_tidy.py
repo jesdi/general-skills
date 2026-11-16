@@ -10,8 +10,10 @@ import jsonschema
 import pytest
 
 import driver
+import driver_agents
 import driver_final
 import driver_merge
+import driver_pr
 import driver_report
 import driver_state
 import driver_summary
@@ -488,14 +490,14 @@ def test_a_reviewed_tip_with_no_green_gate_record_is_not_pushed(tmp_path):
 def test_the_rerun_command_drops_the_answers_and_the_pr_title_falls_back_to_the_branch():
     command = driver_final.again(["--gate", "make check", "--answer", "final-ticket-blocked-1=retry", "--answer=x=y", "--spec", "s.md"])
     assert command == f"sh {driver_final.driver_agents.SKILL / 'run.sh'} --gate 'make check' --spec s.md --push"
-    assert driver_final._name(SimpleNamespace(args=SimpleNamespace(spec="nowhere.md"), pr="feat/x")) == "feat/x"
+    assert driver_pr._name(SimpleNamespace(args=SimpleNamespace(spec="nowhere.md"), pr="feat/x")) == "feat/x"
 
 
 # ---------------------------------------------------------------- preconditions and the skip
 
 @pytest.mark.parametrize("remote", [True, False], ids=["origin", "no-origin"])
 def test_without_the_review_diff_skill_every_repository_stops_before_any_agent(tmp_path, monkeypatch, remote):
-    monkeypatch.setattr(driver_final, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")
+    monkeypatch.setattr(driver_agents, "REVIEW_DIFF", tmp_path / "review-diff/SKILL.md")
     rig = Inside(tmp_path, ONE, remote=remote).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == "".join(f"the review-diff skill is missing its {name}: the {lens} lens of the final review "

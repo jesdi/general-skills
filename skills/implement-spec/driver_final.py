@@ -16,9 +16,13 @@ operator ships.
     round      the reviews done
     open       the findings the fix batch is due for
     lenses     {lens role: {tip, report}}: the accepted report of each lens of the full review and the tip it covers
-    batch      the tip of the fix batch that the driver validated and named
+    batch      the tip of the fix batch that the driver validated and named, or of a ticket that merged after the
+               rewrite, once an overturn let it run again (landed_after_tidy)
+    locked     the commit whose locked files the final fixers keep: None for the tidied tip, else the tip that the
+               last ticket that merged after the rewrite made
     phase      `blocked` at a stop with questions, until a `retry` answer makes it `pending` again
     green_gates, pushed, pr
+    body       the tip the pr-writer's part of the PR body was written for (driver_pr)
     draft      the PR opened as draft
     ship       {tip, stops: [{subject, role}]} once a `ship-draft` answer settled (driver._settle): the gated tip
                that the push ships as draft, None when no full gate ran on the branch tip, and the stops it names
@@ -31,9 +35,9 @@ import re
 import shlex
 import shutil
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Callable
 
 import driver_agents
 import driver_decisions
@@ -41,54 +45,22 @@ import driver_gate
 import driver_final_gate
 import driver_locked
 import driver_merge
+import driver_pr
 import driver_review
 import driver_tidy
-from driver_run import FINAL, FINAL_RESUME, OUT, Blocked, Call, Halted, Run, during, ledger
+from driver_run import FINAL, FINAL_RESUME, OUT, Blocked, Call, Halted, Run, during, final_values, ledger
 from driver_slots import git, head
 from driver_state import State
 from driver_tickets import Ticket
 
-# The final review runs through the review-diff skill, which must sit next to this one: `_installed` looks nowhere else.
-REVIEW_DIFF = driver_agents.SKILL.parent / "review-diff" / "SKILL.md"
 SEVERITIES = ("critical", "important", "minor")
-
-
-def _installed(name: str) -> Path | None:
-    """The SKILL.md of a skill: next to this skill, else in the skill folder of the Claude home or of the shared
-    home of Codex and OpenCode. review-diff is only next to this skill."""
-    claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-    homes = (REVIEW_DIFF.parent.parent,) if name == REVIEW_DIFF.parent.name else (
-        driver_agents.SKILL.parent, claude / "skills", Path.home() / ".agents" / "skills")
-    return next((home / name / "SKILL.md" for home in homes if (home / name / "SKILL.md").is_file()), None)
-
-
-def pr_skill() -> Path | None:
-    """The SKILL.md of the pr skill, which the PR body follows."""
-    return _installed("pr")
 
 
 def _method(lens: driver_agents.Lens) -> Path | None:
     """The file `lens` follows, in its skill where that is installed. None when the skill or the file is missing."""
-    skill = _installed(lens.skill)
+    skill = driver_agents.installed(lens.skill)
     method = skill and skill.parent / lens.method
     return method if method and method.is_file() else None
-
-
-def pr_risk_skill() -> Path | None:
-    """The SKILL.md of the pr-risk skill, which parses and validates the merge-risk block of the PR body."""
-    return _installed("pr-risk")
-
-
-PR_RISK_INSTALL = "`npx skills add jesdi/general-skills --skill pr-risk`"
-
-
-def _risk_errors(method: Path, body: str) -> str:
-    """The errors of the merge-risk block of `body` as `pr-risk` names them, or "" when the block is valid."""
-    checked = OUT / FINAL / "pr-risk-check.md"
-    checked.write_text(body)
-    done = subprocess.run([sys.executable, str(method.parent / "merge_risk.py"), "validate", str(checked)],
-                          capture_output=True, text=True)
-    return (done.stdout + done.stderr).strip() if done.returncode else ""
 
 
 def _has_origin() -> bool:
@@ -114,12 +86,12 @@ def precondition_errors(push: bool, base: str | None) -> list[str]:
 def _push_errors() -> list[str]:
     """The errors that stop a run that is to push before any agent."""
     errors = []
-    if not pr_skill():
+    if not driver_pr.pr_skill():
         errors.append("the pr skill is missing: the PR body follows it; install it with "
                       "`npx skills add mattpocock/skills --skill pr`, or run without --push and --unattended")
-    if not pr_risk_skill():
+    if not driver_pr.pr_risk_skill():
         errors.append(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
-                      f"{PR_RISK_INSTALL}, or run without --push and --unattended")
+                      f"{driver_pr.PR_RISK_INSTALL}, or run without --push and --unattended")
     if not _has_origin():
         errors.append("the repository has no origin remote: --unattended and --push push the PR branch to origin; "
                       "add the remote, or run without them to stop before the push")
@@ -135,14 +107,9 @@ def finish_interrupted_move(state: State, pr: str) -> None:
         git(".", "checkout", "-q", pr)
 
 
-def _prompt_values(run: Run) -> dict[str, str]:
-    """The pointers every prompt of the end of run gets. Its agents work in slot 1, the PR worktree."""
-    return {"spec": run.args.spec, "tickets": run.args.tickets, "pr_branch": run.pr, "branch": run.pr,
-            "gate": run.args.fast_gate}
-
-
-def _title(finding: dict) -> str:
-    return f"{finding['title']} ({finding['file']}:{finding['line']})"
+def due(final: dict, subject: str) -> bool:
+    """The last review leaves open the finding a finding question names `subject` (driver_decisions.subject)."""
+    return subject in {driver_decisions.subject(finding) for finding in final["open"]}
 
 
 def _last(commits: dict[str, str]) -> str:
@@ -258,7 +225,7 @@ def _resolve_rebase_conflict(run: Run, base: str, onto: str) -> None:
     """Resolve the rebase in slot 1, with one agent rerun; the final integration gate checks its tip.
     No rebase is open afterwards, also when this raises."""
     files = _files_in_conflict()
-    values = {**_prompt_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
+    values = {**final_values(run), "branch": "HEAD", "start_sha": onto, "base": base, "files": " ".join(files)}
     error = _run_rebase_conflict_agent(run, values)
     if _rebase_is_open():
         again = _files_in_conflict()
@@ -369,10 +336,10 @@ def _carried_findings() -> str:
     """Ticket observations and minor findings for the final review, with their evidence files."""
     lines = []
     for path in sorted(OUT.glob("[0-9]*/findings-*.json")):
-        lines += [f"- {path}: {_title(finding)}" for finding in json.loads(path.read_text())
+        lines += [f"- {path}: {driver_review.title(finding)}" for finding in json.loads(path.read_text())
                   if finding["severity"] == "minor"]
     for path in sorted(OUT.glob("[0-9]*/observations-*.json")):
-        lines += [f"- {path}: {_title(finding)}" for finding in json.loads(path.read_text())]
+        lines += [f"- {path}: {driver_review.title(finding)}" for finding in json.loads(path.read_text())]
     return "\n".join(dict.fromkeys(lines))
 
 
@@ -423,16 +390,16 @@ def _review(run: Run, final: dict, tip: str) -> None:
     the other-provider entry: another provider than the implementer's, and so than the fixer's when it shares
     the implementer's."""
     done, folder = final["round"], OUT / FINAL
-    values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
+    values = {**final_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)),
               "ledger": str(OUT / "ledger.md"), "carried": _carried_findings(), "reviewed": str(final["reviewed"]),
-              "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
+              "must_fix_list": "\n".join(f"- {driver_review.title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
               "findings": str(folder / f"findings-{done - 1}.json")}
     with during("the final review"):
         # The full review resolves no must-fix finding: only the scoped review verifies a fix.
         reviewed, resolved = _scoped(run, values, tip, done) if done else (_lenses(run, values, tip), set())
-    carried = [finding for finding in final["must_fix"] if _title(finding) not in resolved]
+    carried = [finding for finding in final["must_fix"] if driver_review.title(finding) not in resolved]
     _settle_review(run, done, tip, values["range"], _round_findings(final, _merged(reviewed), carried))
 
 
@@ -550,15 +517,16 @@ def _undo_rejected_batch(run: Run, tip: str) -> str:
 
 def _findings_list(run: Run, final: dict) -> str:
     """The lines of the findings a fix batch is due for, for the final fixer's prompt."""
-    return "\n".join(f"- {finding['severity']}: {_title(finding)}" for finding in _to_fix(run, final["open"]))
+    return "\n".join(f"- {finding['severity']}: {driver_review.title(finding)}"
+                     for finding in _to_fix(run, final["open"]))
 
 
 def _fixer_values(run: Run, final: dict, tip: str, gate_record: str) -> dict[str, str]:
     """The prompt values of the final fixer: the review findings, and the saved gate failure for a gate repair."""
     folder = OUT / FINAL
-    values = {**_prompt_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
+    values = {**final_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
               "locked": " ".join(driver_locked.every(_shipped(run))),
-              "must_fix_list": "\n".join(f"- {_title(finding)}" for finding in final["must_fix"]),
+              "must_fix_list": "\n".join(f"- {driver_review.title(finding)}" for finding in final["must_fix"]),
               "findings_list": _findings_list(run, final)}
     return {**values, **(driver_final_gate.pointers(final, gate_record, tip) if gate_record else {})}
 
@@ -567,25 +535,25 @@ def _fixer_check(owners: list[str], final: dict, values: dict[str, str], gate_re
     """What the final fixer's report is checked against: a commit of a merged ticket in `owners`, a gate repair that
     fixes the gate, a review batch that fixes the must-fix findings."""
     return {"owners": owners,
-            "must_fix": [] if gate_record else [_title(finding) for finding in final["must_fix"]],
+            "must_fix": [] if gate_record else [driver_review.title(finding) for finding in final["must_fix"]],
             "fix": [values["gate_title"]] if gate_record else []}
 
 
-def _fixer_call(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> Call:
+def _fixer_call(run: Run, final: dict, tip: str, gate_record: str = "") -> Call:
     """Build a final fixer call from review findings or the saved integration-gate failure."""
     values = _fixer_values(run, final, tip, gate_record)
     name = f"gate-fixer-{final['gate_repairs']}" if gate_record else ""
-    tidied = final["tidied"]
+    baseline = final["locked"] or final["tidied"]
     return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate_record else "final-fixer",
                 fix_round=final["round"], name=name,
                 check=_fixer_check(list(_shipped(run)), final, values, gate_record),
-                locked=lambda _: driver_locked.for_end_of_run(_shipped(run), tidied))
+                locked=lambda _: driver_locked.for_end_of_run(_shipped(run), baseline))
 
 
-def _run_fixer(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> dict:
+def _run_fixer(run: Run, final: dict, tip: str, gate_record: str = "") -> dict:
     """Run the fixer on the PR branch in slot 1 and return its report. A rejected batch is undone."""
     try:
-        return run.agent(_fixer_call(run, tickets, final, tip, gate_record))
+        return run.agent(_fixer_call(run, final, tip, gate_record))
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
     except Halted as halted:
@@ -606,22 +574,26 @@ def _name_batch(run: Run, tip: str, report: dict) -> list[str]:
     return named
 
 
-def _fix_batch(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_record: str = "") -> None:
+def _fix_batch(run: Run, final: dict, tip: str, gate_record: str = "") -> None:
     """Run one bounded batch and settle its attributed tip before the next full gate."""
     with during("the fix batch"):
-        report = _run_fixer(run, tickets, final, tip, gate_record)
+        report = _run_fixer(run, final, tip, gate_record)
         named = _name_batch(run, tip, report)
     fields = dict(open=[], batch=named[-1] if named else tip)
     if gate_record:
         fields.update(gate_repairs=final["gate_repairs"] + 1, gate_failure=None)
     run.state.update(lambda state: state["run"]["final"].update(fields))
+    _led_batch("integration gate" if gate_record else "final review", tip, named)
+
+
+def _led_batch(label: str, tip: str, named: list[str]) -> None:
+    """The ledger sentence of a fix batch of the `label` on `tip` that made the commits `named`."""
     subjects = ", ".join(f"{commit[:7]} {driver_tidy.text(commit).splitlines()[0]}" for commit in named)
-    label = "integration gate" if gate_record else "final review"
     ledger(f"Fix batch of the {label}: {len(named)} commit{'s' if len(named) != 1 else ''} on {tip[:7]}: "
            f"{subjects or 'no code change'}.")
 
 
-def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
+def _review_until_reviewed(run: Run) -> None:
     """Gate and review the tip, and run the fix batch, until the tip is the reviewed tip, or until a `ship-draft`
     ruling ships the tip as it is."""
     while True:
@@ -632,204 +604,87 @@ def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
             _check_review_is_due(run, final, tip)
             with during("the integration gate"):
                 if record := driver_final_gate.failure(run, tip):
-                    _fix_batch(run, tickets, final, tip, record)
+                    _fix_batch(run, final, tip, record)
                     continue
             _review(run, final, tip)
         elif _to_fix(run, final["open"]):  # after the full review, or after a `retry` of a finding left open
-            _fix_batch(run, tickets, final, tip)
+            _fix_batch(run, final, tip)
         else:
             return
 
 
-# ---------------------------------------------------------------- the push
+# ---------------------------------------------------------------- a ticket that lands after the tidy
 
-def _name(run: Run) -> str:
-    """The title of the PR: the first heading of the spec, else the PR branch."""
-    spec = Path(run.args.spec)
-    lines = spec.read_text(errors="replace").splitlines() if spec.is_file() else []
-    return next((line[2:].strip() for line in lines if line.startswith("# ")), run.pr)
-
-
-def _coverage(final: dict, tip: str) -> dict[str, str]:
-    """The review coverage of the pushed tip `tip` in the PR body: the tips and the commits after the reviewed tip
-    that no review covered; the full review, which may include gate repairs made after tidy; the scoped review of the
-    remaining range. A draft shipped before any review was settled has neither review."""
-    reviewed = final["reviewed"]
-    full_tip = next(iter(final["lenses"].values()), {"tip": final["tidied"]})["tip"]
-    fields = {"tips": f"Branch tip and reviewed tip: {tip}", "full_review": f"{final['onto']}..{full_tip}",
-              "scoped": f"{full_tip}..{reviewed}" if full_tip != reviewed else "not needed"}
-    if not reviewed:
-        fields.update(full_review="not run", scoped="not run")
-    if tip != reviewed:
-        since = f"{reviewed or final['onto']}..{tip}"
-        unreviewed = git(".", "log", "--reverse", "--format=%h %s", since).stdout.strip().splitlines()
-        fields["tips"] = f"Branch tip: {tip}; reviewed tip: {reviewed or 'none'}; not reviewed: {'; '.join(unreviewed)}"
-    return fields
-
-
-def _ticket_map(final: dict, titles: dict[str, str], left: list[str]) -> str:
-    """The ticket-to-commit map, then the tickets `left` out of the run."""
-    out = "; ".join(f"{number} {titles[number]}" for number in left)
-    return ("\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items())
-            + f"\n\nLeft out of the run, so not in this PR: {out}." * bool(left))
+def replay(ticket: Ticket, slot: str, run: Run, tip: str, resolve: Callable[[str, list[str]], str]) -> str:
+    """A ticket that lands after the rewrite of the end of run, as an overturned `leave-out` does, lands as one commit
+    of its own work on the PR tip, as the tidy makes one: the change from where its branch leaves the history before
+    the rewrite (the recovery point) to its tip. The PR gets no second copy of the commits the tidy rewrote. Until
+    the replay is the recorded tip, `tip` is recorded as `replayed`: a run stopped in between replays again from it
+    (driver._restart_replay). A
+    conflict is open in the slot as a cherry-pick for `resolve`, the conflict agent of the ticket (from the PR tip, the
+    files in conflict), whose stop leaves the slot on `tip` and whose `retry` runs it again. Returns the ticket tip;
+    the slot is on it."""
+    final = run.state.read()["run"]["final"]
+    if not final["recovery"] or driver_merge.ancestor(final["tidied"], tip):
+        return tip
+    number, pr_tip, branch = ticket.number, run.tip(), run.names.ticket(ticket.number)
+    run.state.ticket(number, replayed=tip)
+    fork = git(".", "merge-base", final["recovery"], tip).stdout.strip()
+    tree = git(".", "merge-tree", "--write-tree", "--no-messages", f"--merge-base={fork}", pr_tip, tip)
+    if tree.returncode == 0:
+        own = _commit_of(tree.stdout.strip(), pr_tip, ticket, tip)
+        git(slot, "checkout", "-q", "-f", "-B", branch, own)
+    else:
+        work = _commit_of(f"{tip}^{{tree}}", fork, ticket, tip)
+        git(slot, "checkout", "-q", "-f", "-B", branch, pr_tip)
+        own = _replay_conflict(slot, branch, work, tip, lambda files: resolve(pr_tip, files))
+    run.state.ticket(number, tip=own)
+    ledger(f"Ticket {number}: its own work is replayed onto {run.pr} at {pr_tip[:7]}, after the rewrite of the end "
+           f"of run, as {own[:7]}.")
+    return own
 
 
-def _facts(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
-    """The end of the PR body for the pushed tip `tip`: the ticket-to-commit map, the fix commits, the rulings and the
-    review coverage."""
-    titles = {ticket.number: ticket.title for ticket in tickets}
-    fixes = git(".", "log", "--reverse", "--format=- %h %s", f"{final['tidied']}..{tip}").stdout.strip()
-    rulings = driver_decisions.rulings(run.state.read()["run"]["questions"])
-    return driver_agents.render("pr-body", {
-        "map": _ticket_map(final, titles, _left_out(run)),
-        "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
-        **_coverage(final, tip),
-        "providers": _review_providers(run.state.read()["run"]["agents"])})
-
-
-# The roles that review code, with their line in the PR body, and the roles that write it.
-_REVIEWS = {"reviewer": "Ticket reviews", "final-correctness": "Correctness lens", "final-reviewer": "Scoped review"}
-_AUTHORS = ("implementer", "fixer", "conflict")
-
-
-def _review_providers(agents: list[dict]) -> str:
-    """One line per reviewing role that ran: the entries it ran on, and whether one of them shares a provider with an
-    entry that wrote code. It reads the agents that ran, so a preflight fallback of an earlier invocation that a later
-    one undid is not claimed."""
-    wrote = {driver_agents.split(agent["entry"])[0] for agent in agents if agent["role"] in _AUTHORS}
-    lines = []
-    for role, label in _REVIEWS.items():
-        if used := sorted({agent["entry"] for agent in agents if agent["role"] == role}):
-            same = any(driver_agents.split(entry)[0] in wrote for entry in used)
-            lines.append(f"- {label} ran on: {', '.join(used)}" + (", on a provider that also wrote code" * same))
-    return "\n".join(lines)
-
-
-def _run_pr_writer(run: Run, tip: str, risk: Path, values: dict) -> str:
-    """Run the pr-writer, and once more with the errors of its merge-risk block. Returns the body it wrote."""
-    for round_ in range(2):
-        with during("the PR body"):
-            report = run.read_only(FINAL, ".", run.pr, tip,
-                                   lambda: run.agent(Call("pr-writer", FINAL, ".", values, fix_round=round_)))
-        if not (errors := _risk_errors(risk, report["body"])):
-            return report["body"]
-        values["risk_errors"] = (f"Your previous body has an invalid merge-risk block. Fix it with the pr-risk "
-                                 f"skill; its errors:\n{errors}\n")
-    raise Blocked(f"the merge-risk block of the PR body is invalid after a second run of the pr-writer: {errors}")
-
-
-def _body_skills() -> tuple[Path, Path]:
-    """The `pr` skill the body follows and the `pr-risk` skill its merge-risk block follows; Blocked when one is
-    missing."""
-    method, risk = pr_skill(), pr_risk_skill()
-    if not method:
-        raise Blocked("the pr skill is missing: the PR body follows it; install it with "
-                      "`npx skills add mattpocock/skills --skill pr`")
-    if not risk:
-        raise Blocked(f"the pr-risk skill is missing: the PR body carries its merge-risk block; install it with "
-                      f"{PR_RISK_INSTALL}")
-    return method, risk
-
-
-def _writer_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
-    """What the pr-writer wrote for the pushed tip `tip` with the method of the pr skill, its merge-risk block
-    validated. A body written for that tip is kept when its merge-risk block still validates, so a PR that failed to
-    open costs no second agent."""
-    body = OUT / FINAL / "pr-writer-body.md"
-    risk = pr_risk_skill()
-    if final["body"] == tip and body.is_file() and risk and not _risk_errors(risk, body.read_text()):
-        return body.read_text()
-    method, risk = _body_skills()
-    facts = _facts(run, final, tickets, tip)
-    values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
-              "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
-    body.write_text(_run_pr_writer(run, tip, risk, values).strip() + "\n")
-    run.state.update(lambda state: state["run"]["final"].update(body=tip))
-    return body.read_text()
-
-
-def _gh(argv: list[str], what: str) -> str:
-    """Run `gh` and return the URL it prints last."""
-    made = subprocess.run(["gh", *argv], capture_output=True, text=True, stdin=subprocess.DEVNULL)
+def _commit_of(tree: str, parent: str, ticket: Ticket, tip: str) -> str:
+    """The commit of `tree` on `parent` with the message the tidy gives `ticket`."""
+    made = driver_merge.commit_tree([tree, "-p", parent], driver_tidy.message(ticket), driver_merge.identity(tip))
     if made.returncode:
-        raise Blocked(f"gh {what} failed: {(made.stderr or made.stdout).strip()}")
-    return (made.stdout.split() or [""])[-1]
+        raise Blocked(f"git commit-tree failed: {made.stderr.strip()}")
+    return made.stdout.strip()
 
 
-def _draft(final: dict, questions: list[dict], left: list[str]) -> str:
-    """Why the PR opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling ships
-    with, the tickets `left` out, and the findings still open that the draft or an agent's ruling ships."""
-    reasons = []
-    if final["ship"]:
-        reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in final['ship']['stops'])}")
-    if left:
-        reasons.append(f"tickets are left out of the run: {', '.join(left)}")
-    if shipped := _shipped_open(final, questions):
-        reasons.append(f"a finding ships open: {'; '.join(shipped)}")
-    return "; ".join(reasons)
+def _replay_conflict(slot: str, branch: str, work: str, tip: str, resolve: Callable[[list[str]], str]) -> str:
+    """Cherry-pick `work`, the ticket's own work on its fork from the recovery point, onto the PR tip the slot is on,
+    and let `resolve` finish it. When it stops, the slot is back on `tip`."""
+    env = {**os.environ, **driver_merge.identity(tip, slot)}
+    subprocess.run(["git", "-C", slot, "cherry-pick", work], capture_output=True, env=env)
+    files = git(slot, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+    try:
+        if not files:
+            raise Blocked(f"the replay of {branch} onto the rewritten PR branch failed with no file in conflict")
+        return resolve(files)
+    except (Blocked, Halted):
+        git(slot, "cherry-pick", "--abort")
+        git(slot, "checkout", "-q", "-f", "-B", branch, tip)
+        raise
 
 
-def _shipped_open(final: dict, questions: list[dict]) -> list[str]:
-    """The titles of the findings still open that make a draft: all of them under a `ship-draft` ruling, else those an
-    agent's ruling shipped; the operator's own `accept` or `follow-up` keeps the PR ready."""
-    ship = final["ship"]
-    return [_title(one) for one in final["open"] if ship or driver_decisions.agent_shipped(questions, one)]
+def landed_after_tidy(state: dict, number: str, pr_tip: str) -> None:
+    """Record ticket `number`, which merged at `pr_tip` after the rewrite, as an overturned `leave-out` does: the end of
+    run reviews that tip (`batch`), the final fixers keep every ticket's locked files as it has them (`locked`), the
+    ticket map names its commit, and the pr-writer writes its part of the PR body again (`body`). A `ship-draft` ruling
+    shipped the tip before it (`ship`): the new tip is gated and reviewed before it is pushed."""
+    final = state["run"]["final"]
+    if final["tidied"]:
+        final.update(batch=pr_tip, locked=pr_tip, body=None, ship=None)
+        final["commits"][number] = pr_tip
 
 
-def _file_follow_ups(run: Run) -> None:
-    """File each finding ruled `follow-up` as an issue, once: the PR body then links it. The issue carries a marker
-    of the run and the question, so a run that stopped after `gh` filed it and before state.json kept its URL finds it
-    again instead of filing it twice."""
-    state = run.state.read()["run"]
-    for q in driver_decisions.follow_ups(state["questions"]):
-        marker = f"implement-spec follow-up {state['revision']}/{q['id']}"
-        body = (f"A finding the final review of {run.pr} left open, shipped with its PR by this ruling:\n\n"
-                f"{q['ruling']}\n\nEvidence: {q['evidence'][0]}\n\n{marker}\n")
-        url = (_gh(["issue", "list", "--state", "all", "--search", f'"{marker}" in:body', "--json", "url", "--jq",
-                    ".[].url"], "issue list")
-               or _gh(["issue", "create", "--title", q["subject"], "--body", body], "issue create"))
-
-        def record(state: dict, ruled: str = q["id"], issue: str = url) -> None:
-            next(one for one in state["run"]["questions"] if one["id"] == ruled)["issue"] = issue
-
-        run.state.update(record)
-        ledger(f"End of run: the follow-up {q['subject']} is filed as {url}.")
-
-
-def _write_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> Path:
-    """Write the PR body for the pushed tip `tip`: the pr-writer's, then the facts of the run; only the facts when the
-    pr-writer is the end-of-run stop that ships a draft. The follow-up issues are filed once the pr-writer's body is
-    valid, so a run that cannot open its PR files none, and the facts link them."""
-    stops = final["ship"]["stops"] if final["ship"] else []
-    failed = any(stop["role"] == "pr-writer" for stop in stops)
-    writer = "" if failed else _writer_body(run, final, tickets, tip).strip()
-    _file_follow_ups(run)
-    body = OUT / FINAL / "pr-body.md"
-    body.write_text("\n\n".join(filter(None, [writer, _facts(run, final, tickets, tip)])))
-    return body
-
-
-def _open_pr(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
-    """Open the PR of the pushed tip `tip`, ready for review or as draft, and return its URL."""
-    questions = run.state.read()["run"]["questions"]
-    body, draft = _write_body(run, final, tickets, tip), _draft(final, questions, _left_out(run))
-    url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
-               str(body), *["--draft"] * bool(draft)], "pr create")
-    run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))
-    ledger(f"The PR of {run.pr} into {final['base']} is open{f' as a draft: {draft}' * bool(draft)}: {url}.")
-    return url
-
-
-def _left_out(run: Run) -> list[str]:
-    """The tickets left out of the run (driver_decisions.left_out), which the end of run ships without."""
-    return sorted(driver_decisions.left_out(run.state.read()["run"]["questions"], run.tickets))
-
+# ---------------------------------------------------------------- the push
 
 def _shipped(run: Run) -> dict:
     """The records of the tickets the end of run ships, every one but the left-out ones: its to own and lock. Each of
     them is merged, as the end of run starts only then."""
-    left = set(_left_out(run))
+    left = set(driver_pr.left_out(run))
     return {number: entry for number, entry in run.state.read()["tickets"].items() if number not in left}
 
 
@@ -931,6 +786,7 @@ def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
     if not shutil.which("gh"):
         raise Blocked("gh is not on PATH: nothing is pushed")
     if final["pushed"] != tip:
+        driver_pr.require_open(final)
         _require_pushable(run, tip)
         # The commit, not the branch name: what leaves the machine is the tip the review covered.
         sent = git(".", "push", "-q", "origin", f"{tip}:refs/heads/{run.pr}")
@@ -938,8 +794,7 @@ def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
             raise Blocked(f"git push origin {run.pr} failed: {sent.stderr.strip()}")
         run.state.update(lambda state: state["run"]["final"].update(pushed=tip))
         ledger(f"Pushed {run.pr} at {tip[:7]} to origin.")
-    url = final["pr"] or _open_pr(run, final, tickets, tip)
-    return [f"Pushed {run.pr} at {tip} to origin.", f"PR: {url}"]
+    return [f"Pushed {run.pr} at {tip} to origin.", f"PR: {driver_pr.pr(run, final, tickets, tip)}"]
 
 
 def again(argv: list[str]) -> str:
@@ -988,7 +843,7 @@ def run(run: Run, tickets: list[Ticket]) -> tuple[bool, list[str]]:
         if _parked(state):
             return False, []  # the driver prints the questions
         _rewrite_once(run, tickets)
-        _review_until_reviewed(run, tickets)
+        _review_until_reviewed(run)
         return False, _close(run, tickets)
     except Blocked as blocked:
         line = ledger(f"End of run: BLOCKED at {blocked}.")

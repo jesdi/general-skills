@@ -3,14 +3,16 @@
     {"run": {revision, pr_branch, schema, gates: {fast, full}, stops, agents: [{ticket, role, entry, seconds, cost, tokens}], questions, start,
              landed: [[ticket, the PR tip its merge made]], final},
      "tickets": {"NN": {phase, round, tip, test_writer_sha, locked, green_gates, slot, note,
-                     landing, disputes, corrected, settled}}}
+                     landing, disputes, corrected, settled, replayed}}}
 
 green_gates is {"fast": [commit], "full": [commit]}, in a ticket and in run.final: a fast green never stands in for a
 full one. landing is a legacy commit whose full gate was red at the landing while the fixer of the round it started has
 not reported, else None. disputes is {<locked file>::<test>: {test, requirement, ruling, reason}}, the reviewer's
 ruling on the test; corrected is {<locked file>::<test>: {test, requirement, reason}}, the reading of its one
 correction. A locked test has at most one of each per ticket. settled counts the arbitrations and review corrections
-of the ticket's locked tests. No answer writes the three."""
+of the ticket's locked tests. No answer writes the three. replayed is the ticket tip that a replay onto the rewritten
+PR branch started from (driver_final.replay): while it is the recorded tip, the ticket branch may be elsewhere, and the
+landing puts it back there."""
 from __future__ import annotations
 
 import fcntl
@@ -37,15 +39,16 @@ def tiers() -> dict:
 
 def _ticket() -> dict:
     return {"phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": tiers(),
-            "slot": None, "note": "", "landing": None, "disputes": {}, "corrected": {}, "settled": 0}
+            "slot": None, "note": "", "landing": None, "disputes": {}, "corrected": {}, "settled": 0,
+            "replayed": None}
 
 
 def _final() -> dict:
     """The end-of-run record before it starts. Every key is here, so a reader uses [] and a wrong name fails."""
     return {"skipped": "", "phase": "pending", "recovery": None, "tidied": None, "onto": None, "base": None,
             "commits": {}, "reviewed": None, "round": 0, "open": [], "must_fix": [], "lenses": {}, "batch": None,
-            "gate_repairs": 0, "gate_allowance": 1, "gate_failure": None, "green_gates": tiers(), "pushed": None, "body": None, "pr": None,
-            "draft": False, "ship": None}
+            "locked": None, "gate_repairs": 0, "gate_allowance": 1, "gate_failure": None, "green_gates": tiers(),
+            "pushed": None, "body": None, "pr": None, "draft": False, "ship": None}
 
 
 class State:
@@ -108,7 +111,7 @@ def verified(entry: dict, branch: str, pr_branch: str) -> tuple[dict, str]:
         return {}, ""
     # The branch of a merged ticket is deleted, so its commits are trusted only while the PR branch has them.
     where, word = (pr_branch, "in") if phase == "merged" else (branch, "on")
-    if ancestor(tip, where):
+    if ancestor(tip, where) or (phase == "merge" and entry["replayed"] == entry["tip"]):
         return {}, ""
     return {"phase": "implement", "tip": entry["test_writer_sha"]}, f"the recorded tip {tip[:7]} is not {word} {where}"
 

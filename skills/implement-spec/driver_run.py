@@ -419,3 +419,9 @@ def _attempts(run: Run, call: Call) -> dict:
             minutes *= 2
         entry = entry if same else rerun_on
     _give_up(run, call, report, error)
+
+
+def final_values(run: Run) -> dict[str, str]:
+    """The pointers every prompt of the end of run gets. Its agents work in slot 1, the PR worktree."""
+    return {"spec": run.args.spec, "tickets": run.args.tickets, "pr_branch": run.pr, "branch": run.pr,
+            "gate": run.args.fast_gate}

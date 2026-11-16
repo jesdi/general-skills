@@ -27,9 +27,16 @@ def _stops(run: dict) -> list[tuple[str, object]]:
 
 
 def _decisions(run: dict) -> list[str]:
-    """What the driver decided without the operator, for the end of the summary."""
-    rulings = driver_decisions.rulings(driver_decisions.without_operator(run.get("questions", [])))
-    return ["", "Driver decisions, taken without the operator:", *(f"- {ruling}" for ruling in rulings)] * bool(rulings)
+    """What the driver decided without the operator, for the end of the summary, then the rulings the operator
+    overturned, each as the operator's ruling that overturns it, with the question id the operator names."""
+    questions = run.get("questions", [])
+    return [*_listed("Driver decisions, taken without the operator:", driver_decisions.without_operator(questions)),
+            *_listed("Overturned by the operator:", driver_decisions.overturned(questions))]
+
+
+def _listed(heading: str, questions: list[dict]) -> list[str]:
+    rulings = [f"- {q['id']}: {ruling}" for q, ruling in zip(questions, driver_decisions.rulings(questions))]
+    return ["", heading, *rulings] * bool(rulings)
 
 
 def _cost(agents: list[dict]) -> list[tuple[str, object]]:

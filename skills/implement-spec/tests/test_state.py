@@ -42,7 +42,7 @@ def test_start_keeps_a_recorded_run_and_adds_only_the_new_tickets(tmp_path):
     assert again["tickets"]["01"]["phase"] == "merged" and again["tickets"]["01"]["landing"] is None
     assert again["tickets"]["02"] == {
         "phase": "pending", "round": 0, "tip": None, "test_writer_sha": None, "locked": [], "green_gates": {"fast": [], "full": []}, "slot": None,
-        "note": "", "landing": None, "disputes": {}, "corrected": {}, "settled": 0}
+        "note": "", "landing": None, "disputes": {}, "corrected": {}, "settled": 0, "replayed": None}
 
 
 def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_path):
@@ -51,13 +51,15 @@ def test_verified_trusts_a_tip_only_while_it_is_on_the_ticket_branch(repo, tmp_p
     subprocess.run([*GIT, "commit", "-q", "--allow-empty", "-m", "work"], check=True)
     tip = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     subprocess.run(["git", "branch", "ticket/01", tip], check=True)
-    entry = {"phase": "review", "tip": tip, "test_writer_sha": tests}
+    entry = {"phase": "review", "tip": tip, "test_writer_sha": tests, "replayed": None}
     assert driver_state.verified(entry, "ticket/01", "feat/x") == ({}, "")
     assert driver_state.verified({**entry, "tip": tests}, "ticket/01", "feat/x") == ({}, "")  # an earlier commit of the branch
     back = ({"phase": "implement", "tip": tests}, f"the recorded tip {tip[:7]} is not on ticket/02")
     assert driver_state.verified(entry, "ticket/02", "feat/x") == back  # no such branch
     subprocess.run(["git", "branch", "-f", "ticket/01", tests], check=True)
     assert driver_state.verified({**entry, "phase": "merge"}, "ticket/01", "feat/x")[0] == {"phase": "implement", "tip": tests}
+    # A replay onto the rewritten PR branch stopped before its tip was recorded: the landing puts the branch back.
+    assert driver_state.verified({**entry, "phase": "merge", "replayed": tip}, "ticket/01", "feat/x") == ({}, "")
     # No accepted implementation yet, or finished: nothing to check.
     for phase in ("pending", "test-writer", "implement", "blocked"):
         assert driver_state.verified({**entry, "phase": phase, "tip": "1" * 40}, "ticket/01", "feat/x") == ({}, "")
