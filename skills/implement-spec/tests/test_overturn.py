@@ -210,10 +210,10 @@ def test_an_overturn_that_takes_effect_is_not_refused(asked, pair, monkeypatch):
 ])
 def test_an_agent_s_ship_overturned_is_the_operator_s_ruling_and_drafts_no_pr(pair, draft):
     questions = [q("a", "accept", by="arbiter", resume={"phase": "final"})]
-    final = {"open": [{"title": "s", "file": "f.py", "line": 1}], "ship": None}
+    final = {"open": [{"title": "s", "file": "f.py", "line": 1}], "ship": None, "gate_preexisting": None}
     if pair:
         driver_decisions.overturn(questions, dict([pair]))
-    assert driver_pr._draft(final, questions, []) == draft
+    assert driver_pr._draft(final, questions, [], "tip") == draft
 
 
 def test_a_body_edit_that_fails_is_made_again_by_the_next_run(tmp_path):

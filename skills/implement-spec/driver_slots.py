@@ -1,4 +1,5 @@
-"""Slots: the worktrees agents run in. Slot 1 is the PR worktree, slots 2..N live under .agent/worktrees/.
+"""Slots: the worktrees agents run in. Slot 1 is the PR worktree, slots 2..N live under .agent/worktrees/, and so
+does BASE_SLOT, of the end of run's full gate on the base commit (driver_final_gate).
 
 Every path is relative to the PR worktree, which is the driver's working directory for the whole run.
 """
@@ -55,6 +56,9 @@ def path(number: int) -> str:
     return "." if number == 1 else f".agent/worktrees/slot-{number}"
 
 
+BASE_SLOT = ".agent/worktrees/slot-base"  # the end of run's full gate on the base commit (driver_final_gate)
+
+
 def _owned_checkout(slot: str) -> bool:
     """An existing slot must be this repository's checkout at exactly the assigned path."""
     common = git(slot, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -68,25 +72,38 @@ def _owned_checkout(slot: str) -> bool:
 
 def create(number: int, prepare: str | None, keep: bool = False, *, start: str = "HEAD") -> str:
     """Make and prepare slot 2..N once, or reuse it off any branch (`keep`: as it is). Returns "" or the error."""
-    slot = path(number)
+    return make(path(number), f"slot {number}", prepare, keep, start=start)
+
+
+def make(slot: str, name: str, prepare: str | None, keep: bool = False, *, start: str = "HEAD") -> str:
+    """Make and prepare the worktree `slot` once, or reuse it off any branch (`keep`: as it is). Returns "" or the
+    error, which starts with `name`."""
     if Path(slot, ".git").exists():
-        if not _owned_checkout(slot):
-            return f"slot {number}: {slot} is not a healthy checkout of this repository; inspect it before retrying"
-        if not (keep or release(slot)):
-            return f"slot {number}: {slot} could not be released: inspect its Git state and uncommitted changes"
-        return ""
+        return _reuse(name, slot, keep)
     # One force recovers this missing slot registration only; a locked registration still fails.
     # Never prune: another session may mount the shared metadata without its sibling checkouts.
     added = git(".", "worktree", "add", "-q", "--force", "--detach", slot, start)
     if added.returncode:
-        return f"slot {number}: cannot create {slot}: {added.stderr.strip()}"
-    if not prepare:
-        return ""
+        return f"{name}: cannot create {slot}: {added.stderr.strip()}"
+    return _prepare(name, slot, prepare) if prepare else ""
+
+
+def _reuse(name: str, slot: str, keep: bool) -> str:
+    """"" when the existing `slot` is this repository's and, unless `keep`, off any branch; else the error."""
+    if not _owned_checkout(slot):
+        return f"{name}: {slot} is not a healthy checkout of this repository; inspect it before retrying"
+    if not (keep or release(slot)):
+        return f"{name}: {slot} could not be released: inspect its Git state and uncommitted changes"
+    return ""
+
+
+def _prepare(name: str, slot: str, prepare: str) -> str:
+    """Run `prepare` in the new `slot`; on a failure remove the slot and return the error."""
     done = subprocess.run(prepare, shell=True, cwd=slot, capture_output=True, text=True, stdin=subprocess.DEVNULL)
     if done.returncode:
         # An unprepared slot must not look ready to the next run.
         git(".", "worktree", "remove", "--force", slot)
-        return (f"slot {number}: --prepare `{prepare}` exited {done.returncode} in {slot}: "
+        return (f"{name}: --prepare `{prepare}` exited {done.returncode} in {slot}: "
                 f"{(done.stderr or done.stdout).strip()}")
     return ""
 
