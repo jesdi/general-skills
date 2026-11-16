@@ -734,9 +734,10 @@ def _gh(argv: list[str], what: str) -> str:
     return (made.stdout.split() or [""])[-1]
 
 
-def _draft(final: dict) -> str:
-    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling."""
-    shipped = [_title(finding) for finding in final["open"]]
+def _draft(final: dict, questions: list[dict]) -> str:
+    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling; only the
+    ruling of an agent, not the operator's own, makes a draft."""
+    shipped = [_title(finding) for finding in final["open"] if driver_decisions.agent_shipped(questions, finding)]
     return f"a finding ships open: {'; '.join(shipped)}" if shipped else ""
 
 
@@ -772,7 +773,7 @@ def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
 
 def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
     """Open the PR, ready for review or as draft, and return its URL."""
-    body, draft = _write_body(run, final, tickets), _draft(final)
+    body, draft = _write_body(run, final, tickets), _draft(final, run.state.read()["run"]["questions"])
     url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
                str(body), *["--draft"] * bool(draft)], "pr create")
     run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))

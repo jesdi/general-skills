@@ -88,13 +88,13 @@ def test_with_retries_the_driver_runs_the_one_more_fix_batch_itself_and_pushes_w
     assert [len(rig.final_calls(role)) for role in LENSES] == [1, 1, 1]
 
 
-def test_accept_on_an_open_final_finding_ships_it_as_draft_with_no_fix_batch_and_lists_the_operator_ruling(tmp_path):
+def test_the_operators_accept_on_an_open_final_finding_ships_it_ready_with_no_fix_batch_and_lists_the_ruling(tmp_path):
     rig, steps = open_after_batch(tmp_path)
     rig.run(steps, "--answer", f"{Q}=accept", *UNATTENDED)
     assert rig.code == 0 and rig.pushes() and len(rig.final_calls("fixer")) == 1, rig.out
     (pr,) = rig.prs()
     assert "- Ruling: final ships with the finding open (accept): ledger write not atomic (ledger.py).\n" in pr["body"]
-    assert "--draft" in pr["argv"] and not rig.final_calls("arbiter")
+    assert "--draft" not in pr["argv"] and not rig.final_calls("arbiter")
 
 
 # ---------------------------------------------------------------- the locked files

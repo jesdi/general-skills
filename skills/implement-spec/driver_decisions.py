@@ -194,6 +194,11 @@ def waived(questions: list[dict], finding: dict) -> bool:
     return not all(by) if finding_kind(finding) == MUST_FIX else bool(by)
 
 
+def agent_shipped(questions: list[dict], finding: dict) -> bool:
+    """The driver or the arbiter (`by`), not the operator, answered a question on `finding` with an option that ships it."""
+    return any(q.get("by") for q in questions if _ships(q, subject(finding)))
+
+
 def _ships(q: dict, named: str) -> bool:
     """`q` is a finding question on the subject `named`, answered with an option that ships it."""
     return q["kind"] in FINDINGS and q["answer"] in SHIPS and q["subject"] == named
