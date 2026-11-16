@@ -107,7 +107,7 @@ class Call:
 
 class Ask(NamedTuple):
     """The questions a ticket thread, or the end of run, wants the operator to answer when it blocks."""
-    asked: list[tuple[str, str]]  # one question per (kind, subject)
+    asked: list[tuple[str, str, str | None]]  # one question per (kind, subject), with the role that stopped
     report: str  # the evidence
     resume: Resume  # the record gets its tip and round with the stop, and all of it with a `retry` or a `keep-test`
 
@@ -130,9 +130,11 @@ class Run:
     def tip(self) -> str:
         return git(".", "rev-parse", f"refs/heads/{self.pr}").stdout.strip()
 
-    def ask(self, number: str, asked: list[tuple[str, str]], report: str, resume: Resume) -> None:
-        """The questions of `number`'s stop, one per (kind, subject) of `asked`. The end of run adds those of each lens
-        that stopped, or of each finding, to one stop."""
+    def ask(self, number: str, asked: list[tuple[str, str]], report: str, resume: Resume,
+            role: str | None = None) -> None:
+        """The questions of `number`'s stop, one per (kind, subject) of `asked`; `role`: the agent that stopped, for a
+        `ticket-blocked` one. The end of run adds those of each lens that stopped, or of each finding, to one stop."""
+        asked = [(kind, subject, role) for kind, subject in asked]
         with _ASKS:
             if earlier := self.asks.get(number):
                 asked = earlier.asked + asked
@@ -319,7 +321,7 @@ def _ask_blocked(run: Run, call: Call, report: Path, error: str) -> None:
     its state is."""
     tip = call.values["start_sha"] if call.retry else driver_slots.head(call.slot)
     resume = FINAL_RESUME if call.number == FINAL else retry_point(call.retry or call.role, tip, call.fix_round)
-    run.ask(call.number, [("ticket-blocked", f"the {call.role}: {error}")], str(report), resume)
+    run.ask(call.number, [("ticket-blocked", f"the {call.role}: {error}")], str(report), resume, call.role)
 
 
 def _give_up(run: Run, call: Call, report: Path, error: str) -> NoReturn:

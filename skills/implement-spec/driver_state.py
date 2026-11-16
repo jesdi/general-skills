@@ -45,7 +45,7 @@ def _final() -> dict:
     return {"skipped": "", "phase": "pending", "recovery": None, "tidied": None, "onto": None, "base": None,
             "commits": {}, "reviewed": None, "round": 0, "open": [], "must_fix": [], "lenses": {}, "batch": None,
             "gate_repairs": 0, "gate_allowance": 1, "gate_failure": None, "green_gates": tiers(), "pushed": None, "body": None, "pr": None,
-            "draft": False}
+            "draft": False, "ship": None}
 
 
 class State:

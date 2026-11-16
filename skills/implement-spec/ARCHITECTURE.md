@@ -107,6 +107,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   that origin has is never rewritten. `refs/implement-spec/<key>/recovery` holds the tip before the rewrite.
 - A rewrite never changes a file: the driver compares trees (`driver_tidy.same_tree`) before it moves the branch.
 - The push sends the reviewed commit, not the branch name, with no force. It refuses a commit that `origin` lacks with no good signature (when `commit.gpgsign` is on) or with a `Co-authored-by` trailer (`driver_merge.unpushable`).
+- A `ship-draft` answer, the operator's or the driver's, is recorded once where answers are settled (`driver._settle` adds `driver_final.ship_record` to the fields of the end-of-run record): `run.final.ship` holds the gated tip and the stops, each with the role of its question. The review loop, the push, the body and the draft reason read that record, never the questions again; the push refuses when the branch moved from the recorded tip. The driver's own policy for an end-of-run stop is `driver_final.draft_ruling`: no `ship-draft` while a critical or must-fix finding is open that no operator ruling ships.
 
 ### Work is never dropped
 

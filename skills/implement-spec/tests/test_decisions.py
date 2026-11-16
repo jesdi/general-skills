@@ -473,7 +473,7 @@ def test_a_must_fix_finding_asks_its_own_kind_whose_ships_are_the_operators_only
 
 def test_one_stop_asks_questions_of_two_kinds_and_the_ledger_names_both():
     run = {"stops": 0, "questions": []}
-    asked = [("finding-must-fix", "leak (auth.py)"), ("finding-open", "slow (db.py)")]
+    asked = [("finding-must-fix", "leak (auth.py)", None), ("finding-open", "slow (db.py)", None)]
     driver_decisions.stop(run, "final", asked, ["findings-1.json"], driver_decisions.Resume("final"))
     assert [(q["id"], q["stop"]) for q in run["questions"]] == [("final-finding-must-fix-1", 1),
                                                                ("final-finding-open-1", 1)]

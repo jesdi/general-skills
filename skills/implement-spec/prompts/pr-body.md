@@ -14,7 +14,7 @@ One commit per ticket, in merge order:
 
 ## Review coverage
 
-- Branch tip and reviewed tip: {tip}
+- {tips}
 - Full review: {full_review}
 - Scoped review after the fix batch: {scoped}
 {providers}
