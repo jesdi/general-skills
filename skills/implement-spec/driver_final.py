@@ -752,14 +752,20 @@ def _gh(argv: list[str], what: str) -> str:
 
 def _draft(final: dict, questions: list[dict]) -> str:
     """Why the PR opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling ships
-    with, and the findings still open, which that draft ships, or else an agent's ruling shipped; the operator's own
-    `accept` or `follow-up` keeps the PR ready."""
-    reasons, ship = [], final["ship"]
-    if ship:
-        reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in ship['stops'])}")
-    if shipped := [_title(one) for one in final["open"] if ship or driver_decisions.agent_shipped(questions, one)]:
+    with, and the findings still open that the draft or an agent's ruling ships."""
+    reasons = []
+    if final["ship"]:
+        reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in final['ship']['stops'])}")
+    if shipped := _shipped_open(final, questions):
         reasons.append(f"a finding ships open: {'; '.join(shipped)}")
     return "; ".join(reasons)
+
+
+def _shipped_open(final: dict, questions: list[dict]) -> list[str]:
+    """The titles of the findings still open that make a draft: all of them under a `ship-draft` ruling, else those an
+    agent's ruling shipped; the operator's own `accept` or `follow-up` keeps the PR ready."""
+    ship = final["ship"]
+    return [_title(one) for one in final["open"] if ship or driver_decisions.agent_shipped(questions, one)]
 
 
 def _file_follow_ups(run: Run) -> None:
