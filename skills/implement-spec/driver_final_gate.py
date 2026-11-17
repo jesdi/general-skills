@@ -25,7 +25,7 @@ def failure(run: Run, tip: str) -> str:
     run.state.update(lambda s: s['run']['final'].update(gate_failure=dict(tip=tip, record=record)))
     if final['gate_repairs'] >= final['gate_allowance']:
         subject = f'{RETRY_SUBJECT}: {tip[:7]}; read {record}'
-        run.ask(FINAL, 'ticket-blocked', [subject], record, FINAL_RESUME._replace(
+        run.ask(FINAL, [('ticket-blocked', subject)], record, FINAL_RESUME._replace(
             gate_allowance=final['gate_repairs'] + 1))
         raise Blocked(subject)
     return record

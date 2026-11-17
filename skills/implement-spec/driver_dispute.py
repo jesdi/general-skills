@@ -70,7 +70,7 @@ def ambiguous(run: Run, number: str, readings: list[Reading], resume: Resume) ->
     _ruling_findings(path, [(one.found, subject, f"correct the test to the second reading: {one.found.reason}")
                             for one, subject in zip(readings, subjects)])
     subject = "; ".join(subjects)
-    run.ask(number, "spec-ambiguous", [subject], str(path), resume)
+    run.ask(number, [("spec-ambiguous", subject)], str(path), resume)
     raise Blocked(f"the spec reads two ways on a locked test: {subject}")
 
 

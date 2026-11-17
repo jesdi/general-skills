@@ -196,7 +196,7 @@ def _refuse_breach(number: str, run: Run, landing: _Landing) -> None:
 
 
 def _block_landing(number: str, run: Run, tip: str, error: str) -> None:
-    run.ask(number, "ticket-blocked", [f"the landing: {error}"], str(STATE),
+    run.ask(number, [("ticket-blocked", f"the landing: {error}")], str(STATE),
             retry_point("implementer", tip, 0))
     raise Blocked(error)
 
@@ -471,18 +471,25 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
 
 def _rule(run: Run) -> bool:
     """The driver answers each open question that recommends `retry` with it, at most `--retries` stops per ticket and
-    for the end of run; then, unless `--ask`, the arbiter rules on the questions that are its own. True: one of them
-    ruled, so the run goes on with no operator."""
+    for the end of run, and `--must-fix-retries` more stops with a `finding-must-fix` question; then, unless `--ask`,
+    the arbiter rules on the open `finding-open` questions. True: one of them ruled, so the run goes on with no
+    operator."""
     questions = run.state.read()["run"]["questions"]
-    answers, why, by = driver_decisions.automatic(questions, run.args.retries), {}, driver_decisions.DRIVER
-    if not (answers or run.args.ask):
-        answers, why = _arbitrate(run)
-        by, questions = driver_decisions.ARBITER, run.state.read()["run"]["questions"]
+    answers = driver_decisions.automatic(questions, run.args.retries, run.args.must_fix_retries)
+    _settle_rulings(run, questions, answers, driver_decisions.DRIVER, {})
+    if run.args.ask:
+        return bool(answers)
+    arbitrated, why = _arbitrate(run)
+    _settle_rulings(run, run.state.read()["run"]["questions"], arbitrated, driver_decisions.ARBITER, why)
+    return bool(answers or arbitrated)
+
+
+def _settle_rulings(run: Run, questions: list[dict], answers: dict, by: str, why: dict[str, str]) -> None:
+    """Settle the `answers` that `by`, the driver or the arbiter, gave."""
     if answers:
         _settle(run.state, questions, answers, [], by, why)
         print(f"implement-spec: the {by} ruled on {len(answers)} question{'s' * (len(answers) > 1)} and goes on",
               flush=True)
-    return bool(answers)
 
 
 def _arbitrate(run: Run) -> tuple[dict[str, str], dict[str, str]]:
@@ -636,6 +643,11 @@ def _arguments(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--retries", type=int, default=int(os.environ.get("IMPLEMENT_SPEC_RETRIES", 2)), metavar="N",
                         help="the stops of one ticket, or of the end of run, that the driver answers itself with the "
                         "recommended option before it asks the operator (default: IMPLEMENT_SPEC_RETRIES, else 2)")
+    parser.add_argument("--must-fix-retries", type=int, metavar="N",
+                        default=int(os.environ.get("IMPLEMENT_SPEC_MUST_FIX_RETRIES", 2)),
+                        help="the more fix batches, beyond --retries, that the driver runs itself while a critical or "
+                        "must-fix finding is open, before it asks the operator (default: "
+                        "IMPLEMENT_SPEC_MUST_FIX_RETRIES, else 2)")
     parser.add_argument("--ask", action=argparse.BooleanOptionalAction,
                         default=os.environ.get("IMPLEMENT_SPEC_ASK") == "1", help="once the retries are spent, ask "
                         "the operator instead of the arbiter agent (default: IMPLEMENT_SPEC_ASK=1, else off)")

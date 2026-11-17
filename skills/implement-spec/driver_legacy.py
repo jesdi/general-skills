@@ -5,7 +5,8 @@ Every run of a newer driver holds `lock` (driver._hold), so a newer and an older
 at the same time. The driver calls `resume` once, after the locks and before any check reads a ref: a run with no
 `schema` in state.json gets the new names of its refs; a run before schema 3 gets its gates as the full tier; a run
 before schema 4 keeps the ruling of each answered question, and one with an open question of a removed kind stops;
-a run before schema 5 gets its rulings and corrections keyed by their test.
+a run before schema 5 gets its rulings and corrections keyed by their test; a run before schema 6 gets each open
+`finding-open` question on a critical or must-fix finding as a `finding-must-fix` one, so no arbiter ships it.
 ponytail: delete this module, tests/test_legacy.py and its one line in driver._hold and in driver._start_errors
 once no older driver is left.
 """
@@ -169,9 +170,20 @@ def _all_per_test(state: dict) -> None:
             _per_test(entry, [path for path in asked if path.exists()])
 
 
+def _must_fix(run: dict) -> None:
+    """Schema 6: an open `finding-open` question on a critical or must-fix finding of the last review becomes a
+    `finding-must-fix` one. It keeps its id and the fields decisions.json shows, and both kinds offer the same options,
+    so decisions.json keeps its revision and an answer given to it still counts."""
+    must_fix = {driver_decisions.subject(one) for one in run.get("final", {}).get("open", [])
+                if driver_decisions.finding_kind(one) == driver_decisions.MUST_FIX}
+    for q in run.get("questions", []):
+        if (q["answer"], q["kind"]) == (None, driver_decisions.FINDING_OPEN) and q["subject"] in must_fix:
+            q["kind"] = driver_decisions.MUST_FIX
+
+
 def _upgraded(state: dict) -> None:
     """Schema 3: every gate of an older driver was the full gate, so its greens and its count are of the full tier.
-    Schema 4: an answered question keeps its ruling sentence. Schema 5: see `_per_test`."""
+    Schema 4: an answered question keeps its ruling sentence. Schema 5: see `_per_test`. Schema 6: see `_must_fix`."""
     run = state["run"]
     for q in run.get("questions", []):
         if q["answer"] is not None:
@@ -180,6 +192,7 @@ def _upgraded(state: dict) -> None:
         if isinstance(record.get("green_gates"), list):
             record["green_gates"] = {**driver_state.tiers(), "full": record["green_gates"]}
     _all_per_test(state)
+    _must_fix(run)
     if isinstance(run.get("gates"), int):
         run["gates"] = {"fast": 0, "full": run["gates"]}
     run["schema"] = driver_state.SCHEMA

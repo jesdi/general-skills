@@ -249,6 +249,21 @@ def test_after_the_retries_are_spent_the_next_stop_of_the_ticket_asks_the_operat
 
 def test_the_driver_answers_only_a_recommended_retry():
     import driver_decisions
-    ask = lambda id, recommended: {"id": id, "ticket": "01", "stop": 1, "answer": None, "recommended": recommended}
+    ask = lambda id, recommended: {"id": id, "ticket": "01", "kind": "ticket-blocked", "stop": 1, "answer": None,
+                                   "recommended": recommended}
     questions = [ask("a", "retry"), ask("b", "accept"), ask("c", "")]
-    assert driver_decisions.automatic(questions, 2) == {"a": "retry"}
+    assert driver_decisions.automatic(questions, 2, 0) == {"a": "retry"}
+
+
+def test_the_must_fix_retries_count_only_the_stops_with_a_must_fix_finding():
+    """`--must-fix-retries N`: N more fix batches beyond `--retries` while a critical or must-fix finding is open,
+    whatever else stopped the end of run. A `finding-open` question keeps the budget of every stop."""
+    import driver_decisions
+    ask = lambda id, kind, stop, answer=None, by=None: {"id": id, "ticket": "final", "kind": kind, "stop": stop,
+                                                         "answer": answer, "by": by, "recommended": "retry"}
+    ruled = [ask("b1", "ticket-blocked", 1, "retry", "driver"), ask("m1", "finding-must-fix", 2, "retry", "driver")]
+    questions = [*ruled, ask("m2", "finding-must-fix", 3), ask("o1", "finding-open", 3)]
+    assert driver_decisions.automatic(questions, 1, 1) == {"m2": "retry"}
+    assert driver_decisions.automatic(questions, 1, 0) == {}
+    assert driver_decisions.automatic(questions, 2, 0) == {"m2": "retry"}
+    assert driver_decisions.automatic(questions, 3, 0) == {"m2": "retry", "o1": "retry"}

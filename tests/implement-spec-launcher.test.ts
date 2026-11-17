@@ -82,6 +82,7 @@ describe('implement-spec README.md', () => {
       'spec-ambiguous': ['keep-test', 'correct-test', 'edit-spec'],
       'ticket-blocked': ['retry', 'edit'],
       'finding-open': ['retry', 'accept', 'follow-up'],
+      'finding-must-fix': ['retry', 'accept', 'follow-up'],
     };
     const rows = section.split('\n').filter((l) => /^\| `[a-z-]+` \|/.test(l));
     expect(rows.map((l) => l.split('`')[1])).toEqual(Object.keys(kinds));
