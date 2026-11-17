@@ -14,7 +14,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_run.py` | `Run` (what all ticket threads share), one agent with its one rerun, the gate call, the ledger, `Blocked` |
 | `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, test-writer correction, fix rounds |
 | `driver_dispute.py` | A disputed locked test: the arbitration, its correction, the once-per-test record, `spec-ambiguous` |
-| `driver_arbiter.py` | The arbiter agent that rules on the open questions the driver's retries leave (`driver_decisions.arbitrated`) |
+| `driver_arbiter.py` | The arbiter agent that rules on the open questions the driver's retries leave (`driver_decisions.arbitrated`), in a checkout of its own |
 | `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push |
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
@@ -27,7 +27,7 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_state.py` | `state.json` (the resume contract) and the kernel lock |
 | `driver_names.py` | The names of one run: its ticket branches, its recovery ref and its lock file |
 | `driver_legacy.py` | The take-over of a run that an older driver started; delete it when no such run is left |
-| `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them |
+| `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them; the tickets left out of the run (`left_out`) |
 | `driver_tidy.py`, `driver_summary.py` | The history with one commit per ticket; `summary.md` |
 
 `driver.py`, `driver_fixloop.py`, `driver_dispute.py` and `driver_final.py` decide what comes next. The other modules do one thing

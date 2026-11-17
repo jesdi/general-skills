@@ -156,7 +156,7 @@ def test_a_locked_test_finding_that_comes_back_after_its_correction_asks_spec_am
     assert rig.code == 2 and rig.state()["tickets"]["01"]["phase"] == "blocked", rig.ledger()
     assert rig.led("BLOCKED at the review: the spec reads two ways on a locked test: tests/test_01.py::test_x: the "
                    "first reading: STALE: STALE; the second reading: STALE: STALE.")
-    assert asked(rig) == {AMBIGUOUS_1: ["keep-test", "correct-test", "edit-spec"]}
+    assert asked(rig) == {AMBIGUOUS_1: ["keep-test", "correct-test", "leave-out", "edit-spec"]}
     (question,) = rig.state()["run"]["questions"]
     assert question["recommended"] == "" and question["evidence"][0] == ".agent/implement/01/spec-ambiguous-1.json"
     rig.run(steps, "--answer", f"{AMBIGUOUS_1}=correct-test")

@@ -108,3 +108,36 @@ def release(slot: str) -> bool:
     if status.returncode or status.stdout.strip():
         return False
     return git(slot, "checkout", "-q", "--detach").returncode == 0
+
+
+def fresh(patch: Path) -> Path:
+    """`patch`, or `<stem>-<n><suffix>` for the first n from 2 that names no file: a snapshot never replaces one that
+    an earlier, partly failed set-aside wrote."""
+    n, free = 1, patch
+    while free.exists():
+        n += 1
+        free = patch.with_name(f"{patch.stem}-{n}{patch.suffix}")
+    return free
+
+
+def set_aside(slot: str, patch: Path) -> str:
+    """Save the uncommitted work of the slot, untracked files too, as a binary patch on its HEAD at `patch`, then take
+    the slot off its branch with a clean tree; ignored files stay. "" or the error: until the whole patch is at
+    `patch`, the work stays where it is."""
+    patch.parent.mkdir(parents=True, exist_ok=True)
+    partial = patch.with_name(f"{patch.name}.partial")
+    if error := _steps(slot, ("add", "-A"), ("diff", "--cached", "--binary", f"--output={partial.resolve()}", "HEAD")):
+        return error
+    partial.replace(patch)
+    if error := _steps(slot, ("reset", "-q", "--hard"), ("clean", "-q", "-fd")):
+        return error
+    return "" if release(slot) else f"{slot} could not be taken off its branch"
+
+
+def _steps(slot: str, *steps: tuple[str, ...]) -> str:
+    """Run the git `steps` in `slot` in order. "" or the error of the first that fails, which stops the rest."""
+    for step in steps:
+        done = git(slot, *step)
+        if done.returncode:
+            return f"git {step[0]} failed in {slot}: {done.stderr.strip()}"
+    return ""

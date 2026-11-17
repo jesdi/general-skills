@@ -183,3 +183,32 @@ def test_git_without_a_command_still_returns_gits_usage_error(repo):
     repo()
     result = driver_slots.git(".")
     assert result.returncode != 0 and "usage: git" in result.stdout + result.stderr
+
+
+def test_a_set_aside_never_replaces_an_earlier_patch_and_writes_it_whole_before_the_reset(repo, tmp_path):
+    repo()
+    assert driver_slots.setup(2, None) == []
+    slot = driver_slots.path(2)
+    (tmp_path / slot / "wip.txt").write_text("half done\n")
+    earlier = tmp_path / "out/left-out.patch"
+    earlier.parent.mkdir()
+    earlier.write_text("the snapshot of a set-aside whose reset failed\n")
+    patch = driver_slots.fresh(earlier)
+    assert patch.name == "left-out-2.patch"
+    assert driver_slots.set_aside(slot, patch) == ""
+    assert "+half done" in patch.read_text() and earlier.read_text().startswith("the snapshot")
+    assert sorted(p.name for p in earlier.parent.iterdir()) == ["left-out-2.patch", "left-out.patch"]
+    assert driver_slots.git(slot, "status", "--porcelain").stdout == ""
+
+
+def test_the_arbiter_checkout_is_removed_through_git_alone(repo, tmp_path):
+    import driver_arbiter
+    repo()
+    scratch = tmp_path / driver_arbiter.SCRATCH
+    scratch.mkdir(parents=True)
+    (scratch / "keep.txt").write_text("not a worktree of the run\n")
+    assert driver_arbiter._remove_scratch().startswith(f"cannot remove {driver_arbiter.SCRATCH}: ")
+    assert (scratch / "keep.txt").exists()
+    (scratch / "keep.txt").unlink()
+    scratch.rmdir()
+    assert driver_arbiter._remove_scratch() == ""

@@ -26,6 +26,7 @@ import driver_state
 from driver_decisions import FINAL, Resume
 from driver_names import Names
 from driver_slots import git
+from driver_tickets import Ticket
 
 OUT = Path(".agent/implement")
 FINAL_RESUME = Resume("pending")  # a `retry` of the end of run: it goes on from where its state is
@@ -119,6 +120,7 @@ class Run:
     state: driver_state.State
     pr: str  # the PR branch
     kept: dict[str, int]  # ticket number -> the slot that holds its uncommitted work from an earlier run
+    tickets: list[Ticket] = field(default_factory=list)  # every ticket of the run
     merging: threading.Lock = field(default_factory=threading.Lock)  # held for one landing: merges are serial
     asks: dict[str, Ask] = field(default_factory=dict)  # ticket number -> its pending stop
     halted: list[str] = field(default_factory=list)  # why the run starts no other agent; [] while it goes on
@@ -238,11 +240,20 @@ def _restore_if_changed(number: str, slot: str, branch: str, tip: str, config: d
         driver_review.restore(slot, branch, tip)
     left = "; ".join(filter(None, (changed, moved)))
     if left:
-        where = ("slot 1" if number == FINAL else "the slot") + f" to {tip[:7]}"
-        restored = " and ".join(filter(None, ("the shared git config" if changed else "", where if moved else "")))
-        again = f" and runs {'the final review' if number == FINAL else 'the review'} again" if runs_again else ""
-        ledger(f"{_owner(number)}: a read-only role broke its rule: {left}; the driver restored {restored}{again}.")
+        ledger(f"{_owner(number)}: a read-only role broke its rule: {left}; the driver restored "
+               f"{_restored(number, slot, tip, changed, moved)}{_again(number, runs_again)}.")
     return left
+
+
+def _restored(number: str, slot: str, tip: str, changed: str, moved: str) -> str:
+    """What the driver restored after a read-only role: the shared git config, the slot, or both."""
+    where = ("slot 1" if slot == "." and number == FINAL else "the slot") + f" to {tip[:7]}"
+    return " and ".join(filter(None, ("the shared git config" if changed else "", where if moved else "")))
+
+
+def _again(number: str, runs_again: bool) -> str:
+    """The tail of the restore ledger line when the review runs again after it."""
+    return f" and runs {'the final review' if number == FINAL else 'the review'} again" if runs_again else ""
 
 
 def _reset_if_moved(slot: str, branch: str, tip: str) -> str:
