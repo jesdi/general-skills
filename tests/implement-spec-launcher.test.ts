@@ -80,7 +80,7 @@ describe('implement-spec README.md', () => {
     const section = text.slice(start, end < 0 ? undefined : start + 1 + end);
     const kinds: Record<string, string[]> = {
       'spec-ambiguous': ['keep-test', 'correct-test', 'edit-spec'],
-      'ticket-blocked': ['retry', 'edit'],
+      'ticket-blocked': ['retry', 'ship-draft', 'edit'],
       'finding-open': ['retry', 'accept', 'follow-up'],
       'finding-must-fix': ['retry', 'accept', 'follow-up'],
     };

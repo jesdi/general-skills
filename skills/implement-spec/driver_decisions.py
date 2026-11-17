@@ -4,7 +4,9 @@ A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
      resume: {phase[, tip][, round][, gate_allowance]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
      ruling: the ruling sentence, once answered; by: DRIVER or ARBITER when no operator answered it;
-     issue: the URL of the follow-up issue the driver filed for a `follow-up` answer}
+     issue: the URL of the follow-up issue the driver filed for a `follow-up` answer;
+     role: the agent whose stop a `ticket-blocked` question asks about, None for a gate or a landing stop and absent
+     from a question of an older driver, which a reader takes as no particular agent}
 decisions.json: {run: <run.revision>, questions: [the open ones, first six fields], revision: <SHA-256 of the rest>}."""
 from __future__ import annotations
 
@@ -49,6 +51,7 @@ class Option(NamedTuple):
     ruling: str
     resumes: bool  # the record goes back to the `resume` of the question
     fields: dict = {}  # what else the record gets when its stop is settled; no field at all keeps it BLOCKED
+    final_only: bool = False  # only the end of run offers it
 
 
 class Kind(NamedTuple):
@@ -104,6 +107,10 @@ KINDS = {
             "fix batch and scoped review, and a red integration gate gets one more repair batch from its saved "
             "log, followed by the full gate and review.",
             "Ruling: {ticket} runs again (retry): {subject}.", True),
+         "ship-draft": Option(
+            "Push the branch tip that a full gate ran on, green or red, and open the PR as draft, naming this stop; "
+            "the end of run reviews and repairs no more. The driver takes it once its retries are spent.",
+            "Ruling: {ticket} ships as a draft PR (ship-draft): {subject}.", True, final_only=True),
          "edit": Option(
             "Keep it BLOCKED, so the spec or the ticket can be edited before more work on it.",
             "Ruling: {ticket} stays BLOCKED for an edit of the spec or the ticket (edit): {subject}.", False)}),
@@ -149,26 +156,31 @@ def question_id(kind: str, ticket: str, asked: list[dict]) -> str:
 
 
 def question(kind: str, ticket: str, subject: str, evidence: list[str], asked: list[dict], stop: int,
-             resume: Resume) -> dict:
-    """A new open question."""
+             resume: Resume, role: str | None = None) -> dict:
+    """A new open question; `role`: the agent whose stop it asks about. A gate or a landing stop has none, nor has a
+    question of a driver before it, so a reader takes no role for no particular agent."""
     made, values = KINDS[kind], {"ticket": ticket, "subject": subject, "owner": owner(ticket)}
     return {"id": question_id(kind, ticket, asked), "title": made.title.format(**values),
             "why": made.why.format(**values),
             "evidence": evidence, "recommended": made.recommended,
-            "options": [{"id": name, "description": option.description} for name, option in made.options.items()],
-            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume.fields(), "answer": None}
+            "options": [{"id": name, "description": option.description} for name, option in made.options.items()
+                        if ticket == FINAL or not option.final_only],
+            "ticket": ticket, "kind": kind, "subject": subject, "stop": stop, "resume": resume.fields(), "answer": None,
+            "role": role}
 
 
-def stop(run: dict, ticket: str, asked: list[tuple[str, str]], evidence: list[str], resume: Resume) -> None:
-    """Count one stop in `run` and add one open question per (kind, subject) of `asked`. Nothing asked is no stop."""
+def stop(run: dict, ticket: str, asked: list[tuple[str, str, str | None]], evidence: list[str], resume: Resume
+         ) -> None:
+    """Count one stop in `run` and add one open question per (kind, subject, role) of `asked`. Nothing asked is no
+    stop."""
     run["stops"] += bool(asked)
-    for kind, subject in asked:
-        run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"], resume))
+    for kind, subject, role in asked:
+        run["questions"].append(question(kind, ticket, subject, evidence, run["questions"], run["stops"], resume, role))
 
 
-def decides(asked: list[tuple[str, str]]) -> str:
-    """What the operator decides on at a stop that asks `asked`, (kind, subject) pairs."""
-    counts = Counter(kind for kind, _ in asked)
+def decides(asked: list[tuple[str, str, str | None]]) -> str:
+    """What the operator decides on at a stop that asks `asked`, (kind, subject, role) triples."""
+    counts = Counter(kind for kind, *_ in asked)
     return "the operator decides on " + " and ".join(
         f"{n} question{'s' * (n > 1)} of kind {kind}" for kind, n in counts.items())
 

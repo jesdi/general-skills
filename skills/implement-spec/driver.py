@@ -442,8 +442,11 @@ def _publish_questions(run: dict) -> str:
 
 def _settle(state: driver_state.State, questions: list[dict], answers: dict, ignored: list[str], by: str = "",
             why: dict[str, str] | None = None) -> None:
-    """Turn each answer into a ruling and let its ticket go on."""
+    """Turn each answer into a ruling and let its ticket go on. A `ship-draft` answer, the operator's or the driver's,
+    records once in `run.final.ship` what the end of run ships."""
     rulings, moved = driver_decisions.apply(questions, answers, by, why)
+    if ship := driver_final.ship_record(state.read()["run"], [q for q in questions if q["id"] in answers]):
+        moved.setdefault(FINAL, {})["ship"] = ship
     # The ledger comes first: a run that stops between the two writes gives a ruling twice, and never an answer
     # that no ledger line names.
     for sentence in ignored + rulings:
@@ -464,7 +467,10 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
     questions, document = run["questions"], driver_decisions.document(run)
     if errors := driver_answers.given(args.answer, document):
         return errors
-    _settle(state, questions, *driver_answers.read(document))
+    answers, ignored = driver_answers.read(document)
+    if errors := driver_final.refused_ship(run, answers):
+        return errors
+    _settle(state, questions, answers, ignored)
     error = _publish_questions(run)
     return [error] if error else []
 
@@ -472,8 +478,8 @@ def _apply_answers(state: driver_state.State, args) -> list[str]:
 def _rule(run: Run) -> bool:
     """The driver answers each open question that recommends `retry` with it, at most `--retries` stops per ticket and
     for the end of run, and `--must-fix-retries` more stops with a `finding-must-fix` question; then, unless `--ask`,
-    the arbiter rules on the open `finding-open` questions. True: one of them ruled, so the run goes on with no
-    operator."""
+    the arbiter rules on the open `finding-open` questions, and else the driver rules on an end-of-run stop by its draft
+    policy (driver_final.draft_ruling). True: one of them ruled, so the run goes on with no operator."""
     questions = run.state.read()["run"]["questions"]
     answers = driver_decisions.automatic(questions, run.args.retries, run.args.must_fix_retries)
     _settle_rulings(run, questions, answers, driver_decisions.DRIVER, {})
@@ -481,7 +487,11 @@ def _rule(run: Run) -> bool:
         return bool(answers)
     arbitrated, why = _arbitrate(run)
     _settle_rulings(run, run.state.read()["run"]["questions"], arbitrated, driver_decisions.ARBITER, why)
-    return bool(answers or arbitrated)
+    if answers or arbitrated:
+        return True
+    drafted = driver_final.draft_ruling(run)
+    _settle_rulings(run, run.state.read()["run"]["questions"], drafted, driver_decisions.DRIVER, {})
+    return bool(drafted)
 
 
 def _settle_rulings(run: Run, questions: list[dict], answers: dict, by: str, why: dict[str, str]) -> None:

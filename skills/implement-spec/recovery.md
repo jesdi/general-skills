@@ -48,7 +48,7 @@ with held:
         out.write(before)
     def recover(current):
         driver_decisions.stop(current['run'], number, [('ticket-blocked',
-            'Operator verified the repaired environment and pre-implementation checkpoint.')],
+            'Operator verified the repaired environment and pre-implementation checkpoint.', None)],
             ['.agent/implement/ledger.md'], driver_decisions.Resume('implement', tip))
     updated = state.update(recover)
     question = updated['run']['questions'][-1]['id']

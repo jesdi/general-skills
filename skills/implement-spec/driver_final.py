@@ -20,6 +20,8 @@ operator ships.
     phase      `blocked` at a stop with questions, until a `retry` answer makes it `pending` again
     green_gates, pushed, pr
     draft      the PR opened as draft
+    ship       {tip, stops: [{subject, role}]} once a `ship-draft` answer settled (driver._settle): the gated tip
+               that the push ships as draft, None when no full gate ran on the branch tip, and the stops it names
 """
 from __future__ import annotations
 
@@ -620,9 +622,12 @@ def _fix_batch(run: Run, tickets: list[Ticket], final: dict, tip: str, gate_reco
 
 
 def _review_until_reviewed(run: Run, tickets: list[Ticket]) -> None:
-    """Gate and review the tip, and run the fix batch, until the tip is the reviewed tip."""
+    """Gate and review the tip, and run the fix batch, until the tip is the reviewed tip, or until a `ship-draft`
+    ruling ships the tip as it is."""
     while True:
         final, tip = run.state.read()["run"]["final"], run.tip()
+        if final["ship"]:
+            return
         if final["reviewed"] != tip:
             _check_review_is_due(run, final, tip)
             with during("the integration gate"):
@@ -645,22 +650,33 @@ def _name(run: Run) -> str:
     return next((line[2:].strip() for line in lines if line.startswith("# ")), run.pr)
 
 
-def _review_coverage(final: dict) -> dict[str, str]:
-    """The first full review may include gate repairs made after tidy; later reviews cover the remaining range."""
-    full_tip = next((lens["tip"] for lens in final["lenses"].values()), final["tidied"])
-    return {"full_review": f"{final['onto']}..{full_tip}",
-            "scoped": f"{full_tip}..{final['reviewed']}" if full_tip != final["reviewed"] else "not needed"}
+def _coverage(final: dict, tip: str) -> dict[str, str]:
+    """The review coverage of the pushed tip `tip` in the PR body: the tips and the commits after the reviewed tip
+    that no review covered; the full review, which may include gate repairs made after tidy; the scoped review of the
+    remaining range. A draft shipped before any review was settled has neither review."""
+    reviewed = final["reviewed"]
+    full_tip = next(iter(final["lenses"].values()), {"tip": final["tidied"]})["tip"]
+    fields = {"tips": f"Branch tip and reviewed tip: {tip}", "full_review": f"{final['onto']}..{full_tip}",
+              "scoped": f"{full_tip}..{reviewed}" if full_tip != reviewed else "not needed"}
+    if not reviewed:
+        fields.update(full_review="not run", scoped="not run")
+    if tip != reviewed:
+        since = f"{reviewed or final['onto']}..{tip}"
+        unreviewed = git(".", "log", "--reverse", "--format=%h %s", since).stdout.strip().splitlines()
+        fields["tips"] = f"Branch tip: {tip}; reviewed tip: {reviewed or 'none'}; not reviewed: {'; '.join(unreviewed)}"
+    return fields
 
 
-def _facts(run: Run, final: dict, tickets: list[Ticket]) -> str:
-    """The end of the PR body: the ticket-to-commit map, the fix commits, the rulings and the review coverage."""
-    titles, tip = {ticket.number: ticket.title for ticket in tickets}, final["reviewed"]
+def _facts(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
+    """The end of the PR body for the pushed tip `tip`: the ticket-to-commit map, the fix commits, the rulings and the
+    review coverage."""
+    titles = {ticket.number: ticket.title for ticket in tickets}
     fixes = git(".", "log", "--reverse", "--format=- %h %s", f"{final['tidied']}..{tip}").stdout.strip()
     rulings = driver_decisions.rulings(run.state.read()["run"]["questions"])
     return driver_agents.render("pr-body", {
         "map": "\n".join(f"- {number}: {commit[:7]} {titles[number]}" for number, commit in final["commits"].items()),
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
-        "tip": tip, **_review_coverage(final),
+        **_coverage(final, tip),
         "providers": _review_providers(run.state.read()["run"]["agents"])})
 
 
@@ -708,16 +724,16 @@ def _body_skills() -> tuple[Path, Path]:
     return method, risk
 
 
-def _writer_body(run: Run, final: dict, tickets: list[Ticket]) -> str:
-    """What the pr-writer wrote with the method of the pr skill, its merge-risk block validated. A body written for
-    the reviewed tip is kept when its merge-risk block still validates, so a PR that failed to open costs no second
-    agent."""
-    body, tip = OUT / FINAL / "pr-writer-body.md", final["reviewed"]
+def _writer_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
+    """What the pr-writer wrote for the pushed tip `tip` with the method of the pr skill, its merge-risk block
+    validated. A body written for that tip is kept when its merge-risk block still validates, so a PR that failed to
+    open costs no second agent."""
+    body = OUT / FINAL / "pr-writer-body.md"
     risk = pr_risk_skill()
     if final["body"] == tip and body.is_file() and risk and not _risk_errors(risk, body.read_text()):
         return body.read_text()
     method, risk = _body_skills()
-    facts = _facts(run, final, tickets)
+    facts = _facts(run, final, tickets, tip)
     values = {**_prompt_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
               "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
               "pr_risk_skill": str(risk), "risk_errors": "", "facts": facts}
@@ -735,10 +751,21 @@ def _gh(argv: list[str], what: str) -> str:
 
 
 def _draft(final: dict, questions: list[dict]) -> str:
-    """Why the PR opens as draft; "" for a PR ready for review. A finding still open was shipped by a ruling; only the
-    ruling of an agent, not the operator's own, makes a draft."""
-    shipped = [_title(finding) for finding in final["open"] if driver_decisions.agent_shipped(questions, finding)]
-    return f"a finding ships open: {'; '.join(shipped)}" if shipped else ""
+    """Why the PR opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling ships
+    with, and the findings still open that the draft or an agent's ruling ships."""
+    reasons = []
+    if final["ship"]:
+        reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in final['ship']['stops'])}")
+    if shipped := _shipped_open(final, questions):
+        reasons.append(f"a finding ships open: {'; '.join(shipped)}")
+    return "; ".join(reasons)
+
+
+def _shipped_open(final: dict, questions: list[dict]) -> list[str]:
+    """The titles of the findings still open that make a draft: all of them under a `ship-draft` ruling, else those an
+    agent's ruling shipped; the operator's own `accept` or `follow-up` keeps the PR ready."""
+    ship = final["ship"]
+    return [_title(one) for one in final["open"] if ship or driver_decisions.agent_shipped(questions, one)]
 
 
 def _file_follow_ups(run: Run) -> None:
@@ -761,19 +788,22 @@ def _file_follow_ups(run: Run) -> None:
         ledger(f"End of run: the follow-up {q['subject']} is filed as {url}.")
 
 
-def _write_body(run: Run, final: dict, tickets: list[Ticket]) -> Path:
-    """Write the PR body: the pr-writer's, then the facts of the run. The follow-up issues are filed once the
-    pr-writer's body is valid, so a run that cannot open its PR files none, and the facts link them."""
-    writer = _writer_body(run, final, tickets)
+def _write_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> Path:
+    """Write the PR body for the pushed tip `tip`: the pr-writer's, then the facts of the run; only the facts when the
+    pr-writer is the end-of-run stop that ships a draft. The follow-up issues are filed once the pr-writer's body is
+    valid, so a run that cannot open its PR files none, and the facts link them."""
+    stops = final["ship"]["stops"] if final["ship"] else []
+    failed = any(stop["role"] == "pr-writer" for stop in stops)
+    writer = "" if failed else _writer_body(run, final, tickets, tip).strip()
     _file_follow_ups(run)
     body = OUT / FINAL / "pr-body.md"
-    body.write_text(f"{writer.strip()}\n\n{_facts(run, final, tickets)}")
+    body.write_text("\n\n".join(filter(None, [writer, _facts(run, final, tickets, tip)])))
     return body
 
 
-def _open_pr(run: Run, final: dict, tickets: list[Ticket]) -> str:
-    """Open the PR, ready for review or as draft, and return its URL."""
-    body, draft = _write_body(run, final, tickets), _draft(final, run.state.read()["run"]["questions"])
+def _open_pr(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
+    """Open the PR of the pushed tip `tip`, ready for review or as draft, and return its URL."""
+    body, draft = _write_body(run, final, tickets, tip), _draft(final, run.state.read()["run"]["questions"])
     url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
                str(body), *["--draft"] * bool(draft)], "pr create")
     run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))
@@ -789,13 +819,90 @@ def _require_pushable(run: Run, tip: str) -> None:
                       "them, then run with --push again")
 
 
-def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
-    """Push the reviewed tip to origin, once and with no force, then open the PR, once. Returns the lines for the
-    operator."""
+def _gated(final: dict, tip: str) -> str:
+    """`tip` when a full gate ran on it, green or red; "" otherwise."""
+    red = (final["gate_failure"] or {}).get("tip") == tip
+    return tip if red or tip in final["green_gates"][driver_gate.FULL] else ""
+
+
+def _must_fix_open(run: Run, final: dict) -> bool:
+    """A critical or must-fix finding is open that no ruling of the operator ships with (driver_decisions.waived)."""
+    return any(driver_decisions.finding_kind(finding) == driver_decisions.MUST_FIX
+               for finding in _to_fix(run, _unverified(final)))
+
+
+def _unverified(final: dict) -> list[dict]:
+    """The findings that no review has verified fixed. After a settled review, its findings file: a fix batch clears
+    `open` before any review verifies its fix, and only the next settled review replaces the file. Before one, the
+    findings of the lens reports accepted so far and the must-fix findings carried from the tickets."""
+    if final["round"]:
+        return json.loads((OUT / FINAL / f"findings-{final['round'] - 1}.json").read_text())
+    return [finding for one in final["lenses"].values() for finding in one["report"]["findings"]] + final["must_fix"]
+
+
+def draft_ruling(run: Run) -> dict[str, str]:
+    """The driver's end-of-run draft policy, once its retries are spent and unless --ask: `ship-draft` for each open
+    end-of-run `ticket-blocked` question, when a full gate ran on the branch tip and no critical or must-fix finding
+    is open: no agent ships one. Else {}, and the stop parks for the operator, who may still answer `ship-draft`."""
+    state = run.state.read()["run"]
+    final = state["final"]
+    stops = [q["id"] for q in state["questions"]
+             if (q["answer"], q["kind"], q["ticket"]) == (None, "ticket-blocked", FINAL)]
+    if not stops or not _gated(final, run.tip()) or _must_fix_open(run, final):
+        return {}
+    return dict.fromkeys(stops, "ship-draft")
+
+
+def ship_record(run: dict, answered: list[dict]) -> dict | None:
+    """What a `ship-draft` answer among the `answered` questions ships, for `run.final.ship`: the tip of the PR
+    branch when a full gate ran on it, green or red (else None, and the push refuses), and each stop with the role
+    that stopped. None with no such answer. The end of run reviews no more, and the push reads only this record."""
+    stops = [{"subject": q["subject"], "role": q.get("role")} for q in answered if q["answer"] == "ship-draft"]
+    if not stops:
+        return None
+    return {"tip": _gated(run["final"], _branch_tip(run)) or None, "stops": stops}
+
+
+def refused_ship(run: dict, answers: dict[str, str]) -> list[str]:
+    """Why each `ship-draft` among the operator's `answers` is refused: no full gate ran on the tip of the PR branch,
+    as after a failed rebase conflict agent, so there is no tip to ship. The question stays open."""
+    tip = _branch_tip(run) if "ship-draft" in answers.values() else ""
+    if not tip or _gated(run["final"], tip):
+        return []
+    return [f"--answer {question}=ship-draft: no full gate ran on {tip[:7]}, the tip of {run['pr_branch']}, so there "
+            "is no gated tip to ship; the question stays open, and `retry` remains"
+            for question, option in answers.items() if option == "ship-draft"]
+
+
+def _branch_tip(run: dict) -> str:
+    return git(".", "rev-parse", f"refs/heads/{run['pr_branch']}").stdout.strip()
+
+
+def _shipped_tip(run: Run, ship: dict) -> str:
+    """The tip that the `ship-draft` ruling recorded, while the PR branch is still at it."""
+    if not ship["tip"]:
+        raise Blocked(f"the ship-draft ruling found no full gate run on the tip of {run.pr}: nothing is pushed")
+    if ship["tip"] != run.tip():
+        raise Blocked(f"{run.pr} moved from {ship['tip'][:7]}, the gated tip that the ship-draft ruling ships, to "
+                      f"{run.tip()[:7]}: nothing is pushed")
+    return ship["tip"]
+
+
+def _pushable_tip(run: Run, final: dict) -> str:
+    """The tip to push: the reviewed tip with a green full gate, or the tip that a `ship-draft` ruling recorded."""
+    if final["ship"]:
+        return _shipped_tip(run, final["ship"])
     tip = final["reviewed"]
     if tip != run.tip() or tip not in final["green_gates"][driver_gate.FULL]:
-        raise Blocked(f"the reviewed tip {tip[:7]} is not the tip of {run.pr} with a green full gate record: nothing "
-                      "is pushed")
+        raise Blocked(f"the reviewed tip {str(tip)[:7]} is not the tip of {run.pr} with a green full gate record: "
+                      "nothing is pushed")
+    return tip
+
+
+def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
+    """Push the reviewed tip, or the gated tip of a draft, to origin, once and with no force, then open the PR, once.
+    Returns the lines for the operator."""
+    tip = _pushable_tip(run, final)
     if not final["base"]:
         raise Blocked(f"the end of run tidied {run.pr} when the repository had no origin remote, so it is on no base "
                       "branch of origin: nothing is pushed")
@@ -809,7 +916,7 @@ def _push(run: Run, final: dict, tickets: list[Ticket]) -> list[str]:
             raise Blocked(f"git push origin {run.pr} failed: {sent.stderr.strip()}")
         run.state.update(lambda state: state["run"]["final"].update(pushed=tip))
         ledger(f"Pushed {run.pr} at {tip[:7]} to origin.")
-    url = final["pr"] or _open_pr(run, final, tickets)
+    url = final["pr"] or _open_pr(run, final, tickets, tip)
     return [f"Pushed {run.pr} at {tip} to origin.", f"PR: {url}"]
 
 
