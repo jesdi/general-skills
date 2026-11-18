@@ -85,6 +85,8 @@ def errors_for(exam, request, diff, learned=None):
         errors.append("version must be 1")
     if exam.get("mode") not in MODES:
         errors.append("mode must be first, followup or delta")
+    if "mode" in request and exam.get("mode") != request["mode"]:
+        errors.append(f"mode {exam.get('mode')!r} differs from the request's {request['mode']!r}")
     for f in ("repo", "pr", "head_sha"):
         if exam.get(f) != request.get(f):
             errors.append(f"{f} differs from the request's")
@@ -140,6 +142,21 @@ def errors_for(exam, request, diff, learned=None):
             errors.append("a first exam with 2 or more questions needs both choice and text")
         if n >= 3 and not any(q.get("type") == "text" and kinds.get(q.get("concept")) == "why" for q in questions):
             errors.append("a first exam with 3 or more questions needs a text question on a why concept")
+    if exam.get("mode") == "followup":
+        only = request.get("only_concepts", [])
+        asked = [q.get("concept") for q in questions]
+        for cid in only:
+            if cid not in asked:
+                errors.append(f"concept {cid}: missed, but no followup question asks it")
+        for cid in set(asked) - set(only):
+            errors.append(f"concept {cid}: not in only_concepts, so a followup may not ask it")
+        for q in questions:
+            if q.get("prompt") in request.get("prior_prompts", []):
+                errors.append(f"question {q.get('id')}: prompt repeats one of an earlier attempt")
+    if exam.get("mode") == "delta":
+        for cid in kinds:
+            if cid in request.get("prior_concepts", []):
+                errors.append(f"concept {cid}: an earlier exam covered it, so a delta may not list it")
     return errors
 
 
