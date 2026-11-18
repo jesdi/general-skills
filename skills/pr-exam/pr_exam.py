@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """pr_exam: deterministic exam rules. `validate --request <request.json> <exam.json>`, `public <exam.json>`."""
 import argparse
+import datetime
+import fcntl
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -75,7 +78,8 @@ def check_question(q, concepts, key, diff, errors):
             errors.append(f"key {qid}: text question must not have an answer")
 
 
-def errors_for(exam, request, diff):
+def errors_for(exam, request, diff, learned=None):
+    learned = learned or {}
     errors = []
     if exam.get("version") != 1:
         errors.append("version must be 1")
@@ -102,6 +106,10 @@ def errors_for(exam, request, diff):
             errors.append(f"concept {q.get('concept')}: asked by more than one question")
         seen.add(q.get("concept"))
         check_question(q, kinds, key, diff, errors)
+        state = learned.get(q.get("concept"))
+        if state == "skip" or (state == "due" and q.get("type") != "choice"):
+            errors.append(f"concept {q.get('concept')}: learned as {state}, so it may not be asked"
+                          + (" as text" if state == "due" else ""))
 
     qids = [q.get("id") for q in questions]
     for qid in {i for i in qids if qids.count(i) > 1}:
@@ -113,11 +121,13 @@ def errors_for(exam, request, diff):
         if qid not in qids:
             errors.append(f"key: entry {qid} matches no question")
 
-    # ponytail: no learned list yet, so every unasked concept must be a cap drop (skip rule comes with `learned`)
+    for cid, state in learned.items():
+        if state == "misconception" and cid not in seen and n < MAX_QUESTIONS and cid not in kinds:
+            errors.append(f"concept {cid}: recorded misconception is not asked")
     rank = {k: i for i, k in enumerate(KINDS)}
     asked = [rank[kinds[c]] for c in seen if kinds.get(c) in rank]
     for cid, kind in kinds.items():
-        if cid in seen or kind not in rank:
+        if cid in seen or kind not in rank or learned.get(cid) == "skip":
             continue
         if n < MAX_QUESTIONS:
             errors.append(f"concept {cid}: not asked, but only {n} of {MAX_QUESTIONS} questions used")
@@ -140,11 +150,100 @@ def load(path):
 def validate(args):
     exam, request = load(args.exam), load(args.request)
     diff = Path(request["diff"]).read_text()
-    errors = errors_for(exam, request, diff)
+    try:
+        learned = learned_states(request["records"], request["today"]) if request.get("records") else {}
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    errors = errors_for(exam, request, diff, learned)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
     print(f"valid: {len(exam['questions'])} questions, {len(exam['concepts'])} concepts")
+    return 0
+
+
+FILE_RE = re.compile(r"^(\d{4,})-(.+)\.md$")
+FIELDS = ("concept", "state", "date", "source", "status")
+
+
+def read_records(directory):
+    """[(number, path, fields)] for every record; ValueError naming the file when one is malformed."""
+    out = []
+    for path in sorted(Path(directory).glob("*.md")):
+        m = FILE_RE.match(path.name)
+        if not m:
+            continue
+        head = path.read_text().split("---")
+        f = dict(re.findall(r"^(\w+): *(.*?) *$", head[1] if len(head) > 2 else "", re.M))
+        try:
+            if any(not f.get(k) for k in FIELDS):
+                raise ValueError("missing field")
+            if f["state"] not in ("demonstrated", "misconception"):
+                raise ValueError("state")
+            datetime.date.fromisoformat(f["date"])
+            if f["status"] != "active" and not re.fullmatch(r"superseded by LR-\d{4,}", f["status"]):
+                raise ValueError("status")
+        except ValueError as e:
+            raise ValueError(f"{path.name}: malformed record ({e})") from None
+        out.append((int(m.group(1)), path, f))
+    return out
+
+
+def learned_states(directory, today):
+    today = datetime.date.fromisoformat(today)
+    states = {}
+    for _, _, f in read_records(directory):
+        if f["status"] != "active":
+            continue
+        if f["state"] == "misconception":
+            states[f["concept"]] = "misconception"
+        else:
+            age = (today - datetime.date.fromisoformat(f["date"])).days
+            states[f["concept"]] = "skip" if age < 30 else "due"
+    return states
+
+
+def learned(args):
+    try:
+        print(json.dumps(learned_states(args.records, args.today)))
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 1
+    return 0
+
+
+def record(args):
+    exam, result = load(args.exam), load(args.result)
+    explanations = {qid: k["explanation"] for qid, k in exam["key"].items()}
+    source = f"{exam['repo']}#{exam['pr']}"
+    Path(args.records).mkdir(parents=True, exist_ok=True)
+    # exclusive lock: read, number, supersede and write are one critical section across processes
+    with open(Path(args.records) / ".lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            existing = read_records(args.records)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
+        return write_records(args, result, existing, explanations, source)
+
+
+def write_records(args, result, existing, explanations, source):
+    n = max([r[0] for r in existing], default=0)
+    for q in result["questions"]:
+        if q["points"] not in (0, 1):
+            continue
+        n += 1
+        concept = q["concept"]
+        for _, path, f in existing:
+            if f["concept"] == concept and f["status"] == "active":
+                path.write_text(re.sub(r"^status: *active *$", f"status: superseded by LR-{n:04d}", path.read_text(), count=1, flags=re.M))
+        state = "demonstrated" if q["points"] == 1 else "misconception"
+        (Path(args.records) / f"{n:04d}-{concept}.md").write_text(
+            f"---\nconcept: {concept}\nstate: {state}\ndate: {args.today}\nsource: {source}\n"
+            f"status: active\n---\n# {concept}\n\n{explanations.get(q['id'], '')}\n")
+        existing = [e for e in existing if e[2]["concept"] != concept or e[2]["status"] != "active"]
     return 0
 
 
@@ -222,6 +321,14 @@ def main(argv=None):
     for f in ("exam", "answers", "grades"):
         sc.add_argument(f"--{f}", required=True)
     sc.set_defaults(fn=score)
+    ln = sub.add_parser("learned")
+    ln.add_argument("--records", required=True)
+    ln.add_argument("--today", required=True)
+    ln.set_defaults(fn=learned)
+    rc = sub.add_parser("record")
+    for f in ("records", "exam", "result", "today"):
+        rc.add_argument(f"--{f}", required=True)
+    rc.set_defaults(fn=record)
     args = p.parse_args(argv)
     return args.fn(args)
 
