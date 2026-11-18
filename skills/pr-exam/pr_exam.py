@@ -160,6 +160,54 @@ def public(args):
     return 0
 
 
+GRADE_POINTS = {"pass": 1, "partial": 0.5, "fail": 0}
+
+
+def score_errors(exam, answers, grades):
+    errors = []
+    texts = {q["id"] for q in exam["questions"] if q["type"] == "text"}
+    for q in exam["questions"]:
+        if q["id"] not in answers:
+            errors.append(f"question {q['id']}: unanswered")
+        if q["id"] in texts and q["id"] not in grades:
+            errors.append(f"question {q['id']}: text question has no grade")
+    for qid, g in grades.items():
+        if qid not in texts:
+            errors.append(f"grade for {qid}: not a text question")
+        elif g.get("grade") not in GRADE_POINTS:
+            errors.append(f"question {qid}: grade {g.get('grade')!r} is not pass, partial or fail")
+    return errors
+
+
+def score(args):
+    exam, answers, grades = load(args.exam), load(args.answers), load(args.grades)
+    errors = score_errors(exam, answers, grades)
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    kinds = {c["id"]: c["kind"] for c in exam["concepts"]}
+    out, missed, total, why_ok = [], [], 0, True
+    for q in exam["questions"]:
+        k = exam["key"][q["id"]]
+        if q["type"] == "choice":
+            pts = 1 if answers[q["id"]] == k["answer"] else 0
+        else:
+            pts = GRADE_POINTS[grades[q["id"]]["grade"]]
+        r = {"id": q["id"], "concept": q["concept"], "points": pts}
+        if pts < 1:
+            r.update(explanation=k["explanation"], hunk=k["hunk"])
+            if q["type"] == "text":
+                r["feedback"] = grades[q["id"]].get("feedback", "")
+            missed.append(q["concept"])
+            why_ok = why_ok and kinds.get(q["concept"]) != "why"
+        total += pts
+        out.append(r)
+    n = len(out)
+    print(json.dumps({"passed": total / n >= 0.8 and why_ok, "score": total, "max": n,
+                      "questions": out, "missed": missed}))
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pr_exam")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -170,6 +218,10 @@ def main(argv=None):
     pub = sub.add_parser("public")
     pub.add_argument("exam")
     pub.set_defaults(fn=public)
+    sc = sub.add_parser("score")
+    for f in ("exam", "answers", "grades"):
+        sc.add_argument(f"--{f}", required=True)
+    sc.set_defaults(fn=score)
     args = p.parse_args(argv)
     return args.fn(args)
 
