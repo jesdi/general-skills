@@ -70,6 +70,18 @@ def _attempt(command: str, tier: str, slot: str, commit: str, record: Path, env:
     return code, after
 
 
+def read(record: str | Path) -> tuple[str, int | str, str]:
+    """(the command's output, its exit code or "not run", what it left behind) of a record that _attempt wrote. A
+    record with no end, as a driver stopped mid-command leaves it, has the exit "" and the after "": it judged
+    nothing."""
+    rest = Path(record).read_text(errors="replace").partition("\n\n")[2]
+    output, ended, tail = rest.rpartition("\nexit: ")
+    if not (ended and "\nend: " in tail):
+        return rest, "", ""
+    code, _, after = tail.rpartition("\nend: ")[0].partition("\nafter: ")
+    return output, int(code) if code.lstrip("-").isdigit() else code, after
+
+
 def run(command: str, tier: str, slot: str, folder: Path, pr_branch: str,
         locked: list[str]) -> tuple[bool, Path, list[str]]:
     """Gate the HEAD of `slot` on `tier`, the fast gate on the `locked` files. Returns (green, the record, a ledger

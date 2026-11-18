@@ -112,6 +112,7 @@ rec = dict(t0=time.time(), tier=os.environ.get("TIER"), cwd=os.path.realpath(os.
            status=git("status", "--short"), base=os.environ.get("IMPLEMENT_SPEC_BASE"), locked=os.environ.get("IMPLEMENT_SPEC_LOCKED"),
            pycache=os.environ.get("PYTHONPYCACHEPREFIX"), exit=code)
 print("GATE-OUTPUT-MARK", rec["commit"])
+print(*conf.get("print", {{}}).get(subject, []), sep="\\n")  # the failure lines of a red gate, per subject of HEAD
 (rig / "gates" / f"{{time.time_ns()}}-{{os.getpid()}}.json").write_text(json.dumps(rec))
 sys.exit(code)
 """

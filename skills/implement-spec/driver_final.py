@@ -23,6 +23,9 @@ operator ships.
     phase      `blocked` at a stop with questions, until a `retry` answer makes it `pending` again
     green_gates, pushed, pr
     body       the tip the pr-writer's part of the PR body was written for (driver_pr)
+    base_gate  {commit, record}: the full gate on `onto`, run once when a red tip has failure lines; record "" if green
+    gate_preexisting  {tip, record, base}: the tip whose red full gate fails exactly as the base does: it passes, and
+               the PR opens as a draft that names both records
     draft      the PR opened as draft
     ship       {tip, stops: [{subject, role}]} once a `ship-draft` answer settled (driver._settle): the gated tip
                that the push ships as draft, None when no full gate ran on the branch tip, and the stops it names
@@ -391,7 +394,7 @@ def _review(run: Run, final: dict, tip: str) -> None:
     the implementer's."""
     done, folder = final["round"], OUT / FINAL
     values = {**final_values(run), "start_sha": tip, "range": f"{final['reviewed'] or final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(folder, driver_gate.FULL, tip)),
+              "gate": driver_final_gate.evidence(run, tip),
               "ledger": str(OUT / "ledger.md"), "carried": _carried_findings(), "reviewed": str(final["reviewed"]),
               "must_fix_list": "\n".join(f"- {driver_review.title(finding)}" for finding in final["must_fix"]),
               "rulings": "\n".join(driver_decisions.rulings(run.state.read()["run"]["questions"])),
@@ -521,39 +524,39 @@ def _findings_list(run: Run, final: dict) -> str:
                      for finding in _to_fix(run, final["open"]))
 
 
-def _fixer_values(run: Run, final: dict, tip: str, gate_record: str) -> dict[str, str]:
+def _fixer_values(run: Run, final: dict, tip: str, gate: driver_final_gate.Red | None) -> dict[str, str]:
     """The prompt values of the final fixer: the review findings, and the saved gate failure for a gate repair."""
     folder = OUT / FINAL
     values = {**final_values(run), "start_sha": tip, "findings": str(folder / f"findings-{final['round'] - 1}.json"),
               "locked": " ".join(driver_locked.every(_shipped(run))),
               "must_fix_list": "\n".join(f"- {driver_review.title(finding)}" for finding in final["must_fix"]),
               "findings_list": _findings_list(run, final)}
-    return {**values, **(driver_final_gate.pointers(final, gate_record, tip) if gate_record else {})}
+    return {**values, **(driver_final_gate.pointers(final, gate, tip) if gate else {})}
 
 
-def _fixer_check(owners: list[str], final: dict, values: dict[str, str], gate_record: str) -> dict:
+def _fixer_check(owners: list[str], final: dict, values: dict[str, str], gate: driver_final_gate.Red | None) -> dict:
     """What the final fixer's report is checked against: a commit of a merged ticket in `owners`, a gate repair that
     fixes the gate, a review batch that fixes the must-fix findings."""
     return {"owners": owners,
-            "must_fix": [] if gate_record else [driver_review.title(finding) for finding in final["must_fix"]],
-            "fix": [values["gate_title"]] if gate_record else []}
+            "must_fix": [] if gate else [driver_review.title(finding) for finding in final["must_fix"]],
+            "fix": [values["gate_title"]] if gate else []}
 
 
-def _fixer_call(run: Run, final: dict, tip: str, gate_record: str = "") -> Call:
+def _fixer_call(run: Run, final: dict, tip: str, gate: driver_final_gate.Red | None = None) -> Call:
     """Build a final fixer call from review findings or the saved integration-gate failure."""
-    values = _fixer_values(run, final, tip, gate_record)
-    name = f"gate-fixer-{final['gate_repairs']}" if gate_record else ""
+    values = _fixer_values(run, final, tip, gate)
+    name = f"gate-fixer-{final['gate_repairs']}" if gate else ""
     baseline = final["locked"] or final["tidied"]
-    return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate_record else "final-fixer",
+    return Call("fixer", FINAL, ".", values, template="final-gate-fixer" if gate else "final-fixer",
                 fix_round=final["round"], name=name,
-                check=_fixer_check(list(_shipped(run)), final, values, gate_record),
+                check=_fixer_check(list(_shipped(run)), final, values, gate),
                 locked=lambda _: driver_locked.for_end_of_run(_shipped(run), baseline))
 
 
-def _run_fixer(run: Run, final: dict, tip: str, gate_record: str = "") -> dict:
+def _run_fixer(run: Run, final: dict, tip: str, gate: driver_final_gate.Red | None = None) -> dict:
     """Run the fixer on the PR branch in slot 1 and return its report. A rejected batch is undone."""
     try:
-        return run.agent(_fixer_call(run, final, tip, gate_record))
+        return run.agent(_fixer_call(run, final, tip, gate))
     except Blocked as blocked:
         raise Blocked(f"{blocked}{_undo_rejected_batch(run, tip)}") from None
     except Halted as halted:
@@ -574,16 +577,16 @@ def _name_batch(run: Run, tip: str, report: dict) -> list[str]:
     return named
 
 
-def _fix_batch(run: Run, final: dict, tip: str, gate_record: str = "") -> None:
+def _fix_batch(run: Run, final: dict, tip: str, gate: driver_final_gate.Red | None = None) -> None:
     """Run one bounded batch and settle its attributed tip before the next full gate."""
     with during("the fix batch"):
-        report = _run_fixer(run, final, tip, gate_record)
+        report = _run_fixer(run, final, tip, gate)
         named = _name_batch(run, tip, report)
     fields = dict(open=[], batch=named[-1] if named else tip)
-    if gate_record:
+    if gate:
         fields.update(gate_repairs=final["gate_repairs"] + 1, gate_failure=None)
     run.state.update(lambda state: state["run"]["final"].update(fields))
-    _led_batch("integration gate" if gate_record else "final review", tip, named)
+    _led_batch("integration gate" if gate else "final review", tip, named)
 
 
 def _led_batch(label: str, tip: str, named: list[str]) -> None:
@@ -603,8 +606,8 @@ def _review_until_reviewed(run: Run) -> None:
         if final["reviewed"] != tip:
             _check_review_is_due(run, final, tip)
             with during("the integration gate"):
-                if record := driver_final_gate.failure(run, tip):
-                    _fix_batch(run, final, tip, record)
+                if red := driver_final_gate.failure(run, tip):
+                    _fix_batch(run, final, tip, red)
                     continue
             _review(run, final, tip)
         elif _to_fix(run, final["open"]):  # after the full review, or after a `retry` of a finding left open
@@ -701,7 +704,7 @@ def _require_pushable(run: Run, tip: str) -> None:
 def _gated(final: dict, tip: str) -> str:
     """`tip` when a full gate ran on it, green or red; "" otherwise."""
     red = (final["gate_failure"] or {}).get("tip") == tip
-    return tip if red or tip in final["green_gates"][driver_gate.FULL] else ""
+    return tip if red or driver_final_gate.passed(final, tip) else ""
 
 
 def _must_fix_open(run: Run, final: dict) -> bool:
@@ -772,7 +775,7 @@ def _pushable_tip(run: Run, final: dict) -> str:
     if final["ship"]:
         return _shipped_tip(run, final["ship"])
     tip = final["reviewed"]
-    if tip != run.tip() or tip not in final["green_gates"][driver_gate.FULL]:
+    if tip != run.tip() or not driver_final_gate.passed(final, tip):
         raise Blocked(f"the reviewed tip {str(tip)[:7]} is not the tip of {run.pr} with a green full gate record: "
                       "nothing is pushed")
     return tip

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import driver_agents
 import driver_decisions
-import driver_gate
+import driver_final_gate
 from driver_review import title
 from driver_run import FINAL, OUT, Blocked, Call, Run, during, final_values, ledger
 from driver_slots import git
@@ -88,8 +88,14 @@ def _facts(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
     return driver_agents.render("pr-body", {
         "map": _ticket_map(final, titles, left_out(run)),
         "fixes": fixes or "None.", "rulings": "\n".join(f"- {ruling}" for ruling in rulings) or "None.",
-        **_coverage(final, tip),
+        **_coverage(final, tip), "gate": _old_failures(final, tip),
         "providers": _review_providers(run.state.read()["run"]["agents"])})
+
+
+def _old_failures(final: dict, tip: str) -> str:
+    """The body's line on the failures of the full gate on the pushed tip `tip` that its base has too; "" for none."""
+    old = driver_final_gate.preexisting(final, tip)
+    return f"- Pre-existing failures: {old}" if old else ""
 
 
 # The roles that review code, with their line in the PR body, and the roles that write it.
@@ -150,7 +156,7 @@ def _writer_body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
         return kept
     method, risk = _body_skills()
     values = {**final_values(run), "start_sha": tip, "range": f"{final['onto']}..{tip}",
-              "gate": str(driver_gate.record_path(OUT / FINAL, driver_gate.FULL, tip)), "pr_skill": str(method),
+              "gate": driver_final_gate.evidence(run, tip), "pr_skill": str(method),
               "pr_risk_skill": str(risk), "risk_errors": "", "facts": _facts(run, final, tickets, tip)}
     WRITER.write_text(_run_pr_writer(run, tip, risk, values).strip() + "\n")
     run.state.update(lambda state: state["run"]["final"].update(body=tip))
@@ -179,9 +185,10 @@ def _gh(argv: list[str], what: str) -> str:
     return (made.stdout.split() or [""])[-1]
 
 
-def _draft(final: dict, questions: list[dict], left: list[str]) -> str:
-    """Why the PR opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling ships
-    with, the tickets `left` out, and the findings still open that the draft or an agent's ruling ships."""
+def _draft(final: dict, questions: list[dict], left: list[str], tip: str) -> str:
+    """Why the PR of `tip` opens as draft; "" for a PR ready for review: the end-of-run stops that a `ship-draft` ruling
+    ships with, the tickets `left` out, the findings still open that the draft or an agent's ruling ships, and a full
+    gate red only as its base is, which a match of failure lines does not prove (driver_final_gate)."""
     reasons = []
     if final["ship"]:
         reasons.append(f"the end of run stopped: {'; '.join(stop['subject'] for stop in final['ship']['stops'])}")
@@ -189,6 +196,8 @@ def _draft(final: dict, questions: list[dict], left: list[str]) -> str:
         reasons.append(f"tickets are left out of the run: {', '.join(left)}")
     if shipped := _shipped_open(final, questions):
         reasons.append(f"a finding ships open: {'; '.join(shipped)}")
+    if preexisting := driver_final_gate.preexisting(final, tip):
+        reasons.append(preexisting)
     return "; ".join(reasons)
 
 
@@ -232,7 +241,7 @@ def _body(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
 def _open(run: Run, final: dict, tickets: list[Ticket], tip: str) -> str:
     """Open the PR of the pushed tip `tip`, ready for review or as draft, and return its URL."""
     BODY.write_text(_body(run, final, tickets, tip))
-    draft = _draft(final, run.state.read()["run"]["questions"], left_out(run))
+    draft = _draft(final, run.state.read()["run"]["questions"], left_out(run), tip)
     url = _gh(["pr", "create", "--base", final["base"], "--head", run.pr, "--title", _name(run), "--body-file",
                str(BODY), *["--draft"] * bool(draft)], "pr create")
     run.state.update(lambda state: state["run"]["final"].update(pr=url, draft=bool(draft)))
