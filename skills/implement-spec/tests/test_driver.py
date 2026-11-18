@@ -962,12 +962,20 @@ def test_a_gate_that_changes_the_tree_or_moves_head_is_red(repo, tmp_path, capsy
     assert "by-the-gate" not in out_of("git", "log", "--format=%s", "feat/x")
 
 
-def test_a_merged_ticket_whose_commits_left_the_pr_branch_is_not_merged_on_a_rerun(repo, tmp_path, capsys):
+@pytest.mark.parametrize("rerun_date", ["2026-01-01T00:00:00Z", "2026-01-01T00:00:09Z"])
+def test_a_merged_ticket_whose_commits_left_the_pr_branch_is_not_merged_on_a_rerun(repo, tmp_path, capsys, monkeypatch,
+                                                                                   rerun_date):
+    """With the first `rerun_date`, the rerun's implementer makes the very commit of the first run (same work, same
+    second, as on a fast machine): the recovery point of the tidy is then the ticket tip, and it still lands."""
     repo(t01=ticket("01", **REFACTOR))
     base = out_of("git", "rev-parse", "HEAD")
+    for name in ("GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"):
+        monkeypatch.setenv(name, "2026-01-01T00:00:00Z")
     assert walk(tmp_path, capsys, WORK + REPORT)[0] == 0
     tip = out_of("git", "rev-parse", "--short=7", "HEAD")
     subprocess.run(["git", "reset", "-q", "--hard", base], check=True)  # the operator dropped the ticket's commits
+    for name in ("GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE"):
+        monkeypatch.setenv(name, rerun_date)
     code, ledger, out = walk(tmp_path, capsys, WORK + REPORT)
     assert f"Ticket 01: returned to implement from the PR tip: the recorded tip {tip} is not in feat/x." in ledger
     assert ledger[-1].startswith("Ticket 01: merged into feat/x as a fast-forward at ")

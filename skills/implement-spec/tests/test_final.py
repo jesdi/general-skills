@@ -35,6 +35,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import driver_final
 from test_cli import SKILL, git, ticket
 from test_review import ASTRA, FABLE, HOOKED, ONE, OPUS, Review, finding, gate_rule, no_full_gate, review
 from test_stops import DONE, UNATTENDED, stage
@@ -88,6 +89,10 @@ if argv[:2] == ["issue", "list"]:  # an issue whose body has the searched marker
     rows = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
     print(next(("https://github.example/issues/1" for row in rows
                 if row["argv"][:2] == ["issue", "create"] and marker in row["body"]), ""))
+    sys.exit(0)
+if argv[:2] == ["pr", "view"]:  # the state of the PR: OPEN, unless a test wrote another into gh-pr-state
+    state = log.with_name("gh-pr-state")
+    print(state.read_text().strip() if state.exists() else "OPEN")
     sys.exit(0)
 with log.open("a") as out:
     out.write(json.dumps(dict(argv=argv, body=body)) + "\\n")
@@ -675,3 +680,15 @@ def test_final_gate_repair_can_prove_no_code_change_but_still_spends_its_attempt
     assert [g['exit'] for g in rig.gates('full')] == [1, 0 if transient else 1]
     assert bool(rig.pushes()) == transient
     assert len(rig.final_calls('final-spec')) == int(transient)
+
+
+def test_the_final_review_carries_each_minor_finding_and_observation_of_the_tickets_once(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / ".agent/implement/01"
+    folder.mkdir(parents=True)
+    one = {"title": "t", "file": "a.py", "line": 1}
+    (folder / "findings-0.json").write_text(json.dumps([{**one, "severity": "minor"}, {**one, "severity": "important",
+                                                                                       "title": "big"}]))
+    (folder / "observations-0.json").write_text(json.dumps([{**one, "title": "seen"}, {**one, "title": "seen"}]))
+    assert driver_final._carried_findings() == (f"- .agent/implement/01/findings-0.json: t (a.py:1)\n"
+                                                f"- .agent/implement/01/observations-0.json: seen (a.py:1)")

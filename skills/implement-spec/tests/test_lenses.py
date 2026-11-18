@@ -9,6 +9,7 @@ import pytest
 import driver
 import driver_agents
 import driver_final
+import driver_pr
 from test_final import Final, final, fixer, fn
 from test_fixloop import inside  # noqa: F401  (the autouse fixture puts the rig's CLIs on PATH)
 from test_review import RISKY, finding, fix, review
@@ -93,7 +94,7 @@ def test_with_the_other_provider_out_of_credits_every_review_runs_on_the_entry_l
     assert rig.out.splitlines()[:2] == skipped and rig.ledger()[:2] == skipped
     ran = {(agent["role"], agent["entry"]) for agent in rig.state()["run"]["agents"]}
     assert {entry for role, entry in ran if role in ("reviewer", "final-correctness")} == {OPUS}, ran
-    assert driver_final._review_providers(rig.state()["run"]["agents"]).splitlines() == [
+    assert driver_pr._review_providers(rig.state()["run"]["agents"]).splitlines() == [
         f"- Ticket reviews ran on: {OPUS}, on a provider that also wrote code",
         f"- Correctness lens ran on: {OPUS}, on a provider that also wrote code"]
 
@@ -102,7 +103,7 @@ def test_the_review_coverage_names_only_what_ran_so_an_undone_fallback_is_not_cl
     agents = [{"role": "implementer", "entry": SONNET}, {"role": "reviewer", "entry": OPUS},
               {"role": "reviewer", "entry": ASTRA}, {"role": "final-correctness", "entry": ASTRA},
               {"role": "final-reviewer", "entry": ASTRA}]
-    assert driver_final._review_providers(agents).splitlines() == [
+    assert driver_pr._review_providers(agents).splitlines() == [
         f"- Ticket reviews ran on: {OPUS}, {ASTRA}, on a provider that also wrote code",
         f"- Correctness lens ran on: {ASTRA}", f"- Scoped review ran on: {ASTRA}"]
 
@@ -123,8 +124,9 @@ def test_a_final_reviewer_list_with_no_entry_on_another_provider_runs_every_revi
 
 
 def test_without_the_deep_quality_review_skill_the_run_exits_3_before_any_agent(tmp_path, monkeypatch):
-    installed = driver_final._installed
-    monkeypatch.setattr(driver_final, "_installed", lambda name: None if name == "deep-quality-review" else installed(name))
+    installed = driver_agents.installed
+    monkeypatch.setattr(driver_agents, "installed",
+                        lambda name: None if name == "deep-quality-review" else installed(name))
     rig = rig_of(tmp_path).run(plan())
     assert rig.code == 3 and not rig.calls(), rig.out
     assert rig.out == ("the deep-quality-review skill is missing its SKILL.md: the structure lens of the final review "

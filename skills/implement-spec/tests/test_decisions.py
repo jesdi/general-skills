@@ -59,7 +59,7 @@ def test_a_stop_prints_the_question_and_an_answer_is_applied_once(tmp_path, caps
 
     # The question is closed: its answer cannot be given again, and the old answers file is history.
     rig.run({}, "--answer", f"{Q1}=edit")
-    assert rig.code == 3 and f"--answer {Q1}=edit: no open question {Q1}" in capsys.readouterr().out
+    assert rig.code == 3 and f"--answer {Q1}=edit: you answered {Q1}: only a ruling of the driver" in capsys.readouterr().out
     rig.run({})
     assert rig.code == 0 and not rig.led("ignored") and len(rig.led("Ruling")) == 1
 

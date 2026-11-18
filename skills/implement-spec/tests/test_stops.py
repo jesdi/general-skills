@@ -235,7 +235,7 @@ def test_with_retries_the_driver_answers_retry_itself_and_lists_its_decision_at_
     assert len(rig.calls("01", "implementer")) == 3 and "feat: 01 rows" in rig.pr_subjects()
     summary = (rig.repo / ".agent/implement/summary.md").read_text()
     assert "| human stops | 0 |" in summary and "| stops the driver ruled on | 1 |" in summary
-    assert "Driver decisions, taken without the operator:\n- " + RULED in summary
+    assert f"Driver decisions, taken without the operator:\n- {Q1}: {RULED}" in summary
     assert not answers_file(rig).exists()
 
 

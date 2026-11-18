@@ -3,7 +3,8 @@
 A question in state.json `run.questions`; `answer` is None while it is open:
     {id, title, why, evidence, options: [{id, description}], recommended, ticket, kind, subject, stop, answer,
      resume: {phase[, tip][, round][, gate_allowance]}, the record fields a `retry` or a `keep-test` sets (`Resume`),
-     ruling: the ruling sentence, once answered; by: DRIVER or ARBITER when no operator answered it;
+     ruling: the ruling sentence, once answered; by: DRIVER or ARBITER when no operator answered it, until the operator
+     overturns the ruling (driver_overturn); overturned: who took the ruling the operator overturned;
      issue: the URL of the follow-up issue the driver filed for a `follow-up` answer;
      role: the agent whose stop a `ticket-blocked` question asks about, None for a gate or a landing stop and absent
      from a question of an older driver, which a reader takes as no particular agent}
@@ -20,6 +21,7 @@ from driver_tickets import Ticket
 PUBLIC = ("id", "title", "why", "evidence", "options", "recommended")
 DRIVER = "driver"  # `by` of a question the driver answered itself
 ARBITER = "arbiter"  # `by` of a question the arbiter agent answered
+OPERATOR = "operator"  # what `ruled_by` says of a question with no `by`
 SHIPS = ("accept", "follow-up")  # the answers to a finding question that ship the PR with the finding open
 FINDING_OPEN = "finding-open"  # the kind of an important finding: the arbiter may ship it, as draft
 MUST_FIX = "finding-must-fix"  # the kind of a critical or must-fix finding: no agent ships it
@@ -222,13 +224,13 @@ def rulings(questions: list[dict]) -> list[str]:
 def waived(questions: list[dict], finding: dict) -> bool:
     """An answer to a question on `finding` ships it: no fix batch is due. A finding that is critical or must-fix now
     is shipped only by the operator's answer, not by the driver's or the arbiter's (`by`) to it as an important one."""
-    by = [q.get("by") for q in questions if _ships(q, subject(finding))]  # "" or none for the operator
-    return not all(by) if finding_kind(finding) == MUST_FIX else bool(by)
+    by = {ruled_by(q) for q in questions if _ships(q, subject(finding))}
+    return OPERATOR in by if finding_kind(finding) == MUST_FIX else bool(by)
 
 
 def agent_shipped(questions: list[dict], finding: dict) -> bool:
     """The driver or the arbiter (`by`), not the operator, answered a question on `finding` with an option that ships it."""
-    return any(q.get("by") for q in questions if _ships(q, subject(finding)))
+    return any(ruled_by(q) != OPERATOR for q in questions if _ships(q, subject(finding)))
 
 
 def _ships(q: dict, named: str) -> bool:
@@ -290,7 +292,7 @@ def _settled(questions: list[dict], ticket: str, stop: int) -> dict:
 
 def ruled(questions: list[dict], by: str = DRIVER) -> Counter:
     """ticket (or FINAL) -> the stops of it that `by`, the driver or the arbiter, ruled on."""
-    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in questions if q.get("by") == by})
+    return Counter(ticket for ticket, _ in {(q["ticket"], q["stop"]) for q in questions if ruled_by(q) == by})
 
 
 def automatic(questions: list[dict], retries: int, must_fix_retries: int) -> dict:
@@ -331,15 +333,40 @@ def apply(questions: list[dict], answers: dict, by: str = "", why: dict[str, str
     return rulings, _moved(questions, stops)
 
 
+def overturn(questions: list[dict], answers: dict) -> tuple[list[str], dict[str, dict]]:
+    """Overturn the rulings of the driver or the arbiter that `answers` names with the operator's answer: the new
+    ruling names the one it overturns and who took it. Returns what `apply` returns."""
+    rulings, stops = [], {}
+    for q in questions:
+        if q["id"] in answers:
+            was, q["overturned"] = q["answer"], q.pop("by")
+            q["answer"] = answers[q["id"]]
+            q["ruling"] = f"{ruling(q)} It overturns the ruling {was} of the {q['overturned']}."
+            rulings.append(q["ruling"])
+            stops[q["ticket"]] = q["stop"]
+    return rulings, _moved(questions, stops)
+
+
 def _moved(questions: list[dict], stops: dict) -> dict[str, dict]:
     """ticket or FINAL -> the fields that let its record go on, for each of `stops` whose answers settle it."""
     moved = {ticket: _settled(questions, ticket, stop) for ticket, stop in stops.items()}
     return {ticket: fields for ticket, fields in moved.items() if fields}
 
 
+def ruled_by(q: dict) -> str:
+    """Who took the ruling `q` has now: DRIVER, ARBITER, or OPERATOR for an answer of the operator, an overturn
+    included, and for an open question."""
+    return q.get("by") or OPERATOR
+
+
 def without_operator(questions: list[dict]) -> list[dict]:
     """The questions the driver or its arbiter answered, with no operator."""
-    return [q for q in questions if q.get("by") in (DRIVER, ARBITER)]
+    return [q for q in questions if ruled_by(q) != OPERATOR]
+
+
+def overturned(questions: list[dict]) -> list[dict]:
+    """The questions whose ruling of the driver or the arbiter the operator overturned."""
+    return [q for q in questions if q.get("overturned")]
 
 
 def arbitrated(questions: list[dict], budget: int) -> list[dict]:

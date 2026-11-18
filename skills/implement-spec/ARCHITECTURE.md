@@ -15,7 +15,8 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_fixloop.py` | A gated ticket tip in, a reviewed tip out: review, test-writer correction, fix rounds |
 | `driver_dispute.py` | A disputed locked test: the arbitration, its correction, the once-per-test record, `spec-ambiguous` |
 | `driver_arbiter.py` | The arbiter agent that rules on the open questions the driver's retries leave (`driver_decisions.arbitrated`), in a checkout of its own |
-| `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push |
+| `driver_final.py` | The end of run: tidy, rebase, gate, final review, one fix batch, push; a ticket that lands after the tidy (`replay`, `landed_after_tidy`) |
+| `driver_pr.py` | The PR: its body (the pr-writer's part and the facts), its opening, once, and the body written again while it is open |
 | `driver_tickets.py`, `driver_graph.py` | Ticket files in, tickets or errors out; which tickets can start now |
 | `driver_agents.py` | Model entries, the CLI command of each provider, prompt templates, the blocking launch |
 | `driver_report.py` | Validation of one agent report against its schema, git and the agent's log |
@@ -27,7 +28,8 @@ A comment in the code is for a line that looks wrong or removable without it.
 | `driver_state.py` | `state.json` (the resume contract) and the kernel lock |
 | `driver_names.py` | The names of one run: its ticket branches, its recovery ref and its lock file |
 | `driver_legacy.py` | The take-over of a run that an older driver started; delete it when no such run is left |
-| `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them; the tickets left out of the run (`left_out`) |
+| `driver_decisions.py`, `driver_answers.py`, `driver_review_page.py` | Operator questions, their answers, the page that shows them; who took a ruling (`ruled_by`); the tickets left out of the run (`left_out`) |
+| `driver_overturn.py` | Which overturn of a ruling of the driver or the arbiter takes effect (`--answer` on an answered question) |
 | `driver_tidy.py`, `driver_summary.py` | The history with one commit per ticket; `summary.md` |
 
 `driver.py`, `driver_fixloop.py`, `driver_dispute.py` and `driver_final.py` decide what comes next. The other modules do one thing
@@ -167,7 +169,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   lists have one: it is a preference, not a check. When the config has none, or the preflight
   (`driver_agents.preflight`) leaves none because each such entry failed it, the lens falls back to the
   `final-reviewer` entries that are left. The ledger says so, and the
-  PR body's Review coverage (`driver_final._review_providers`) names the entries each review ran on, read from
+  PR body's Review coverage (`driver_pr._review_providers`) names the entries each review ran on, read from
   `run.agents`, so a fallback that a later invocation undid is not claimed. `driver_final._run_lenses` runs them at the same time in slot 1 inside one
   `Run.read_only`, so a lens that changes the slot makes all three run again. A lens that stops or is rejected
   twice stops the round only after every lens has ended, with one `final-ticket-blocked` question for each such lens
