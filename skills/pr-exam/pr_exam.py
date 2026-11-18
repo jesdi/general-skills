@@ -180,6 +180,36 @@ def validate(args):
     return 0
 
 
+def config_errors(c):
+    if not isinstance(c, dict):
+        return ["config: must be a JSON object"]
+    errors = [f"unknown key: {k}" for k in c if k not in ("enabled", "bypassLabels")]
+    if not isinstance(c.get("enabled", True), bool):
+        errors.append("enabled: must be true or false")
+    labels = c.get("bypassLabels", {})
+    if not isinstance(labels, dict):
+        errors.append("bypassLabels: must be an object of label to skip or defer")
+    else:
+        errors += [f"bypassLabels: {k!r} has mode {m!r}, allowed values: skip, defer"
+                   for k, m in labels.items() if m not in ("skip", "defer")]
+    return errors
+
+
+def config(args):
+    path = Path(args.path)
+    try:
+        c = json.loads(path.read_text()) if path.exists() else {}
+    except ValueError as e:
+        print(f"invalid json in {path}: {e}", file=sys.stderr)
+        return 1
+    errors = config_errors(c)
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+    print(json.dumps({"enabled": c.get("enabled", True), "bypassLabels": c.get("bypassLabels", {})}))
+    return 0
+
+
 FILE_RE = re.compile(r"^(\d{4,})-(.+)\.md$")
 FIELDS = ("concept", "state", "date", "source", "status")
 
@@ -346,6 +376,9 @@ def main(argv=None):
     for f in ("records", "exam", "result", "today"):
         rc.add_argument(f"--{f}", required=True)
     rc.set_defaults(fn=record)
+    cf = sub.add_parser("config")
+    cf.add_argument("path", nargs="?", default=".pr-exam.json")
+    cf.set_defaults(fn=config)
     args = p.parse_args(argv)
     return args.fn(args)
 
