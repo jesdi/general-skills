@@ -49,7 +49,7 @@ and do not know about the run, except `driver_run.py`, which the deciding module
   (exit 3). Examples: `precondition_errors`, `driver_tickets.parse`, `driver_report.validate`.
 - **The modules that do not know about the run return a result, not `Blocked`.** Some return `""` or the reason
   as a string (`driver_merge.land`), or what they found (`driver_merge.refused`); the deciding module raises.
-- A slot is a worktree. Slot 1 is the PR worktree; the others are in `.agent/worktrees/`.
+- A slot is a worktree. Slot 1 is the PR worktree; the others are in `.agent/worktrees/`, with `slot-base`, where the end of run gates the base commit when the tip's full gate is red (`driver_final_gate.py`).
 - A number of a ticket is a string (`"03"`). `FINAL` is used in its place for the end of run.
 
 ## Rules the code keeps
