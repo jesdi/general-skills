@@ -1,0 +1,5 @@
+{
+  "q1": {"grade": "pass", "feedback": "Names the overwritten results of concurrent runs and the single runner the lease gives."},
+  "q2": {"grade": "pass", "feedback": "Explains the stale leader and how the store refuses a write under an old token."},
+  "q6": {"grade": "partial", "feedback": "Covers renewing, but not stopping on a lost lease or the release in finally."}
+}
