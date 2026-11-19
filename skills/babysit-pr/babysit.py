@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -25,6 +27,9 @@ from pathlib import Path
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
 INSTALL = "npx @jesdi/skills-cli install pr-risk"
+EXAM_CONTEXT = "exam"
+EXAM_INSTALL = "npx @jesdi/skills-cli install pr-exam"
+PR_EXAM_DIRS = (".my-skills/pr-exam", ".agents/skills/pr-exam", ".claude/skills/pr-exam")
 PR_RISK_DIRS = (".my-skills/pr-risk", ".agents/skills/pr-risk", ".claude/skills/pr-risk")
 CLAIM_PENDING = "<!-- babysit-pr claim: pending -->\n"
 CLAIM_HELD = "<!-- babysit-pr claim: held -->\n"
@@ -319,7 +324,8 @@ def ci_state(repo, number, wait):
     for line in out.splitlines():
         if line:
             status = json.loads(line)
-            latest.setdefault(status["context"], status)
+            if status["context"] != EXAM_CONTEXT:  # the exam is asked for after CI: it never gates CI
+                latest.setdefault(status["context"], status)
     reset_terminal_statuses(pr, f"{repo}#{sha}#status:", latest)
     red = red or any(s["state"] in ("failure", "error") for s in latest.values())
     pending_runs = [r for r in runs if r["status"] != "completed"]
@@ -660,6 +666,51 @@ def load_merge_risk(base=None):
     fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
+def exam_cmd(repo, number):
+    base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]["ref"]
+    # Only an install the PR cannot change: next to this skill, or under $HOME, outside the checkout.
+    root = checkout_root()
+    script = next((d / "pr_exam.py" for d in [Path(__file__).resolve().parent.parent / "pr-exam",
+                                               *(Path.home() / n for n in PR_EXAM_DIRS)]
+                   if (d / "pr_exam.py").is_file() and not (d / "pr_exam.py").resolve().is_relative_to(root)), None)
+    if subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True).returncode:
+        fail(f"origin/{base} is not readable: run git fetch origin")
+    shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
+    config = {"enabled": True}
+    if shown.returncode == 0:  # a config only on the PR branch never counts
+        if script is None:
+            fail(f"pr-exam is not installed. Run: {EXAM_INSTALL}")
+        with tempfile.TemporaryDirectory(prefix="babysit-pr-exam-", dir="/tmp") as tmp:
+            Path(tmp, ".pr-exam.json").write_text(shown.stdout)
+            p = subprocess.run([sys.executable, "-I", str(script), "config", str(Path(tmp, ".pr-exam.json"))],
+                               capture_output=True, text=True)
+        if p.returncode:
+            fail(f".pr-exam.json on origin/{base} is invalid:\n{p.stderr.strip()}")
+        config = json.loads(p.stdout)
+    if not config["enabled"]:
+        return print("exams are disabled for this repo")
+    if script is None:
+        fail(f"pr-exam is not installed. Run: {EXAM_INSTALL}")
+    host = os.environ.get("PR_EXAM_HOST")
+    if not host:
+        fail("PR_EXAM_HOST is not set: point it at the pr-exam host")
+    if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
+        return print("the PR is not ready: CI is not green or a review is open")
+    req = urllib.request.Request(host.rstrip("/") + "/api/exam", method="POST",
+                                 data=json.dumps({"repo": repo, "pr": int(number)}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            answer = json.load(r)
+    except (urllib.error.URLError, OSError) as e:
+        fail(f"pr-exam host unreachable at {host}: {e}")
+    print(json.dumps({k: answer.get(k) for k in ("url", "state", "debt", "detail")}))
+    if answer.get("state") == "skipped":
+        print("exam bypassed")
+    elif answer.get("debt"):
+        print("exam deferred")
+
+
 JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
 GATE_NEEDS = ("gate", "base_policy", "classify_diff", "diff_stats", "parse", "risk_floor")
 
@@ -964,6 +1015,9 @@ def main():
     cp.add_argument("--repo", required=True)
     cp.add_argument("--pr", required=True)
     cp.add_argument("--wait-minutes", type=int, required=True)
+    xp = sub.add_parser("exam")
+    xp.add_argument("--repo", required=True)
+    xp.add_argument("--pr", required=True)
     rp = sub.add_parser("round")
     rp.add_argument("verb", choices=["start", "record-failure"])
     for a in ("repo", "pr", "session", "host"):
@@ -1003,6 +1057,8 @@ def main():
         print(json.dumps(owner_comments(a.repo, a.pr)))
     elif a.cmd == "checks":
         checks_cmd(a.repo, a.pr, a.wait_minutes)
+    elif a.cmd == "exam":
+        exam_cmd(a.repo, a.pr)
     elif a.cmd == "round":
         if a.verb == "record-failure" and not (a.check and a.error):
             ap.error("record-failure needs --check and --error")
