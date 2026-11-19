@@ -12,6 +12,11 @@ KINDS = ["why", "concept", "architecture", "risk", "behaviour"]  # highest prior
 MODES = ("first", "followup", "delta")
 QUESTION_FIELDS = {"id", "concept", "type", "prompt", "options"}
 MAX_QUESTIONS = 8
+SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
+def is_slug(v):
+    return isinstance(v, str) and bool(SLUG.fullmatch(v))
 
 
 def nonempty(v):
@@ -25,14 +30,33 @@ def shape_errors(q):
         errors.append(f"question {qid!r}: id must be a non-empty string")
     if not nonempty(q.get("prompt")):
         errors.append(f"question {qid}: prompt must be a non-empty string")
+    if q.get("type") not in ("choice", "text"):
+        errors.append(f"question {qid}: type must be choice or text")
     if "options" in q and not (isinstance(q["options"], list) and all(nonempty(o) for o in q["options"])):
         errors.append(f"question {qid}: options must be non-empty strings")
     return errors
 
 
+def served_errors(exam):
+    """Every field `public` copies must have its plain shape, so no answer can ride inside one."""
+    if not isinstance(exam, dict):
+        return ["exam must be a JSON object"]
+    errors = []
+    if type(exam.get("version")) is not int or exam["version"] != 1:
+        errors.append("version must be 1")
+    for f in ("repo", "head_sha"):
+        if not nonempty(exam.get(f)):
+            errors.append(f"{f} must be a non-empty string")
+    if type(exam.get("pr")) is not int:
+        errors.append("pr must be an integer")
+    questions = exam.get("questions")
+    if not (isinstance(questions, list) and all(isinstance(q, dict) for q in questions)):
+        return errors + ["questions must be a list of objects"]
+    return errors + [e for q in questions for e in shape_errors(q)]
+
+
 def check_question(q, concepts, key, diff, errors):
     qid = q.get("id")
-    errors += shape_errors(q)
     extra = set(q) - QUESTION_FIELDS
     if extra:
         errors.append(f"question {qid}: unexpected field(s) {sorted(extra)}")
@@ -51,8 +75,6 @@ def check_question(q, concepts, key, diff, errors):
     elif qtype == "text":
         if "options" in q:
             errors.append(f"question {qid}: text question must not have options")
-    else:
-        errors.append(f"question {qid}: type must be choice or text")
     entry = key.get(qid)
     if not isinstance(entry, dict):
         if qid in key:
@@ -80,9 +102,9 @@ def check_question(q, concepts, key, diff, errors):
 
 def errors_for(exam, request, diff, learned=None):
     learned = learned or {}
-    errors = []
-    if exam.get("version") != 1:
-        errors.append("version must be 1")
+    errors = served_errors(exam)
+    if not isinstance(exam, dict) or "questions must be a list of objects" in errors:
+        return errors  # the rules below walk the questions
     if exam.get("mode") not in MODES:
         errors.append("mode must be first, followup or delta")
     if "mode" in request and exam.get("mode") != request["mode"]:
@@ -93,6 +115,8 @@ def errors_for(exam, request, diff, learned=None):
     clist, questions, key = exam.get("concepts", []), exam.get("questions", []), exam.get("key", {})
     kinds = {}
     for c in clist:
+        if not is_slug(c.get("id")):
+            errors.append(f"concept {c.get('id')!r}: id must be a slug (lowercase letters, digits, single hyphens)")
         if c.get("kind") not in KINDS:
             errors.append(f"concept {c.get('id')}: kind must be one of {KINDS}")
         if c.get("id") in kinds:
@@ -137,7 +161,7 @@ def errors_for(exam, request, diff, learned=None):
             errors.append(f"concept {cid}: dropped while a lower-priority concept is asked")
 
     if exam.get("mode") == "first":
-        types = {q.get("type") for q in questions}
+        types = {q.get("type") for q in questions if q.get("type") in ("choice", "text")}
         if n >= 2 and types != {"choice", "text"}:
             errors.append("a first exam with 2 or more questions needs both choice and text")
         if n >= 3 and not any(q.get("type") == "text" and kinds.get(q.get("concept")) == "why" for q in questions):
@@ -296,7 +320,7 @@ def write_records(args, result, existing, explanations, source):
 
 def public(args):
     exam = load(args.exam)
-    errors = [e for q in exam["questions"] for e in shape_errors(q)]
+    errors = served_errors(exam)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
