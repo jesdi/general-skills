@@ -523,6 +523,29 @@ def lease_locked(verb, repo, number, session, host):
                 if l[0] != c["id"] and l[3] <= now:
                     end(pr, l[4])
         pr.label(add=["babysitting"], remove=["needs-human"])
+        warn_exam_not_required(repo, number)
+
+
+def warn_exam_not_required(repo, number):
+    """Once per run (acquire only): a public repo with exams on but `exam` not required. Never fails the lease."""
+    try:
+        base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]
+        if base.get("repo", {}).get("private") is not False or not exam_enabled(base["ref"]):
+            return
+    except (SystemExit, ValueError, KeyError):
+        return
+    p = subprocess.run(["gh", "api", f"repos/{repo}/branches/{base['ref']}/protection/required_status_checks"],
+                       text=True, capture_output=True)
+    if p.returncode and "not protected" not in p.stderr and "not enabled" not in p.stderr:
+        return  # unknown: stay quiet
+    try:  # absent or null required checks: none required
+        required = (json.loads(p.stdout or "null") if p.returncode == 0 else None) or {}
+    except ValueError:
+        return
+    required = required.get("contexts") or []
+    if EXAM_CONTEXT not in required:
+        print(f"warning: `{EXAM_CONTEXT}` is not a required check on {repo}@{base['ref']}: "
+              f"run `pr-exam setup {repo}`", file=sys.stderr)
 
 
 def connection(repo, number, name):

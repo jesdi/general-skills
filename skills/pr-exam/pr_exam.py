@@ -6,7 +6,9 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 KINDS = ["why", "concept", "architecture", "risk", "behaviour"]  # highest priority first
@@ -393,6 +395,85 @@ def score(args):
     return 0
 
 
+UPGRADE = "Upgrade to GitHub Pro or make this repository public"
+# Settings GitHub returns as {"enabled": bool} and takes back as plain booleans.
+PROTECTION_FLAGS = ("required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
+                    "required_conversation_resolution", "lock_branch", "allow_fork_syncing")
+
+
+def gh_api(*args, body=None):
+    return subprocess.run(["gh", "api", *args], input=None if body is None else json.dumps(body),
+                          capture_output=True, text=True)
+
+
+def app_id(host):
+    try:
+        with urllib.request.urlopen(host.rstrip("/") + "/api/exam/host", timeout=30) as r:
+            v = json.load(r)["app_id"]
+    except Exception as e:
+        raise SystemExit(f"the host cannot report its GitHub App id: {e}")
+    if type(v) is not int or v <= 0:  # GitHub reads -1 as "any app"
+        raise SystemExit(f"the host reported a bad App id: {v!r}")
+    return v
+
+
+def actors(v):
+    """GET shape {users: [{login}], teams: [{slug}], apps: [{slug}]} -> PUT shape of plain names."""
+    if not v:
+        return v
+    return {k: [a["login"] if k == "users" else a["slug"] for a in v.get(k, [])] for k in ("users", "teams", "apps")}
+
+
+def protection_body(current, app):
+    """The PUT body: `current` as GitHub returned it, plus `exam` bound to the App (None: unprotected)."""
+    rsc = (current or {}).get("required_status_checks") or {"strict": False}
+    checks = rsc.get("checks") or [{"context": c, "app_id": None} for c in rsc.get("contexts", [])]
+    checks = [c for c in checks if c["context"] != "exam"] + [{"context": "exam", "app_id": app}]
+    body = {"required_status_checks": {"strict": rsc.get("strict", False), "checks": checks}}
+    if current is None:
+        return {**body, "enforce_admins": True, "required_pull_request_reviews": None, "restrictions": None}
+    flag = lambda k: (current.get(k) or {}).get("enabled", False)
+    reviews = current.get("required_pull_request_reviews")
+    if reviews:  # keep every review setting; the allowance lists come back as objects, go in as names
+        reviews = {k: actors(v) if k in ("dismissal_restrictions", "bypass_pull_request_allowances") else v
+                   for k, v in reviews.items() if k != "url" and not k.endswith("_url")}
+    body.update(enforce_admins=flag("enforce_admins"), restrictions=actors(current.get("restrictions")),
+                required_pull_request_reviews=reviews)
+    body.update({k: flag(k) for k in PROTECTION_FLAGS})
+    return body
+
+
+def setup(args):
+    host = os.environ.get("PR_EXAM_HOST")
+    if not host:
+        return print("PR_EXAM_HOST is not set: point it at the pr-exam host", file=sys.stderr) or 1
+    app = app_id(host)
+    repo = args.repo
+    info = gh_api(f"repos/{repo}")
+    if info.returncode:
+        return print(info.stderr.strip(), file=sys.stderr) or 1
+    branch = json.loads(info.stdout)["default_branch"]
+    path = f"repos/{repo}/branches/{branch}/protection"
+    got = gh_api(path)
+    if got.returncode and UPGRADE in got.stderr:
+        return print(f"GitHub will not protect {repo}: the exam gate is agent-enforced only") or 0
+    if got.returncode and "Branch not protected" not in got.stderr:
+        return print(got.stderr.strip(), file=sys.stderr) or 1
+    current = None if got.returncode else json.loads(got.stdout)
+    body = protection_body(current, app)
+    if current and exam_bound(current, app):
+        return print(f"exam is already required on {repo}@{branch}") or 0
+    put = gh_api("-X", "PUT", path, "--input", "-", body=body)
+    if put.returncode:
+        return print(put.stderr.strip(), file=sys.stderr) or 1
+    print(f"exam is now required on {repo}@{branch}")
+    return 0
+
+
+def exam_bound(current, app):
+    return {"context": "exam", "app_id": app} in (current["required_status_checks"] or {}).get("checks", [])
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pr_exam")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -418,6 +499,9 @@ def main(argv=None):
     cf = sub.add_parser("config")
     cf.add_argument("path", nargs="?", default=".pr-exam.json")
     cf.set_defaults(fn=config)
+    st = sub.add_parser("setup")
+    st.add_argument("repo")
+    st.set_defaults(fn=setup)
     args = p.parse_args(argv)
     return args.fn(args)
 

@@ -12,7 +12,17 @@ State is the JSON file $GH_FAKE_STATE:
   head_sha   head commit of every PR (default "head1")
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
   statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
-  required_checks  [name] returned as branch protection contexts of any branch
+  required_checks  [name] returned as branch protection contexts of the default branch
+  private, default_branch  visibility (default public) and default branch (default "main") of the repo
+  protection  branch protection of the default branch in GitHub's response shape (absent: 404
+             "Branch not protected"; derived from required_checks when that is set). `PUT
+             branches/B/protection --input -` replaces it, like GitHub: the body must hold
+             required_status_checks, enforce_admins, required_pull_request_reviews and restrictions;
+             a boolean setting the body omits is reset to disabled; `checks` [{context, app_id}] feed
+             `contexts`.
+  protection_error  {status, message}: every branch protection call fails like gh ("gh: <message>
+             (HTTP <status>)"); put_error the same for the PUT only
+  puts       bodies of the successful branch protection PUTs
   reviews    [{id, user: {login}, state, body, submitted_at}]  (optional)
   commits    [{sha, date}] oldest first, date = commit time (optional)
   threads    [{user: {login}, resolved}] review threads (optional)
@@ -163,8 +173,10 @@ def api(args):
                      if fields.get("base") in (None, p["base"])], jq, include)
     if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
         log(False)
-        return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
-                                             "allow_squash_merge": False}), jq, include)
+        return emit({**st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
+                                                "allow_squash_merge": False}),
+                     "private": st.get("private", False),
+                     "default_branch": st.get("default_branch", "main")}, jq, include)
     if re.fullmatch(rf"pulls/{n}/reviews", path) and method == "GET":
         log(False)
         return emit([{"id": r["id"], "user": r["user"], "state": r["state"], "body": r.get("body", ""),
@@ -215,9 +227,40 @@ def api(args):
     if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
         log(False)
         return emit(st.get("statuses", {}).get(m.group(1), []), jq, include)
-    if re.fullmatch(r"branches/[^/]+/protection/required_status_checks", path):
-        log(False)
-        return emit({"strict": False, "contexts": st.get("required_checks", [])}, jq, include)
+    if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks)?", path):
+        write = method != "GET"
+        err = st.get("protection_error") or (write and st.get("put_error"))
+        if err:
+            log(write); print(f"gh: {err['message']} (HTTP {err['status']})", file=sys.stderr); sys.exit(1)
+        if m.group(1) != st.get("default_branch", "main"):
+            log(write); print("gh: Branch not found (HTTP 404)", file=sys.stderr); sys.exit(1)
+        if method == "GET":
+            log(False)
+            prot = st.get("protection")
+            if prot is None and "required_checks" in st:
+                prot = {"required_status_checks": {"strict": False, "contexts": st["required_checks"],
+                                                   "checks": [{"context": c, "app_id": None}
+                                                              for c in st["required_checks"]]}}
+            if prot is None:
+                print("gh: Branch not protected (HTTP 404)", file=sys.stderr); sys.exit(1)
+            return emit(prot["required_status_checks"] if m.group(2) else prot, jq, include)
+        if method == "PUT" and not m.group(2):
+            missing = [k for k in ("required_status_checks", "enforce_admins",
+                                   "required_pull_request_reviews", "restrictions") if k not in fields]
+            if missing:
+                die(f"HTTP 422: Invalid request, missing {missing}", True)
+            rsc = fields["required_status_checks"] or {"strict": False, "checks": []}
+            checks = [{"context": c["context"], "app_id": c.get("app_id")} for c in rsc.get("checks", [])]
+            prot = {"required_status_checks": {"strict": bool(rsc.get("strict")), "checks": checks,
+                                               "contexts": [c["context"] for c in checks]},
+                    "enforce_admins": {"enabled": bool(fields["enforce_admins"])},
+                    "required_pull_request_reviews": fields["required_pull_request_reviews"],
+                    "restrictions": fields["restrictions"]}
+            for k in ("required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
+                      "required_conversation_resolution", "lock_branch", "allow_fork_syncing"):
+                prot[k] = {"enabled": bool(fields.get(k))}
+            log(True); st["protection"] = prot; st.setdefault("puts", []).append(fields); save()
+            return emit(prot, jq, include)
     if re.fullmatch(rf"issues/{n}/comments", path):
         if method == "GET":
             log(False); return emit(visible(), jq, include)
