@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-19T16:55:39.262Z",
+  "generatedAt": "2026-11-18T09:10:23.533Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -10,14 +10,14 @@
     },
     {
       "name": "babysit-pr",
-      "version": "0.1.7",
-      "hash": "sha256-1e472dca88a0a10ae385965954b9aba4d892de2df26f57f52e349411da0c53fa",
+      "version": "0.1.6",
+      "hash": "sha256-81e4eb55e555b5c56df6f90a83a300d79d859f294a2ebe8f00ed231bc21390c2",
       "description": "Babysit an open pull request until it is merged or handed to a human. Started by the PostToolUse hook after `gh pr create`, or by hand with `/babysit-pr` and a PR URL."
     },
     {
       "name": "backlog",
-      "version": "0.1.9",
-      "hash": "sha256-092a4e21319f2caa1080ecb01f4e5f11b58400c8d6e01b00a986fe78d7367e1c",
+      "version": "0.1.8",
+      "hash": "sha256-5bd474d3b3ffbb3af23380663c24c8a8d3ba263cfd4dbe7e636879595e6995b8",
       "description": "Manage a GitHub-Issues-backed backlog and a Projects-v2 work graph via five verbs. Use when the user wants to CAPTURE an idea/research thread (\"add to backlog\", \"capture this\", \"note this idea\", \"log a task\"), TRIAGE the inbox (\"triage the backlog\", \"score the inbox\"), see what to work on NEXT (\"what's next\", \"what should I work on\", \"ranked backlog\", \"next actionable task\"), LAND a finished item (\"mark done\", \"close out #N\"), or SETUP the board the first time. Ranks open issues by impact÷effort, respecting `Blocked by:` edges, so only actionable work surfaces."
     },
     {
@@ -34,8 +34,8 @@
     },
     {
       "name": "crap-gate",
-      "version": "0.1.6",
-      "hash": "sha256-4fbfdcbe14aefb522da2bae518f8ceb2b39f6120c297cf8be1b6a0ab65e38568",
+      "version": "0.1.5",
+      "hash": "sha256-ddf100022e078ad567efc30cdffb02d2e332e59db5866614e42c100173a7974f",
       "description": "Score every function a branch changed with CRAP (cyclomatic complexity × untested fraction), fail on existing functions above 15 and new functions above 9, and drive a fixer + independent reviewer loop until the gate passes. Use when implementation is done and before pushing, when the user says \"run the crap gate\", \"check CRAP\", \"is this change tested enough\", or when a push gate reports CRAP violations."
     },
     {
@@ -58,20 +58,14 @@
     },
     {
       "name": "implement-spec",
-      "version": "0.1.64",
-      "hash": "sha256-20da77bb07ddac4a9b3593692be6c3ea49014f5f50a39ec2249aba0646e203ec",
+      "version": "0.1.63",
+      "hash": "sha256-6876e448ed0a7697aed064b2e31a6ef683c9966d45e584afcd333b562a7a4e49",
       "description": "Implement a specification in code."
     },
     {
-      "name": "pr-exam",
-      "version": "0.1.2",
-      "hash": "sha256-7eb43835665386f00b7046b5da0cdb689d61cd92fe50c116a9b50426c0bfa45f",
-      "description": "Deterministic rules for a PR exam: validate a generated exam.json against its generation request, project the served (answer-free) exam, score an attempt, read and write learning records, and validate a repo's .pr-exam.json. Use when generating, serving or grading a PR exam, or when the user says \"pr-exam\"."
-    },
-    {
       "name": "pr-risk",
-      "version": "0.1.2",
-      "hash": "sha256-71beb2e46f460bbf4a47c6035c90c8056eab86951081718a67bc138730bad9bc",
+      "version": "0.1.1",
+      "hash": "sha256-f67cc22d6c5c14f41a0670f0b9faef17827727c27f36f315c8d1acba5a67a738",
       "description": "Merge-risk block of a PR body. Use when a PR body needs its ```merge-risk v1 block parsed or validated, with every error named."
     },
     {
@@ -106,14 +100,14 @@
     },
     {
       "name": "test-prune",
-      "version": "0.1.7",
-      "hash": "sha256-6a77a5468a8cacf4a1038271c99398ab1f0653f9d5cedd2f6adda74a073d260d",
+      "version": "0.1.6",
+      "hash": "sha256-cc46e2d40c52615a88a53f87c62f60ddc6944cacad55427a83f9191cd0900410",
       "description": "Mutation-guided test pruning: a fixer proposes deleting redundant tests and strengthening weak ones, an independent reviewer accepts or rejects each proposal, and prune.py applies the accepted batch behind a cold mutation run and the ratchet. Use when the user says \"prune tests\", \"test-prune\", \"mutation test pruning\" or \"strengthen weak tests\", or when a scheduled job runs it with `--unattended`."
     },
     {
       "name": "test-weigh-in",
-      "version": "0.1.5",
-      "hash": "sha256-fa3829a66f1e32760a5ac8a6d848b2167dee413f2b953dec88198fe2fc7152fe",
+      "version": "0.1.4",
+      "hash": "sha256-6e1d9f9c80e518edc7616cbc6770f0cfac174820559b36b1ac3479c92898fbf8",
       "description": "Measure a Python/pytest suite and score it on five pillars (Protection against regressions, Resistance to refactoring, Fast feedback, Maintainability, Economy), writing a JSON snapshot and a static HTML dashboard. Read-only. Use when the user asks to weigh, measure or score their test suite."
     },
     {
