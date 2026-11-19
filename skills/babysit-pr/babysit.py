@@ -666,8 +666,9 @@ def load_merge_risk(base=None):
     fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
-def exam_cmd(repo, number):
-    base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]["ref"]
+def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
+    info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    base, head = info["base"]["ref"], info["head"]["sha"]  # a head that moves after this is requested again
     # Only an install the PR cannot change: next to this skill, or under $HOME, outside the checkout.
     root = checkout_root()
     script = next((d / "pr_exam.py" for d in [Path(__file__).resolve().parent.parent / "pr-exam",
@@ -696,6 +697,12 @@ def exam_cmd(repo, number):
         fail("PR_EXAM_HOST is not set: point it at the pr-exam host")
     if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
         return print("the PR is not ready: CI is not green or a review is open")
+    answer = request_exam(host, repo, number)
+    if wait:
+        wait_for_exam(repo, number, session, lease_host, host, answer, head)
+
+
+def request_exam(host, repo, number):
     req = urllib.request.Request(host.rstrip("/") + "/api/exam", method="POST",
                                  data=json.dumps({"repo": repo, "pr": int(number)}).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -704,11 +711,35 @@ def exam_cmd(repo, number):
             answer = json.load(r)
     except (urllib.error.URLError, OSError) as e:
         fail(f"pr-exam host unreachable at {host}: {e}")
-    print(json.dumps({k: answer.get(k) for k in ("url", "state", "debt", "detail")}))
+    print(json.dumps({k: answer.get(k) for k in ("url", "state", "debt", "detail")}), flush=True)
     if answer.get("state") == "skipped":
         print("exam bypassed")
     elif answer.get("debt"):
         print("exam deferred")
+    return answer
+
+
+def wait_for_exam(repo, number, session, lease_host, host, answer, head):
+    """No time limit: renew the lease, follow the head, end on success, a closed PR or a lost lease."""
+    pr = Pr(repo, number)
+    while True:
+        info = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))
+        if info.get("merged"):
+            fail(f"PR {number} is merged")
+        if info["state"] != "open":
+            fail(f"PR {number} is {info['state']}")
+        lease("check", repo, number, session, lease_host)  # names the holder when it is not us
+        lease("renew", repo, number, session, lease_host)
+        sha = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))["head"]["sha"]  # it may have moved during renewal
+        if sha != head:
+            answer, head = request_exam(host, repo, number), sha
+        if answer.get("state") == "passed":
+            return print("success")
+        out = gh("api", f"{pr.repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
+        latest = next((st for st in map(json.loads, out.splitlines()) if st["context"] == EXAM_CONTEXT), None)
+        if latest and latest["state"] == "success":
+            return print("success")
+        time.sleep(float(os.environ.get("BABYSIT_EXAM_POLL_SECONDS", "60")))
 
 
 JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
@@ -1018,6 +1049,9 @@ def main():
     xp = sub.add_parser("exam")
     xp.add_argument("--repo", required=True)
     xp.add_argument("--pr", required=True)
+    xp.add_argument("--wait", action="store_true")
+    xp.add_argument("--session")
+    xp.add_argument("--host", help="lease host")
     rp = sub.add_parser("round")
     rp.add_argument("verb", choices=["start", "record-failure"])
     for a in ("repo", "pr", "session", "host"):
@@ -1058,7 +1092,9 @@ def main():
     elif a.cmd == "checks":
         checks_cmd(a.repo, a.pr, a.wait_minutes)
     elif a.cmd == "exam":
-        exam_cmd(a.repo, a.pr)
+        if a.wait and not (a.session and a.host):
+            ap.error("--wait needs --session and --host")
+        exam_cmd(a.repo, a.pr, a.wait, a.session, a.host)
     elif a.cmd == "round":
         if a.verb == "record-failure" and not (a.check and a.error):
             ap.error("record-failure needs --check and --error")
