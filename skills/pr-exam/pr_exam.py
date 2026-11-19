@@ -4,6 +4,7 @@ import argparse
 import datetime
 import fcntl
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -258,7 +259,7 @@ def read_records(directory):
         except ValueError as e:
             raise ValueError(f"{path.name}: malformed record ({e})") from None
         out.append((int(m.group(1)), path, f))
-    return out
+    return sorted(out, key=lambda r: r[0])  # oldest first: when two records are active, the newest counts
 
 
 def learned_states(directory, today):
@@ -286,6 +287,10 @@ def learned(args):
 
 def record(args):
     exam, result = load(args.exam), load(args.result)
+    bad = [q.get("concept") for q in result["questions"] if not is_slug(q.get("concept"))]
+    if bad:
+        print("\n".join(f"concept {c!r}: not a slug, so it cannot name a record" for c in bad), file=sys.stderr)
+        return 1
     explanations = {qid: k["explanation"] for qid, k in exam["key"].items()}
     source = f"{exam['repo']}#{exam['pr']}"
     Path(args.records).mkdir(parents=True, exist_ok=True)
@@ -300,6 +305,13 @@ def record(args):
         return write_records(args, result, existing, explanations, source)
 
 
+def publish(path, text):
+    """Write a whole file or nothing: readers never see a partial record."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def write_records(args, result, existing, explanations, source):
     n = max([r[0] for r in existing], default=0)
     for q in result["questions"]:
@@ -307,13 +319,16 @@ def write_records(args, result, existing, explanations, source):
             continue
         n += 1
         concept = q["concept"]
+        state = "demonstrated" if q["points"] == 1 else "misconception"
+        # The successor is published before its predecessor is superseded: a failure in between
+        # leaves two active records, and the newest one counts, so no state is ever lost.
+        publish(Path(args.records) / f"{n:04d}-{concept}.md",
+                f"---\nconcept: {concept}\nstate: {state}\ndate: {args.today}\nsource: {source}\n"
+                f"status: active\n---\n# {concept}\n\n{explanations.get(q['id'], '')}\n")
         for _, path, f in existing:
             if f["concept"] == concept and f["status"] == "active":
-                path.write_text(re.sub(r"^status: *active *$", f"status: superseded by LR-{n:04d}", path.read_text(), count=1, flags=re.M))
-        state = "demonstrated" if q["points"] == 1 else "misconception"
-        (Path(args.records) / f"{n:04d}-{concept}.md").write_text(
-            f"---\nconcept: {concept}\nstate: {state}\ndate: {args.today}\nsource: {source}\n"
-            f"status: active\n---\n# {concept}\n\n{explanations.get(q['id'], '')}\n")
+                publish(path, re.sub(r"^status: *active *$", f"status: superseded by LR-{n:04d}",
+                                     path.read_text(), count=1, flags=re.M))
         existing = [e for e in existing if e[2]["concept"] != concept or e[2]["status"] != "active"]
     return 0
 
