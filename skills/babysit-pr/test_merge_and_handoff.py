@@ -57,11 +57,15 @@ def commit(sha, message="feat: x", author="jesdi", parents=("p0",)):
     return {"sha": sha, "date": iso(T), "message": message, "author": author, "parents": list(parents)}
 
 
-def checkout(w, shas, policy):
+EXAM_OK = {"context": "exam", "state": "success", "description": "passed"}
+
+
+def checkout(w, shas, policy, exam_config=None):
     """A PR checkout: origin/main holds the policy, each sha is a branch named after it (so a fake
     short sha resolves) that adds one logic file."""
     git(w.project, "init", "-q", "-b", "work")
-    base = git_commit(w.project, {"README.md": "hi\n", ".merge-risk.json": json.dumps(policy)}, "base")
+    base = git_commit(w.project, {"README.md": "hi\n", ".merge-risk.json": json.dumps(policy),
+                                           **({".pr-exam.json": exam_config} if exam_config else {})}, "base")
     git(w.project, "update-ref", "refs/remotes/origin/main", base)
     for sha in shas:
         git(w.project, "checkout", "-q", "-b", sha, base)
@@ -77,16 +81,18 @@ def owner_says(w, text, login="jesdi"):
     w.state.write_text(json.dumps(st))
 
 
-def world(tmp_path, head="a1b2c3d", commits=None, body=BLOCK, policy=None, approvals=(), pr_risk=True, **state):
+def world(tmp_path, head="a1b2c3d", commits=None, body=BLOCK, policy=None, approvals=(), pr_risk=True,
+          exam_config=None, **state):
     w = World(tmp_path, labels=["babysitting"], pr_risk=pr_risk)
     st = w.github()
     green = [{"name": "ci", "status": "completed", "conclusion": "success",
               "created_at": iso(T), "started_at": iso(T)}]
     st.update(head_sha=head, title="feat: parse empty rows", body=body,  # the live PR body is the gated one
-              commits=commits or [commit(head)], **{"check_runs": {head: green}, "private": True, **state})
+              commits=commits or [commit(head)], **{"check_runs": {head: green}, "private": True,
+                 "statuses": {c["sha"]: [EXAM_OK] for c in commits or [commit(head)]}, **state})
     w.state.write_text(json.dumps(st))
     (tmp_path / "body.md").write_text(body)
-    checkout(w, [c["sha"] for c in st["commits"]], policy or {"maxAutoRisk": 5})
+    checkout(w, [c["sha"] for c in st["commits"]], policy or {"maxAutoRisk": 5}, exam_config)
     if policy:  # the same policy also feeds `--policy`, the merge method
         w.policy_file = tmp_path / "policy.json"
         w.policy_file.write_text(json.dumps(policy))

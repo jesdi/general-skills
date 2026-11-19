@@ -8,6 +8,7 @@ clock. Among valid lease comments the lowest comment id holds the lease; the lab
 import argparse
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -666,9 +667,8 @@ def load_merge_risk(base=None):
     fail(f"pr-risk is not installed. Run: {INSTALL}")
 
 
-def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
-    info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
-    base, head = info["base"]["ref"], info["head"]["sha"]  # a head that moves after this is requested again
+def exam_enabled(base):
+    """Whether exams run for this repo, from the config on origin/<base>; fails when it cannot be known."""
     # Only an install the PR cannot change: next to this skill, or under $HOME, outside the checkout.
     root = checkout_root()
     script = next((d / "pr_exam.py" for d in [Path(__file__).resolve().parent.parent / "pr-exam",
@@ -689,9 +689,17 @@ def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
             fail(f".pr-exam.json on origin/{base} is invalid:\n{p.stderr.strip()}")
         config = json.loads(p.stdout)
     if not config["enabled"]:
-        return print("exams are disabled for this repo")
+        return False
     if script is None:
         fail(f"pr-exam is not installed. Run: {EXAM_INSTALL}")
+    return True
+
+
+def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
+    info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    base, head = info["base"]["ref"], info["head"]["sha"]  # a head that moves after this is requested again
+    if not exam_enabled(base):
+        return print("exams are disabled for this repo")
     host = os.environ.get("PR_EXAM_HOST")
     if not host:
         fail("PR_EXAM_HOST is not set: point it at the pr-exam host")
@@ -951,6 +959,12 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
 
     if pr["head"]["sha"] != sha:
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
+    exams = exam_enabled(base)
+    if exams:  # every approval path needs the pass of this exact sha; a refusal is no handoff
+        out = gh("api", "--paginate", f"repos/{repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
+        exam = next((x for x in map(json.loads, out.splitlines()) if x["context"] == EXAM_CONTEXT), None)
+        if not exam or exam["state"] != "success":
+            fail("exam not passed")
     if session_approved:
         own_lease(repo, number, session)
         gate = "gate: explicit session authorization"
@@ -1028,6 +1042,13 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     pr.post("🤖 Merged by babysit-pr: " + (
         f"session {session} authorized merge at {sha}" if session_approved else
         f"{risk_line}gate passed, judge {judge_label}" if approved is None else f"owner approved {approved}"))
+    if exams and (host := os.environ.get("PR_EXAM_HOST")):  # lets the host clean up; never fails the merge
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                host.rstrip("/") + "/api/exam", method="POST", data=json.dumps({"repo": repo, "pr": int(number)}).encode(),
+                headers={"Content-Type": "application/json"}), timeout=30).close()
+        except (OSError, ValueError, http.client.HTTPException):
+            pass
     if session:
         release(pr, session)
 
