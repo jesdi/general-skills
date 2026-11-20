@@ -42,7 +42,7 @@ SUCCESS = [{"context": "exam", "state": "success", "description": "passed"}]
 GREEN_RUN = [{"name": "test", "status": "completed", "conclusion": "success", "started_at": iso(T)}]
 
 WRAPPER = '''#!/usr/bin/env python3
-import json, os, re, sys
+import json, os, sys
 from datetime import datetime, timedelta
 STATE, LOG = os.environ["GH_FAKE_STATE"], os.environ["WAIT_LEASE_LOG"]
 st = json.load(open(STATE))
@@ -60,13 +60,7 @@ json.dump(st, open(STATE, "w"))
 with open(LOG, "a") as f:
     f.write(json.dumps({"minutes": minutes, "now": st["now"], "argv": sys.argv[1:],
                         "comments": [c for c in st["comments"]]}) + "\\n")
-src = open(os.environ["WAIT_REAL_GH"]).read()
-a, b = '"state": "open"', '"state": "OPEN"'
-assert a in src and b in src
-src = src.replace(a, '"state": "open" if st.get("pr_state", "open") == "open" else "closed", '
-                     '"merged": st.get("pr_state") == "merged"')
-src = src.replace(b, '"state": st.get("pr_state", "open").upper()')
-exec(compile(src, "gh", "exec"), {"__name__": "__main__"})
+os.execv(sys.executable, [sys.executable, os.environ["WAIT_REAL_GH"], *sys.argv[1:]])
 '''
 
 

@@ -10,6 +10,8 @@ State is the JSON file $GH_FAKE_STATE:
   repo_labels  [name] labels that exist in the repository (optional; when set, assigning a label
              that is not in it fails 422 like GitHub, and `POST repos/O/R/labels -f name=X` creates it)
   head_sha   head commit of every PR (default "head1")
+  pr_state   "open" (default), "closed" or "merged": the PR's REST `state` ("closed" when merged)
+             and `merged`, and `gh pr view`'s upper-case `state`
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
   statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
              (only the first 30 without --paginate, like GitHub's default page)
@@ -169,7 +171,9 @@ def api(args):
         log(False); return emit({"login": st["user"]}, jq, include)
     if m := re.fullmatch(rf"(?:issues|pulls)/{n}", path) and method == "GET":
         log(False)
-        return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
+        pr_state = st.get("pr_state", "open")
+        return emit({"number": int(path.split("/")[1]), "state": "open" if pr_state == "open" else "closed",
+                     "merged": pr_state == "merged", "labels": labels_obj(),
                      "user": {"login": st["user"]},
                      "title": st.get("title", ""), "body": st.get("body", ""),
                      "head": {"sha": st.get("head_sha", "head1"), "ref": st.get("head_ref", "feature")},
@@ -356,7 +360,7 @@ def pr_like(args):
         comments = [{"id": str(c["id"]), "body": c["body"], "author": c["user"],
                      "createdAt": c["created_at"], "updatedAt": c["updated_at"]} for c in visible()]
         log(False)
-        return emit({"labels": labels_obj(), "comments": comments, "state": "OPEN",
+        return emit({"labels": labels_obj(), "comments": comments, "state": st.get("pr_state", "open").upper(),
                      "title": st.get("title", ""), "body": st.get("body", ""),
                      "headRefOid": st.get("head_sha", "head1")}, jq)
     if verb == "merge":
