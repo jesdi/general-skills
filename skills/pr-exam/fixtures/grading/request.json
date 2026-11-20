@@ -1,0 +1,10 @@
+{
+  "mode": "grade",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "diff": "../twelve-concepts/diff.patch",
+  "questions": "questions.json",
+  "answers": "answers.json",
+  "out": "grades.json"
+}

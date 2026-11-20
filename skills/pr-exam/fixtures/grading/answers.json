@@ -1,10 +1,5 @@
 {
   "q1": "Two workers sometimes ran the nightly sync at once and overwrote each other's results; the lease lets only one of them run it.",
   "q2": "The paused worker still thinks it is the leader, so the lease alone does not stop it. Each write passes the fencing token from acquire and the store raises LeaseLost when it is not the current token.",
-  "q3": 1,
-  "q4": 2,
-  "q5": 0,
-  "q6": "It renews the lease after each round of work.",
-  "q7": 1,
-  "q8": 0
+  "q6": "It renews the lease after each round of work."
 }

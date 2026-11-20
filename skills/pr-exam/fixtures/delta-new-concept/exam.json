@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "mode": "delta",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "cccccccccccccccccccccccccccccccccccccccc",
+  "concepts": [
+    {"id": "retry-budget", "title": "Retry budget for taking the lease", "kind": "why"},
+    {"id": "exponential-backoff", "title": "Exponential backoff between acquire attempts", "kind": "concept"}
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "concept": "retry-budget",
+      "type": "text",
+      "prompt": "A worker that finds the lease held now retries within a bounded budget instead of trying once. Why is one attempt not enough, why is retrying without limit not acceptable either, and what does the worker do when the budget runs out?"
+    },
+    {
+      "id": "q2",
+      "concept": "exponential-backoff",
+      "type": "choice",
+      "prompt": "While a worker keeps failing to take the lease, how does the wait between its attempts change?",
+      "options": [
+        "It stays the same throughout",
+        "It grows by fixed steps",
+        "It doubles after each failure",
+        "It shrinks after each failure"
+      ]
+    }
+  ],
+  "key": {
+    "q1": {
+      "rubric": {
+        "pass": "Names both failure modes the budget bounds: (1) giving up after a single attempt means that if the current leader dies, nobody takes over and the sync stays unrun until the next night; (2) retrying forever would hammer the store. Also says that once the budget is exhausted the worker skips this run (does not lead, returns without syncing).",
+        "partial": "Names only one of the two failure modes (the sync left unrun after a leader dies, or the store being hammered by endless retries), or names both but does not say that the worker skips the run when the budget is exhausted."
+      },
+      "explanation": "With a single attempt, a worker that starts while another leads gives up at once, so a leader that later dies leaves the sync unrun until the next night. Unlimited retries would hammer the store. The budget bounds both: after a fixed number of tries the worker gets no token and skips this run.",
+      "hunk": "+    A worker that starts while another one leads used to give up at once, so a\n+    leader that died left the sync unrun until the next night. Retrying forever\n+    would hammer the store instead. The budget bounds both: after `attempts`\n+    tries with doubling delays the caller skips this run."
+    },
+    "q2": {
+      "answer": 2,
+      "explanation": "The delay is the base delay times two to the power of the attempt number, so it doubles after every failed attempt: exponential backoff, which eases the load on the store the longer the lease stays held.",
+      "hunk": "+        sleep(base_delay * 2 ** attempt)"
+    }
+  }
+}
