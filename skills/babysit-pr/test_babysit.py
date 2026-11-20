@@ -60,6 +60,9 @@ class World:
             stage.mkdir(parents=True)
             for name in ("babysit.py", "judge-prompt.md"):
                 shutil.copy(SCRIPT.parent / name, stage / name)
+            # pr-exam stays installed: exams are on by default, and every real run past `exam` has it
+            (stage.parent / "pr-exam").mkdir()
+            shutil.copy(SCRIPT.parent.parent / "pr-exam" / "pr_exam.py", stage.parent / "pr-exam")
             self.script = stage / "babysit.py"
         if pr_risk:
             skill = self.home / ".agents" / "skills" / "pr-risk"
