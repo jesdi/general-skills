@@ -114,7 +114,8 @@ def wait(repo, number, head, keep_lease):
     A host answer never ends the wait: it may be about an earlier head. A head that moved is requested
     again at once. While the status stays pending the host is asked again 2, 4, 8, then every 16
     polls after the last request, whatever it answered: a job that fails after an `open` answer is
-    retried by the host only when asked again.
+    retried by the host only when asked again. A host that cannot be reached then is said once per
+    request and the wait goes on, on the same schedule.
     """
     pull = lambda: json.loads(gh_api(f"repos/{repo}/pulls/{number}"))
     asks, polls = 1, 0  # requests for this head; polls since the last one
@@ -127,7 +128,10 @@ def wait(repo, number, head, keep_lease):
         polls += 1
         if sha != head or polls >= min(2 ** asks, 16):
             asks = 1 if sha != head else asks + 1
-            request(repo, number)
+            try:
+                request(repo, number)
+            except ExamError as e:
+                print(e, flush=True)
             head, polls = sha, 0
         if passed(repo, sha):
             return print("success")

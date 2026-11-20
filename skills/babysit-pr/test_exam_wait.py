@@ -16,6 +16,8 @@ Interface under test:
     head's `exam` still pending  ask the host again whatever it answered last (a job may fail after
                                  an `open` answer; the contract: "the next request retries"), after
                                  2, 4, 8, then every 16 polls; an `error` answer's `detail` is printed
+    host unreachable mid-wait    one line saying so per request; the wait goes on, same schedule
+                                 (the first request, before --wait, still exits non-zero)
     never prints "CI stalled" for a pending `exam`.
 
 Controllable clock: the `gh` first on PATH is a wrapper around fixtures/gh. Every gh call advances
@@ -72,9 +74,11 @@ class HeadHost(FakeHost):
         super().__init__()
 
     @property
-    def answer(self):  # read once per request: `asked` gets GitHub's minute of each one
+    def answer(self):  # read once per request: `asked` gets GitHub's minute of each one; None while host_down
         st = json.loads(Path(self._state_file).read_text())
         self.asked.append((parse(st["now"]) - T) / MIN)
+        if st.get("host_down"):
+            return None
         return {**self._base, "head_sha": st["head_sha"], **self._answers.get(st["head_sha"], {})}
 
     @answer.setter
@@ -321,3 +325,17 @@ def test_a_job_failing_after_an_open_answer_is_asked_again_and_the_wait_ends_on_
     assert "grading crashed" in p.output
     assert all(r["body"] == {"repo": "jesdi/demo", "pr": 58} for r in host.requests)
 
+
+
+def test_a_host_down_for_a_while_mid_wait_neither_ends_the_wait_nor_changes_its_schedule(tmp_path):
+    w = world(tmp_path, timeline=[(50, {"host_down": True}), (300, {"host_down": False}),
+                                  (520, {"statuses": {"abc123": SUCCESS}})])
+    with HeadHost(w.state, {}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert p.stdout.strip().endswith("success"), p.output
+    assert minutes(w) >= 520, minutes(w)
+    down = [m for m in host.asked if 50 <= m < 300]
+    assert len(down) == 2, host.asked  # two re-asks fell while the host was down
+    assert sum("unreachable" in line for line in p.output.splitlines()) == len(down), p.output
+    assert polls_between_requests(w, host) == [2, 4, 8], host.asked  # the same backoff throughout

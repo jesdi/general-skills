@@ -1,6 +1,7 @@
 """Fake pr-exam host for babysit-pr tests: `POST /api/exam`, as in agent-ops
 specs/pr-exam-host/design.md "Route contract". Answers every POST with `answer` (200) and records
-each request as {"path", "body"} in `requests`.
+each request as {"path", "body"} in `requests`. An `answer` of None drops the connection unanswered,
+as a host that is down.
 
     with FakeHost({"state": "open", ...}) as host:   # host.url is the PR_EXAM_HOST value
 """
@@ -21,7 +22,10 @@ class FakeHost:
             def do_POST(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
                 host.requests.append({"path": self.path, "body": json.loads(body or b"null")})
-                data = json.dumps(host.answer).encode()
+                answer = host.answer
+                if answer is None:
+                    return
+                data = json.dumps(answer).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
