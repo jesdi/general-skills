@@ -27,13 +27,6 @@ def gh_api(*args):
     return p.stdout
 
 
-def says_off(config):
-    try:
-        return json.loads(config).get("enabled") is False
-    except (ValueError, AttributeError):
-        return False
-
-
 def validated(config, script, base):
     """`config` as the trusted pr_exam.py reads it; an invalid file is never read as "exams off"."""
     with tempfile.NamedTemporaryFile("w", suffix=".json", dir="/tmp") as f:  # never TMPDIR: it may be the checkout
@@ -49,20 +42,16 @@ def enabled(base, script):
     """Whether exams run for the repo, from `.pr-exam.json` on origin/<base>. A config only on the PR
     branch never counts.
 
-    `script` is a trusted pr_exam.py, or None when there is none. Without one, a config that says
-    `"enabled": false` is still honoured (that one boolean is read, nothing else): a repo that
-    turned exams off does not need pr-exam. No config, or any other one, needs the script.
+    `script` is a trusted pr_exam.py, or None when there is none. It alone reads the config, so
+    without it the run stops, whatever the file says (`"enabled": false` included).
     """
     known = subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True)
     if known.returncode:
         raise ExamError(f"origin/{base} is not readable: run git fetch origin")
-    shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
-    config = shown.stdout if shown.returncode == 0 else None
     if script is None:
-        if config is not None and says_off(config):
-            return False
         raise ExamError("pr-exam is not installed. Run: npx @jesdi/skills-cli install pr-exam")
-    return config is None or validated(config, script, base)["enabled"]
+    shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
+    return shown.returncode != 0 or validated(shown.stdout, script, base)["enabled"]
 
 
 def required(repo, script):

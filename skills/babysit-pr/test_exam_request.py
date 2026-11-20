@@ -128,8 +128,12 @@ def test_exams_turned_off_say_disabled_and_ask_nothing(tmp_path):
     assert host.requests == []
 
 
-def test_an_invalid_bypass_mode_stops_naming_the_field_and_the_modes(tmp_path):
-    w = Exam(tmp_path, base_config='{"bypassLabels": {"exam:skip": "maybe"}}')
+INVALID_AND_OFF = '{"enabled": false, "bypassLabels": {"exam:skip": "maybe"}}'
+
+
+@pytest.mark.parametrize("config", ['{"bypassLabels": {"exam:skip": "maybe"}}', INVALID_AND_OFF])
+def test_an_invalid_bypass_mode_stops_naming_the_field_and_the_modes(tmp_path, config):
+    w = Exam(tmp_path, base_config=config)  # `"enabled": false` never makes an invalid file "exams off"
     with FakeHost() as host:
         p = w.exam(host.url)
     assert p.returncode != 0, p.output
@@ -305,20 +309,14 @@ def test_an_install_committed_on_the_base_branch_is_used_not_the_working_tree_on
     assert len(host.requests) == 1
 
 
-def test_exams_turned_off_need_no_pr_exam_install(tmp_path):
-    w = Exam(tmp_path, base_config='{"enabled": false}')
-    with FakeHost() as host:
-        p = w.exam(host.url, script=_stage(tmp_path))
-    assert p.returncode == 0, p.output
-    assert "disabled" in p.output.lower(), p.output
-    assert host.requests == []
-
-
-@pytest.mark.parametrize("config", ['{"enabled": true}', '{"enabled": "false"}', '{"bypassLabels": {}}', "[]", "{"])
-def test_any_other_config_needs_the_install_to_validate_it(tmp_path, config):
+@pytest.mark.parametrize("config", ['{"enabled": false}', INVALID_AND_OFF, '{"enabled": true}',
+                                    '{"enabled": "false"}', '{"bypassLabels": {}}', "[]", "{"])
+def test_every_config_needs_the_install_to_decide_exams_turned_off_included(tmp_path, config):
+    # only pr_exam.py reads the config: without it nothing, not even `"enabled": false`, is trusted
     w = Exam(tmp_path, base_config=config)
     with FakeHost() as host:
         p = w.exam(host.url, script=_stage(tmp_path))
     assert p.returncode != 0, p.output
     assert PR_EXAM_INSTALL in p.output
+    assert "disabled" not in p.output.lower(), p.output
     assert host.requests == []
