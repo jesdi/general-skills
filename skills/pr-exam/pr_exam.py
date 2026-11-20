@@ -14,7 +14,6 @@ import urllib.request
 from pathlib import Path
 
 KINDS = ["why", "concept", "architecture", "risk", "behaviour"]  # highest priority first
-MODES = ("first", "followup", "delta")
 QUESTION_FIELDS = {"id", "concept", "type", "prompt", "options"}
 MAX_QUESTIONS = 8
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
@@ -33,6 +32,11 @@ def broken(rules):
     return [message for is_broken, message in rules if is_broken]
 
 
+def rule_of(table, name):
+    """table[name]; None for a name the table does not hold, whatever its JSON type."""
+    return table.get(name) if isinstance(name, str) else None
+
+
 def options_ok(options):
     return isinstance(options, list) and all(nonempty(o) for o in options)
 
@@ -47,7 +51,7 @@ def shape_errors(q):
     return broken((
         (not nonempty(qid), f"question {qid!r}: id must be a non-empty string"),
         (not nonempty(q.get("prompt")), f"question {qid}: prompt must be a non-empty string"),
-        (q.get("type") not in ("choice", "text"), f"question {qid}: type must be choice or text"),
+        (rule_of(QUESTION_TYPES, q.get("type")) is None, f"question {qid}: type must be choice or text"),
         ("options" in q and not options_ok(q["options"]), f"question {qid}: options must be non-empty strings"),
     ))
 
@@ -65,8 +69,7 @@ def served_errors(exam):
     version = exam.get("version")
     return broken((
         (type(version) is not int or version != 1, "version must be 1"),
-        (not nonempty(exam.get("repo")), "repo must be a non-empty string"),
-        (not nonempty(exam.get("head_sha")), "head_sha must be a non-empty string"),
+        *((not nonempty(exam.get(f)), f"{f} must be a non-empty string") for f in ("repo", "head_sha")),
         (type(exam.get("pr")) is not int, "pr must be an integer"),
     )) + questions_shape_errors(exam.get("questions"))
 
@@ -75,12 +78,10 @@ def request_errors(exam, request):
     """The exam answers the request it was generated for."""
     mode = exam.get("mode")
     return broken((
-        (mode not in MODES, "mode must be first, followup or delta"),
+        (rule_of(MODE_RULES, mode) is None, "mode must be first, followup or delta"),
         ("mode" in request and mode != request["mode"],
          f"mode {mode!r} differs from the request's {request.get('mode')!r}"),
-        (exam.get("repo") != request.get("repo"), "repo differs from the request's"),
-        (exam.get("pr") != request.get("pr"), "pr differs from the request's"),
-        (exam.get("head_sha") != request.get("head_sha"), "head_sha differs from the request's"),
+        *((exam.get(f) != request.get(f), f"{f} differs from the request's") for f in ("repo", "pr", "head_sha")),
     ))
 
 
@@ -99,8 +100,8 @@ def concept_errors(concepts):
 
 
 def count_errors(mode, n):
-    """A delta may ask nothing; every exam asks at most MAX_QUESTIONS."""
-    low = 0 if mode == "delta" else 1
+    """Every exam asks at least its mode's minimum, and at most MAX_QUESTIONS."""
+    low, _ = rule_of(MODE_RULES, mode) or (1, None)
     return [] if low <= n <= MAX_QUESTIONS else [f"question count {n} is outside the allowed range"]
 
 
@@ -120,13 +121,8 @@ def choice_options_errors(q):
     ))
 
 
-def options_errors(q):
-    """A choice question has distinct options of one word count; a text question has none."""
-    if q.get("type") == "choice":
-        return choice_options_errors(q)
-    if q.get("type") == "text" and "options" in q:
-        return [f"question {q.get('id')}: text question must not have options"]
-    return []
+def text_options_errors(q):
+    return [f"question {q.get('id')}: text question must not have options"] if "options" in q else []
 
 
 def is_index(a, options):
@@ -145,19 +141,21 @@ def text_key_errors(q, entry):
     qid, rubric = q.get("id"), entry.get("rubric")
     rubric = rubric if isinstance(rubric, dict) else {}
     return broken((
-        (not nonempty(rubric.get("pass")), f"key {qid}: rubric.pass must be non-empty"),
-        (not nonempty(rubric.get("partial")), f"key {qid}: rubric.partial must be non-empty"),
+        *((not nonempty(rubric.get(part)), f"key {qid}: rubric.{part} must be non-empty")
+          for part in ("pass", "partial")),
         ("answer" in entry, f"key {qid}: text question must not have an answer"),
     ))
 
 
-def typed_key_errors(q, entry):
-    """A choice key has an answer index and no rubric; a text key has a rubric and no answer."""
-    if q.get("type") == "choice":
-        return choice_key_errors(q, entry)
-    if q.get("type") == "text":
-        return text_key_errors(q, entry)
-    return []
+# Per question type: the rule of its options, and the rule of its key entry. A choice has distinct
+# options of one word count, an answer index and no rubric; a text has no options, a rubric and no answer.
+QUESTION_TYPES = {"choice": (choice_options_errors, choice_key_errors),
+                  "text": (text_options_errors, text_key_errors)}
+
+
+def type_rules(q):
+    """(options rule, key rule) of the question's type; a type that is none of them has no rule to break."""
+    return rule_of(QUESTION_TYPES, q.get("type")) or (lambda q: [], lambda q, entry: [])
 
 
 def key_errors(q, key, diff):
@@ -168,10 +166,9 @@ def key_errors(q, key, diff):
         return [f"key {qid}: entry must be an object"] if qid in key else []
     hunk = entry.get("hunk")
     return broken((
-        (not nonempty(entry.get("explanation")), f"key {qid}: explanation must be non-empty"),
-        (not nonempty(hunk), f"key {qid}: hunk must be non-empty"),
+        *((not nonempty(entry.get(f)), f"key {qid}: {f} must be non-empty") for f in ("explanation", "hunk")),
         (nonempty(hunk) and hunk not in diff, f"key {qid}: hunk is not in the diff"),
-    )) + typed_key_errors(q, entry)
+    )) + type_rules(q)[1](q, entry)
 
 
 def question_errors(q, kinds, key, diff):
@@ -179,7 +176,7 @@ def question_errors(q, kinds, key, diff):
     return broken((
         (bool(extra), f"question {qid}: unexpected field(s) {sorted(extra)}"),
         (q.get("concept") not in kinds, f"question {qid}: concept {q.get('concept')!r} is not a listed concept"),
-    )) + options_errors(q) + key_errors(q, key, diff)
+    )) + type_rules(q)[0](q) + key_errors(q, key, diff)
 
 
 def learned_errors(q, learned):
@@ -255,12 +252,12 @@ def asks_why_as_text(questions, kinds):
     return any(q.get("type") == "text" and kinds.get(q.get("concept")) == "why" for q in questions)
 
 
-def first_errors(questions, kinds):
+def first_errors(questions, kinds, request):
     """A first exam mixes choice and text, and asks a why concept as text."""
     n = len(questions)
-    types = {q.get("type") for q in questions if q.get("type") in ("choice", "text")}
+    types = {q.get("type") for q in questions if rule_of(QUESTION_TYPES, q.get("type"))}
     return broken((
-        (n >= 2 and types != {"choice", "text"}, "a first exam with 2 or more questions needs both choice and text"),
+        (n >= 2 and types != set(QUESTION_TYPES), "a first exam with 2 or more questions needs both choice and text"),
         (n >= 3 and not asks_why_as_text(questions, kinds),
          "a first exam with 3 or more questions needs a text question on a why concept"),
     ))
@@ -272,7 +269,7 @@ def followup_concept_errors(questions, only):
             + [f"concept {cid}: not in only_concepts, so a followup may not ask it" for cid in set(asked) - set(only)])
 
 
-def followup_errors(questions, request):
+def followup_errors(questions, kinds, request):
     """A followup asks exactly the missed concepts, each with a prompt not seen before."""
     prior = request.get("prior_prompts", [])
     return followup_concept_errors(questions, request.get("only_concepts", [])) + [
@@ -280,21 +277,19 @@ def followup_errors(questions, request):
         for q in questions if q.get("prompt") in prior]
 
 
-def delta_errors(kinds, request):
+def delta_errors(questions, kinds, request):
     """A delta lists only concepts no earlier exam covered."""
     prior = request.get("prior_concepts", [])
     return [f"concept {cid}: an earlier exam covered it, so a delta may not list it" for cid in kinds if cid in prior]
 
 
+# Per mode: the fewest questions it may ask, and its own rule over (questions, kinds, request).
+MODE_RULES = {"first": (1, first_errors), "followup": (1, followup_errors), "delta": (0, delta_errors)}
+
+
 def mode_errors(exam, request, kinds):
-    mode, questions = exam.get("mode"), exam["questions"]
-    if mode == "first":
-        return first_errors(questions, kinds)
-    if mode == "followup":
-        return followup_errors(questions, request)
-    if mode == "delta":
-        return delta_errors(kinds, request)
-    return []
+    _, rule = rule_of(MODE_RULES, exam.get("mode")) or (None, lambda *args: [])
+    return rule(exam["questions"], kinds, request)
 
 
 def errors_for(exam, request, diff, learned):
