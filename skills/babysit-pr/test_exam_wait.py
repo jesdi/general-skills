@@ -13,8 +13,9 @@ Interface under test:
                                  head's statuses. A host answer never ends the wait.
     exit non-zero, saying why    the PR is closed or merged; another session holds the lease
     head moved                   POST the host again ({"repo", "pr"}) and wait on the new head
-    host state `error`           print its `detail`, go on waiting and ask the host again (the
-                                 contract: "the next request retries"), each time after a longer pause
+    head's `exam` still pending  ask the host again whatever it answered last (a job may fail after
+                                 an `open` answer; the contract: "the next request retries"), after
+                                 2, 4, 8, then every 16 polls; an `error` answer's `detail` is printed
     never prints "CI stalled" for a pending `exam`.
 
 Controllable clock: the `gh` first on PATH is a wrapper around fixtures/gh. Every gh call advances
@@ -73,13 +74,14 @@ class HeadHost(FakeHost):
     """Answers per current head (read from the fake GitHub state): {head: fields of the answer}."""
 
     def __init__(self, state_file, answers):
-        self._state_file, self._answers = state_file, answers
+        self._state_file, self._answers, self.asked = state_file, answers, []
         super().__init__()
 
     @property
-    def answer(self):
-        head = json.loads(Path(self._state_file).read_text())["head_sha"]
-        return {**self._base, "head_sha": head, **self._answers.get(head, {})}
+    def answer(self):  # read once per request: `asked` gets GitHub's minute of each one
+        st = json.loads(Path(self._state_file).read_text())
+        self.asked.append((parse(st["now"]) - T) / MIN)
+        return {**self._base, "head_sha": st["head_sha"], **self._answers.get(st["head_sha"], {})}
 
     @answer.setter
     def answer(self, value):
@@ -283,11 +285,45 @@ class FailsOnce(HeadHost):
         self._base = value
 
 
-def test_a_host_error_is_asked_again_without_a_new_head(tmp_path):
-    w = world(tmp_path, timeline=[(150, {"statuses": {"abc123": SUCCESS}})])
+def test_a_pending_exam_is_asked_again_after_2_4_8_then_every_16_polls_whatever_the_answer(tmp_path):
+    w = world(tmp_path, timeline=[(1600, {"statuses": {"abc123": SUCCESS}})])  # about 46 polls
     with FailsOnce(w.state, {}) as host:
         p = wait(w, host)
     assert p.returncode == 0, p.output
     assert "session crashed" in p.output
-    assert len(host.requests) == 2, host.requests  # the retry, and no more once the host answers `open`
+    assert polls_between_requests(w, host) == [2, 4, 8, 16, 16], host.asked  # `open` is asked again too
     assert all(r["body"] == {"repo": "jesdi/demo", "pr": 58} for r in host.requests)
+
+
+def polls_between_requests(w, host):
+    """How many polls of the head's status each request came after the one before it."""
+    polls = [s["minutes"] for s in snapshots(w)
+             if any(a.endswith("/statuses") for a in s["argv"]) and s["minutes"] > host.asked[0]]
+    at = [1 + sum(m < r for m in polls) for r in host.asked[1:]]
+    return [b - a for a, b in zip([0] + at, at)]
+
+
+class OpenThenFails(HeadHost):
+    """`open` to the first request; the host's job fails afterwards, so `error` to every later one."""
+
+    @property
+    def answer(self):
+        state = {"state": "open"} if len(self.requests) == 1 else {"state": "error", "detail": "grading crashed"}
+        return {**HeadHost.answer.fget(self), **state}
+
+    @answer.setter
+    def answer(self, value):
+        self._base = value
+
+
+def test_a_job_failing_after_an_open_answer_is_asked_again_and_the_wait_ends_on_success(tmp_path):
+    w = world(tmp_path, timeline=[(150, {"statuses": {"abc123": SUCCESS}})])
+    with OpenThenFails(w.state, {}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert p.stdout.strip().endswith("success"), p.output
+    assert minutes(w) >= 150, minutes(w)
+    assert len(host.requests) >= 2, host.requests  # the head never moved: the wait itself asked again
+    assert "grading crashed" in p.output
+    assert all(r["body"] == {"repo": "jesdi/demo", "pr": 58} for r in host.requests)
+

@@ -695,10 +695,10 @@ def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
         exam.host()  # not configured: stop before asking GitHub anything more
         if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
             return print("the PR is not ready: CI is not green or a review is open")
-        answer = exam.request(repo, number)
+        exam.request(repo, number)
         if wait:  # `check` names the holder when it is not us
             keep_lease = lambda: [lease(verb, repo, number, session, lease_host) for verb in ("check", "renew")]
-            exam.wait(repo, number, info["head"]["sha"], answer, keep_lease)
+            exam.wait(repo, number, info["head"]["sha"], keep_lease)
     except exam.ExamError as e:
         fail(e)
 

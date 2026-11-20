@@ -119,15 +119,16 @@ def passed(repo, sha):
     return latest is not None and latest["state"] == "success"
 
 
-def wait(repo, number, head, answer, keep_lease):
+def wait(repo, number, head, keep_lease):
     """Block until the head's `exam` status is success. No time limit; `keep_lease()` runs on every poll.
 
     A host answer never ends the wait: it may be about an earlier head. A head that moved is requested
-    again. The host retries a failed job only when asked again, so an `error` is asked again after
-    2, 4, 8, then every 16 polls.
+    again at once. While the status stays pending the host is asked again 2, 4, 8, then every 16
+    polls after the last request, whatever it answered: a job that fails after an `open` answer is
+    retried by the host only when asked again.
     """
     pull = lambda: json.loads(gh_api(f"repos/{repo}/pulls/{number}"))
-    errors, polls = int(answer.get("state") == "error"), 0  # error answers in a row; polls since the last answer
+    asks, polls = 1, 0  # requests for this head; polls since the last one
     while True:
         pr = pull()
         if pr.get("merged") or pr["state"] != "open":
@@ -135,9 +136,10 @@ def wait(repo, number, head, answer, keep_lease):
         keep_lease()
         sha = pull()["head"]["sha"]  # it may have moved while the lease was renewed
         polls += 1
-        if sha != head or (errors and polls >= min(2 ** errors, 16)):
-            answer, head, polls = request(repo, number), sha, 0
-            errors = errors + 1 if answer.get("state") == "error" else 0
+        if sha != head or polls >= min(2 ** asks, 16):
+            asks = 1 if sha != head else asks + 1
+            request(repo, number)
+            head, polls = sha, 0
         if passed(repo, sha):
             return print("success")
         time.sleep(float(os.environ.get("BABYSIT_EXAM_POLL_SECONDS", "60")))
