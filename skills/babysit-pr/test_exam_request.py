@@ -289,3 +289,17 @@ def test_a_trusted_install_under_home_still_works(tmp_path):
         p = w.exam(host.url, script=_stage(tmp_path))
     assert p.returncode == 0, p.output
     assert len(host.requests) == 1
+
+
+def test_an_install_committed_on_the_base_branch_is_used_not_the_working_tree_one(tmp_path):
+    w = Exam(tmp_path, base_config='{"enabled": true}')
+    real = (SCRIPT.parent.parent / "pr-exam" / "pr_exam.py").read_text()
+    base = commit(w.project, {".claude/skills/pr-exam/pr_exam.py": real}, "install pr-exam")
+    git(w.project, "update-ref", "refs/remotes/origin/main", base)
+    marker = tmp_path / "marker"
+    (w.project / ".claude/skills/pr-exam/pr_exam.py").write_text(_evil(marker))  # the PR's edit of it
+    with FakeHost({"state": "open"}) as host:
+        p = w.exam(host.url, script=_stage(tmp_path))
+    assert p.returncode == 0, p.output
+    assert not marker.exists(), "the working tree's pr_exam.py was executed"
+    assert len(host.requests) == 1

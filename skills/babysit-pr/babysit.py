@@ -6,6 +6,7 @@ gh user. Expiry is judged against GitHub's clock (the `Date` header of `gh api -
 clock. Among valid lease comments the lowest comment id holds the lease; the label is not the lock.
 """
 import argparse
+import atexit
 import fcntl
 import hashlib
 import http.client
@@ -28,11 +29,10 @@ from pathlib import Path
 
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
-INSTALL = "npx @jesdi/skills-cli install pr-risk"
 EXAM_CONTEXT = "exam"
-EXAM_INSTALL = "npx @jesdi/skills-cli install pr-exam"
-PR_EXAM_DIRS = (".my-skills/pr-exam", ".agents/skills/pr-exam", ".claude/skills/pr-exam")
-PR_RISK_DIRS = (".my-skills/pr-risk", ".agents/skills/pr-risk", ".claude/skills/pr-risk")
+SKILL_DIRS = (".my-skills", ".agents/skills", ".claude/skills")  # where a skill is installed, under $HOME or a repo
+PR_RISK = ("pr-risk", ("merge_risk.py", "merge_policy.py"))  # a skill and the files babysit-pr runs from it
+PR_EXAM = ("pr-exam", ("pr_exam.py",))
 CLAIM_PENDING = "<!-- babysit-pr claim: pending -->\n"
 CLAIM_HELD = "<!-- babysit-pr claim: held -->\n"
 MAX_ROUNDS = 5
@@ -388,13 +388,13 @@ def extend(pr, c, session, host, expires, user):
 
 
 def require_pr_risk(repo, number):
-    if trusted_pr_risk_dirs():
+    if trusted_install(*PR_RISK):
         return
     if subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True).returncode == 0:
         base = gh("api", f"repos/{repo}/pulls/{number}", "--jq", ".base.ref", check=False).strip()
-        if base and base_install(base):
+        if base and trusted_install(*PR_RISK, base):
             return
-    fail(f"pr-risk is not installed. Run: {INSTALL}")
+    fail(not_installed("pr-risk"))
 
 
 def renew(repo, number, session):
@@ -643,30 +643,32 @@ def checkout_root():
     return Path(p.stdout.strip() if p.returncode == 0 else ".").resolve()
 
 
-def trusted_pr_risk_dirs():
-    """Installs a PR cannot change: next to this skill, and under $HOME. Never inside the checkout.
+def not_installed(skill):
+    return f"{skill} is not installed. Run: npx @jesdi/skills-cli install {skill}"
 
-    A path counts only if it, and the module files in it, resolve outside the checkout:
-    HOME may be the checkout, and a symlink may point into it. A project install is
-    read from origin/<base> instead.
+
+def trusted_install(skill, files, base=None):
+    """The folder of an install of `skill` that a PR cannot change, holding `files`; None when there is none.
+
+    Next to this skill or under $HOME, and only if the folder and its files resolve outside the
+    checkout: HOME may be the checkout, and a symlink may point into it. A project install counts
+    only as committed on origin/<base>: it is copied out of git into a folder removed at exit.
     """
     root = checkout_root()
-    home = Path.home()
     outside = lambda p: not p.resolve().is_relative_to(root)
-    return [d.resolve() for d in [Path(__file__).resolve().parent.parent / "pr-risk",
-                                  *(home / n for n in PR_RISK_DIRS)]
-            if d.is_dir() and outside(d)
-            and all((d / n).is_file() and outside(d / n) for n in ("merge_risk.py", "merge_policy.py"))]
-
-
-def base_install(base):
-    """[(file name, bytes)] of a pr-risk install committed on origin/<base>, else None."""
-    names = ("merge_risk.py", "merge_policy.py")
-    for d in PR_RISK_DIRS:  # a project install counts only as committed on origin/<base>
-        shown = [subprocess.run(["git", "show", f"origin/{base}:{d}/{n}"], capture_output=True)
-                 for n in names]
+    for d in [Path(__file__).resolve().parent.parent / skill, *(Path.home() / s / skill for s in SKILL_DIRS)]:
+        if d.is_dir() and outside(d) and all((d / n).is_file() and outside(d / n) for n in files):
+            return d.resolve()
+    for s in SKILL_DIRS if base else ():
+        shown = [subprocess.run(["git", "show", f"origin/{base}:{s}/{skill}/{n}"], capture_output=True)
+                 for n in files]
         if all(p.returncode == 0 for p in shown):
-            return [(n, p.stdout) for n, p in zip(names, shown)]
+            tmp = Path(tempfile.mkdtemp(prefix=f"babysit-{skill}-", dir="/tmp"))  # never TMPDIR: it may be the checkout
+            atexit.register(shutil.rmtree, tmp, ignore_errors=True)
+            for n, p in zip(files, shown):
+                (tmp / n).write_bytes(p.stdout)
+            return tmp
+    return None
 
 
 def import_merge_risk(folder):
@@ -683,32 +685,23 @@ def import_merge_risk(folder):
 
 
 def load_merge_risk(base=None):
-    for d in trusted_pr_risk_dirs():
-        if (d / "merge_risk.py").is_file():
-            return import_merge_risk(d)
-    files = base_install(base) if base else None
-    if files:
-        with tempfile.TemporaryDirectory(prefix="babysit-pr-risk-", dir="/tmp") as tmp:
-            for n, data in files:
-                (Path(tmp) / n).write_bytes(data)
-            return import_merge_risk(tmp)
-    fail(f"pr-risk is not installed. Run: {INSTALL}")
+    folder = trusted_install(*PR_RISK, base)
+    if folder is None:
+        fail(not_installed("pr-risk"))
+    return import_merge_risk(folder)
 
 
 def exam_enabled(base):
     """Whether exams run for this repo, from the config on origin/<base>; fails when it cannot be known."""
-    # Only an install the PR cannot change: next to this skill, or under $HOME, outside the checkout.
-    root = checkout_root()
-    script = next((d / "pr_exam.py" for d in [Path(__file__).resolve().parent.parent / "pr-exam",
-                                               *(Path.home() / n for n in PR_EXAM_DIRS)]
-                   if (d / "pr_exam.py").is_file() and not (d / "pr_exam.py").resolve().is_relative_to(root)), None)
+    folder = trusted_install(*PR_EXAM, base)
+    script = folder / "pr_exam.py" if folder else None
     if subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True).returncode:
         fail(f"origin/{base} is not readable: run git fetch origin")
     shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
     config = {"enabled": True}
     if shown.returncode == 0:  # a config only on the PR branch never counts
         if script is None:
-            fail(f"pr-exam is not installed. Run: {EXAM_INSTALL}")
+            fail(not_installed("pr-exam"))
         with tempfile.TemporaryDirectory(prefix="babysit-pr-exam-", dir="/tmp") as tmp:
             Path(tmp, ".pr-exam.json").write_text(shown.stdout)
             p = subprocess.run([sys.executable, "-I", str(script), "config", str(Path(tmp, ".pr-exam.json"))],
@@ -719,7 +712,7 @@ def exam_enabled(base):
     if not config["enabled"]:
         return False
     if script is None:
-        fail(f"pr-exam is not installed. Run: {EXAM_INSTALL}")
+        fail(not_installed("pr-exam"))
     return True
 
 
