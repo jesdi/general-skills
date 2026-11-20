@@ -9,6 +9,7 @@ status checks do not include `exam`. `lease renew` and `lease check` print none.
 """
 import pytest
 
+from test_babysit_judge import git
 from test_exam_request import Exam
 
 REPO = "jesdi/general-skills"
@@ -75,3 +76,16 @@ def test_no_warning_when_exams_are_disabled(tmp_path):
     _, p = acquire(tmp_path, "quiet", base_config='{"enabled": false}', private=False,
                    required_checks=[])
     assert "pr-exam setup" not in p.output, p.output
+
+
+@pytest.mark.parametrize("broken", ["not-fetched", "invalid-config"])
+def test_an_unreadable_base_config_leaves_acquire_silent(tmp_path, broken):
+    # the advisory never speaks for `exam`/`merge`, which stop on the same cause with the full message
+    w = Exam(tmp_path / "quiet", base_config='{"enabled": "yes"}' if broken == "invalid-config" else None)
+    w.env.pop("PR_EXAM_HOST", None)
+    w.seed(private=False, required_checks=[])
+    if broken == "not-fetched":
+        git(w.project, "update-ref", "-d", "refs/remotes/origin/main")
+    p = w.run("acquire", "s1", repo=REPO)
+    assert p.returncode == 0, p.output
+    assert p.stderr == ""

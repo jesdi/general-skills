@@ -9,6 +9,7 @@ import argparse
 import fcntl
 import hashlib
 import http.client
+import io
 import json
 import os
 import re
@@ -20,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import sys
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -527,11 +528,15 @@ def lease_locked(verb, repo, number, session, host):
 
 
 def warn_exam_not_required(repo, number):
-    """Once per run (acquire only): a public repo with exams on but `exam` not required. Never fails the lease."""
+    """Once per run (acquire only): a public repo with exams on but `exam` not required. Never fails the lease.
+
+    Advisory: when the PR or the config on origin/<base> cannot be read (no fetch yet, invalid file, no
+    install), it stays silent; `exam` and `merge` stop on the same cause with the full message."""
     try:
-        base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]
-        if base.get("repo", {}).get("private") is not False or not exam_enabled(base["ref"]):
-            return
+        with redirect_stderr(io.StringIO()):
+            base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]
+            if base.get("repo", {}).get("private") is not False or not exam_enabled(base["ref"]):
+                return
     except (SystemExit, ValueError, KeyError):
         return
     p = subprocess.run(["gh", "api", f"repos/{repo}/branches/{base['ref']}/protection/required_status_checks"],
