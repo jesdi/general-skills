@@ -37,7 +37,7 @@ describe('Python check runner', () => {
       '-m coverage run -a -m pytest skills/babysit-pr -q',
       '-m coverage run -m pytest skills/test-prune -q',
       '-m coverage run -a -m pytest skills/test-weigh-in -q',
-      '-m coverage run -a -m pytest skills/pr-exam -q',
+      '-m coverage run -m pytest skills/pr-exam -q',
       '-m coverage combine --append -q',
       '-m coverage json -o .crap/python.json',
     ]);

@@ -20,6 +20,6 @@ mkdir -p .crap
 "$python" -m coverage run -a -m pytest skills/babysit-pr -q
 COVERAGE_SUBPROCESS_PATCH=subprocess "$python" -m coverage run -m pytest skills/test-prune -q
 "$python" -m coverage run -a -m pytest skills/test-weigh-in -q
-"$python" -m coverage run -a -m pytest skills/pr-exam -q
+COVERAGE_SUBPROCESS_PATCH=subprocess "$python" -m coverage run -m pytest skills/pr-exam -q
 "$python" -m coverage combine --append -q
 "$python" -m coverage json -o .crap/python.json
