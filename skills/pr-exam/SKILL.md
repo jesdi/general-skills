@@ -21,7 +21,7 @@ stderr.
 | `python3 pr_exam.py learned --records <dir> --today <YYYY-MM-DD>` | Lists concepts known, due or wrong. |
 | `python3 pr_exam.py record --records <dir> --exam <exam.json> --result <result.json> --today <YYYY-MM-DD>` | Writes learning records for a scored attempt. |
 | `python3 pr_exam.py config [<.pr-exam.json>]` | Reads and validates the repo's exam config. |
-| `python3 pr_exam.py setup <owner/repo>` | Run by the operator: makes `exam` a required check of the default branch. |
+| `python3 pr_exam.py setup [--check] <owner/repo>` | Run by the operator: makes `exam` a required check of the default branch. `--check` only reports whether it is one. |
 
 ## Generating an exam
 

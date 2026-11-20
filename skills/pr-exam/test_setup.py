@@ -4,13 +4,19 @@ scenarios "setup on a public repo", "setup on a private repo of a free account")
 Interface under test:
   pr_exam.py setup OWNER/REPO
       Asks the host for its GitHub App: `GET $PR_EXAM_HOST/api/exam/host` answers 200 with
-      {"app_id": <int>}. Then protects the repo's default branch through `gh api`:
-      - adds the required status check `exam`, bound to that App id, keeping every existing required
-        check (with its app) and every other protection setting;
-      - an unprotected default branch gets protection holding only `exam`, enforced for admins;
+      {"app_id": <int>}. Then makes `exam` a required status check of the repo's default branch
+      through `gh api`, changing as little as it can:
+      - a protected branch: one PATCH of the required-status-checks sub-resource, holding the
+        existing checks (each with its app) plus `exam` bound to that App id; no other setting is sent;
+      - a protected branch with status checks off: the same PATCH turns them on; where GitHub
+        answers 404 to it, the context is added first (POST .../contexts) and then bound;
+      - an unprotected default branch: one PUT of a protection holding only `exam`, enforced for admins;
       - GitHub answering "Upgrade to GitHub Pro or make this repository public": no write, exit 0,
         the output says the gate is agent-enforced only;
       - any other GitHub error, or a host that cannot report the App id: non-zero, no write.
+  pr_exam.py setup --check OWNER/REPO
+      Reads only, and needs no host: prints {"required": <bool>, "branch": <default branch>}, true when
+      `exam` is among the default branch's required checks. Non-zero when GitHub would not say.
 `gh` is the fake in ../babysit-pr/fixtures/gh (branch protection state, see its docstring).
 """
 import copy
@@ -100,9 +106,9 @@ class Repo:
                     "GH_FAKE_STATE": str(self.state), "GH_FAKE_LOG": str(self.log)}
         self.env.pop("PR_EXAM_HOST", None)
 
-    def setup(self, repo, host_url):
+    def setup(self, repo, host_url, *flags):
         env = {**self.env, **({"PR_EXAM_HOST": host_url} if host_url else {})}
-        p = subprocess.run([sys.executable, str(SCRIPT), "setup", repo], env=env, text=True,
+        p = subprocess.run([sys.executable, str(SCRIPT), "setup", *flags, repo], env=env, text=True,
                            capture_output=True, cwd=self.state.parent)
         p.output = p.stdout + p.stderr
         return p
@@ -135,7 +141,9 @@ def test_setup_on_a_public_repo_adds_exam_bound_to_the_app_and_keeps_the_rest(tm
     assert rsc["strict"] is True
     assert {k: v for k, v in after.items() if k != "required_status_checks"} == \
         {k: v for k, v in PROTECTION.items() if k != "required_status_checks"}
-    assert any("branches/trunk/protection" in " ".join(a) for a in r.writes())
+    [write] = r.writes()  # one narrow write: the other settings are never sent, so never rewritten
+    assert write[:3] == ["api", "-X", "PATCH"]
+    assert write[3] == "repos/jesdi/agent-ops/branches/trunk/protection/required_status_checks"
 
 
 def test_running_setup_a_second_time_changes_nothing(tmp_path, host):
@@ -147,6 +155,7 @@ def test_running_setup_a_second_time_changes_nothing(tmp_path, host):
     assert p.returncode == 0, p.output
     assert r.github()["protection"] == first["protection"]
     assert r.github()["protection"]["required_status_checks"]["checks"].count(exam_check()) == 1
+    assert len(r.writes()) == 1  # the first run's; the second wrote nothing
 
 
 def test_an_unprotected_default_branch_gets_exam_only_enforced_for_admins(tmp_path, host):
@@ -233,7 +242,7 @@ def test_setup_without_a_host_configured_fails_and_changes_nothing(tmp_path, hos
     assert r.setup("jesdi/agent-ops", host.url).returncode == 0
 
 
-def test_review_allowances_and_push_restrictions_go_back_as_names_without_urls(tmp_path, host):
+def test_review_allowances_and_push_restrictions_are_left_exactly_as_they_were(tmp_path, host):
     people = {"url": "https://api.github.com/x", "users": [{"login": "ana", "url": "u"}],
               "teams": [{"slug": "core", "url": "u"}], "apps": [{"slug": "bot", "url": "u"}]}
     protection = copy.deepcopy(PROTECTION)
@@ -241,15 +250,55 @@ def test_review_allowances_and_push_restrictions_go_back_as_names_without_urls(t
     protection["required_pull_request_reviews"] = {
         "url": "https://api.github.com/r", "required_approving_review_count": 1,
         "dismissal_restrictions": copy.deepcopy(people), "bypass_pull_request_allowances": {"users": [], "teams": []}}
-    r = Repo(tmp_path, private=False, protection=protection)
+    r = Repo(tmp_path, private=False, protection=copy.deepcopy(protection))
     p = r.setup("jesdi/agent-ops", host.url)
     assert p.returncode == 0, p.output
     after = r.github()["protection"]
-    names = {"users": ["ana"], "teams": ["core"], "apps": ["bot"]}
-    assert after["restrictions"] == names
-    assert after["required_pull_request_reviews"] == {
-        "required_approving_review_count": 1, "dismissal_restrictions": names,
-        "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}}
+    assert exam_check() in after["required_status_checks"]["checks"]
+    assert {k: v for k, v in after.items() if k != "required_status_checks"} == \
+        {k: v for k, v in protection.items() if k != "required_status_checks"}
+
+
+def test_checks_named_only_by_context_stay_required_from_any_app(tmp_path, host):
+    r = Repo(tmp_path, private=False, required_checks=["test", "lint"])  # contexts with no app
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode == 0, p.output
+    assert r.github()["protection"]["required_status_checks"]["checks"] == [
+        {"context": "test", "app_id": None}, {"context": "lint", "app_id": None}, exam_check()]
+
+
+def test_an_exam_required_from_another_sender_is_rebound_to_the_app(tmp_path, host):
+    r = Repo(tmp_path, private=False, required_checks=["test", "exam"])
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode == 0, p.output
+    assert r.github()["protection"]["required_status_checks"]["checks"] == [
+        {"context": "test", "app_id": None}, exam_check()]
+
+
+@pytest.mark.parametrize("patch_needs_checks", [False, True], ids=["patch-turns-them-on", "patch-404s"])
+def test_a_protected_branch_with_status_checks_off_gets_exam_and_keeps_the_rest(tmp_path, host, patch_needs_checks):
+    protection = {**copy.deepcopy(PROTECTION), "required_status_checks": None}
+    r = Repo(tmp_path, private=False, protection=copy.deepcopy(protection), patch_needs_checks=patch_needs_checks)
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode == 0, p.output
+    after = r.github()["protection"]
+    assert after["required_status_checks"]["checks"] == [exam_check()]
+    assert {k: v for k, v in after.items() if k != "required_status_checks"} == \
+        {k: v for k, v in protection.items() if k != "required_status_checks"}
+    assert all("required_status_checks" in a[3] for a in r.writes()), r.writes()  # only the sub-resource
+    assert not r.github().get("puts")
+    again = r.setup("jesdi/agent-ops", host.url)
+    assert again.returncode == 0 and r.github()["protection"] == after
+
+
+def test_status_checks_off_and_a_refused_write_fail_and_change_nothing(tmp_path, host):
+    protection = {**copy.deepcopy(PROTECTION), "required_status_checks": None}
+    r = Repo(tmp_path, private=False, protection=copy.deepcopy(protection),
+             put_error={"status": 403, "message": "Resource not accessible by integration"})
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode != 0, p.output
+    assert "Resource not accessible" in p.stderr
+    assert r.github()["protection"] == protection
 
 
 def test_a_protected_branch_without_required_reviews_keeps_none(tmp_path, host):
@@ -267,3 +316,34 @@ def test_a_repo_github_cannot_read_fails_and_changes_nothing(tmp_path, host):
     assert "fake gh: unsupported api GET repos/agent-ops" in p.stderr, p.stderr
     assert r.writes() == []
     assert r.github()["protection"] == PROTECTION
+
+
+CHECK_CASES = {
+    "bound-to-the-app": (dict(protection=PROTECTION | {"required_status_checks": {
+        "strict": False, "contexts": ["exam"], "checks": [{"context": "exam", "app_id": APP_ID}]}}), True),
+    "required-from-anyone": (dict(required_checks=["test", "exam"]), True),
+    "other-checks-only": (dict(protection=PROTECTION), False),
+    "unprotected": ({}, False),
+    "status-checks-off": (dict(protection=PROTECTION | {"required_status_checks": None}), False),
+}
+
+
+@pytest.mark.parametrize("state, required", CHECK_CASES.values(), ids=CHECK_CASES)
+def test_check_reports_whether_exam_is_required_without_a_host_or_a_write(tmp_path, state, required):
+    r = Repo(tmp_path, private=False, default_branch="trunk", **copy.deepcopy(state))
+    before = r.github()
+    p = r.setup("jesdi/agent-ops", None, "--check")
+    assert p.returncode == 0, p.output
+    assert json.loads(p.stdout) == {"required": required, "branch": "trunk"}
+    assert r.writes() == [] and r.github() == before
+
+
+@pytest.mark.parametrize("error", [UPGRADE, {"status": 500, "message": "Server Error"}], ids=["upgrade", "server-error"])
+def test_check_fails_when_github_will_not_say(tmp_path, error):
+    r = Repo(tmp_path, private=False, protection=copy.deepcopy(PROTECTION), protection_error=error)
+    p = r.setup("jesdi/agent-ops", None, "--check")
+    assert p.returncode != 0, p.output
+    assert error["message"] in p.stderr and p.stdout == ""
+    assert r.writes() == []
+    unknown_repo = r.setup("agent-ops", None, "--check")  # `gh api repos/agent-ops` fails
+    assert unknown_repo.returncode != 0 and unknown_repo.stdout == ""

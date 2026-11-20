@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""pr_exam: deterministic exam rules. `validate --request <request.json> <exam.json>`, `public <exam.json>`."""
+"""pr_exam: every deterministic rule of a PR exam, one subcommand each (see `main`).
+
+Each command reads files and prints JSON, or exits non-zero with every error on stderr."""
 import argparse
 import datetime
 import fcntl
@@ -556,18 +558,26 @@ def score(args):
 
 
 UPGRADE = "Upgrade to GitHub Pro or make this repository public"
-# Settings GitHub returns as {"enabled": bool} and takes back as plain booleans.
-PROTECTION_FLAGS = ("required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
-                    "required_conversation_resolution", "lock_branch", "allow_fork_syncing")
-ACTOR_LISTS = ("dismissal_restrictions", "bypass_pull_request_allowances")
+UNPROTECTED = "Branch not protected"
+CHECKS_OFF = "Required status checks not enabled"
+
+
+def fail(message):
+    print(message, file=sys.stderr)
+    return 1
 
 
 def gh_api(*args, body=None):
-    return subprocess.run(["gh", "api", *args], input=None if body is None else json.dumps(body),
-                          capture_output=True, text=True)
+    """`gh api`, with `body` sent as the JSON request body."""
+    return subprocess.run(["gh", "api", *args, *(["--input", "-"] if body is not None else [])],
+                          input=None if body is None else json.dumps(body), capture_output=True, text=True)
 
 
-def app_id(host):
+def app_id():
+    """The id of the host's GitHub App: the only sender whose `exam` status counts."""
+    host = os.environ.get("PR_EXAM_HOST")  # babysit-pr's exam.py reads the same variable for its requests
+    if not host:
+        raise SystemExit("PR_EXAM_HOST is not set: point it at the pr-exam host")
     try:
         with urllib.request.urlopen(host.rstrip("/") + "/api/exam/host", timeout=30) as r:
             v = json.load(r)["app_id"]
@@ -578,100 +588,89 @@ def app_id(host):
     return v
 
 
-def actors(v):
-    """GET shape {users: [{login}], teams: [{slug}], apps: [{slug}]} -> PUT shape of plain names."""
-    if not v:
-        return v
-    return {k: [a["login"] if k == "users" else a["slug"] for a in v.get(k, [])] for k in ("users", "teams", "apps")}
+def required_checks(rsc):
+    """[{context, app_id}] of a required-status-checks answer; a check named only by context is bound to no app."""
+    return rsc.get("checks") or [{"context": c, "app_id": None} for c in rsc.get("contexts", [])]
 
 
-def legacy_checks(rsc):
-    """Checks named only by context are not bound to an app."""
-    return [{"context": c, "app_id": None} for c in rsc.get("contexts", [])]
+def exam_bound(checks, app=None):
+    """Whether `exam` is among the required `checks`: sent by `app`, or by anyone when no app is given."""
+    return any(c["context"] == "exam" and app in (None, c.get("app_id")) for c in checks)
 
 
-def status_checks(current, app):
-    """The required checks of `current`, with `exam` bound to the App in place of any earlier `exam`."""
-    rsc = current.get("required_status_checks") or {"strict": False}
-    checks = rsc.get("checks") or legacy_checks(rsc)
-    return {"strict": rsc.get("strict", False),
-            "checks": [c for c in checks if c["context"] != "exam"] + [{"context": "exam", "app_id": app}]}
+def add_exam(path, checks, app):
+    """PATCH the required status checks and nothing else: `checks` as they are, plus `exam` from the App."""
+    kept = [{"context": c["context"], "app_id": -1 if c.get("app_id") is None else c["app_id"]}
+            for c in checks if c["context"] != "exam"]  # a check bound to no app goes back as -1, "any app"
+    return gh_api("-X", "PATCH", f"{path}/required_status_checks",
+                  body={"checks": kept + [{"context": "exam", "app_id": app}]})
 
 
-def flag(current, k):
-    return (current.get(k) or {}).get("enabled", False)
+def enable_checks(path, app):
+    """A protected branch whose status checks are off: the PATCH turns them on. Where GitHub answers
+    404 to it, adding the context creates the sub-resource, and the PATCH then binds `exam` to the App."""
+    patched = add_exam(path, [], app)
+    if patched.returncode == 0 or "HTTP 404" not in patched.stderr:
+        return patched
+    added = gh_api("-X", "POST", f"{path}/required_status_checks/contexts", body={"contexts": ["exam"]})
+    return added if added.returncode else add_exam(path, [], app)
 
 
-def is_url_key(k):
-    return k == "url" or k.endswith("_url")
+def protect(path, app):
+    """An unprotected branch gets a protection holding only `exam`, enforced for admins too."""
+    return gh_api("-X", "PUT", path, body={
+        "required_status_checks": {"strict": False, "checks": [{"context": "exam", "app_id": app}]},
+        "enforce_admins": True, "required_pull_request_reviews": None, "restrictions": None})
 
 
-def review_settings(reviews):
-    """Every review setting but the urls; the allowance lists come back as objects, go in as names."""
-    if not reviews:
-        return reviews
-    return {k: actors(v) if k in ACTOR_LISTS else v for k, v in reviews.items() if not is_url_key(k)}
-
-
-def protection_body(current, app):
-    """The PUT body: `current` as GitHub returned it, plus `exam` bound to the App (None: unprotected)."""
-    body = {"required_status_checks": status_checks(current or {}, app)}
-    if current is None:
-        return {**body, "enforce_admins": True, "required_pull_request_reviews": None, "restrictions": None}
-    return {**body, "enforce_admins": flag(current, "enforce_admins"),
-            "restrictions": actors(current.get("restrictions")),
-            "required_pull_request_reviews": review_settings(current.get("required_pull_request_reviews")),
-            **{k: flag(current, k) for k in PROTECTION_FLAGS}}
-
-
-def fail(message):
-    print(message, file=sys.stderr)
-    return 1
-
-
-def require_exam(repo, branch, current, app):
-    """PUT the protection with `exam` required, unless `current` already requires it from the App."""
-    path = f"repos/{repo}/branches/{branch}/protection"
-    body = protection_body(current, app)
-    if current and exam_bound(current, app):
-        print(f"exam is already required on {repo}@{branch}")
-        return 0
-    put = gh_api("-X", "PUT", path, "--input", "-", body=body)
-    if put.returncode:
-        return fail(put.stderr.strip())
-    print(f"exam is now required on {repo}@{branch}")
+def written(write, where):
+    if write.returncode:
+        return fail(write.stderr.strip())
+    print(f"exam is now required on {where}")
     return 0
 
 
-def protect_unread(repo, branch, stderr, app):
-    """The protection read failed: a free private repo stays agent-enforced, an unprotected branch gets
-    protection, any other error fails."""
+def require_unread(stderr, path, where, app):
+    """The required checks could not be read: a free private repo stays agent-enforced, a branch with
+    no protection or no status checks gets them, any other error fails."""
     if UPGRADE in stderr:
-        print(f"GitHub will not protect {repo}: the exam gate is agent-enforced only")
+        print(f"GitHub will not protect {where.partition('@')[0]}: the exam gate is agent-enforced only")
         return 0
-    if "Branch not protected" not in stderr:
-        return fail(stderr.strip())
-    return require_exam(repo, branch, None, app)
+    write = next((w for why, w in ((UNPROTECTED, protect), (CHECKS_OFF, enable_checks)) if why in stderr), None)
+    return written(write(path, app), where) if write else fail(stderr.strip())
+
+
+def require_exam(got, path, where, app):
+    """Make `exam` from the App a required check, given the read `got` of the branch's required checks."""
+    if got.returncode:
+        return require_unread(got.stderr, path, where, app)
+    checks = required_checks(json.loads(got.stdout))
+    if exam_bound(checks, app):
+        print(f"exam is already required on {where}")
+        return 0
+    return written(add_exam(path, checks, app), where)
+
+
+def check_required(got, branch):
+    """`setup --check`: whether `exam` is a required check, whoever sends it. Reads only; unknown is an error."""
+    if got.returncode and not any(off in got.stderr for off in (UNPROTECTED, CHECKS_OFF)):
+        return fail(got.stderr.strip())
+    checks = [] if got.returncode else required_checks(json.loads(got.stdout))
+    print(json.dumps({"required": exam_bound(checks), "branch": branch}))
+    return 0
 
 
 def setup(args):
-    host = os.environ.get("PR_EXAM_HOST")
-    if not host:
-        return fail("PR_EXAM_HOST is not set: point it at the pr-exam host")
-    app = app_id(host)
-    repo = args.repo
-    info = gh_api(f"repos/{repo}")
+    app = None if args.check else app_id()
+    info = gh_api(f"repos/{args.repo}")
     if info.returncode:
         return fail(info.stderr.strip())
     branch = json.loads(info.stdout)["default_branch"]
-    got = gh_api(f"repos/{repo}/branches/{branch}/protection")
-    if got.returncode:
-        return protect_unread(repo, branch, got.stderr, app)
-    return require_exam(repo, branch, json.loads(got.stdout), app)
-
-
-def exam_bound(current, app):
-    return {"context": "exam", "app_id": app} in (current["required_status_checks"] or {}).get("checks", [])
+    path = f"repos/{args.repo}/branches/{branch}/protection"
+    got = gh_api(f"{path}/required_status_checks")
+    if args.check:
+        return check_required(got, branch)
+    return require_exam(got, path, f"{args.repo}@{branch}", app)
 
 
 def main(argv=None):
@@ -700,6 +699,7 @@ def main(argv=None):
     cf.add_argument("path", nargs="?", default=".pr-exam.json")
     cf.set_defaults(fn=config)
     st = sub.add_parser("setup")
+    st.add_argument("--check", action="store_true", help="only report whether `exam` is a required check")
     st.add_argument("repo")
     st.set_defaults(fn=setup)
     args = p.parse_args(argv)

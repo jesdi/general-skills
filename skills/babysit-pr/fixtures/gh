@@ -16,13 +16,20 @@ State is the JSON file $GH_FAKE_STATE:
   required_checks  [name] returned as branch protection contexts of the default branch
   private, default_branch  visibility (default public) and default branch (default "main") of the repo
   protection  branch protection of the default branch in GitHub's response shape (absent: 404
-             "Branch not protected"; derived from required_checks when that is set). `PUT
-             branches/B/protection --input -` replaces it, like GitHub: the body must hold
+             "Branch not protected"; derived from required_checks when that is set; its
+             required_status_checks null: 404 "Required status checks not enabled" for that
+             sub-resource). Writes, like GitHub:
+             `PATCH branches/B/protection/required_status_checks --input -` changes only that
+             sub-resource: `strict` and `checks` [{context, app_id}] when given; an app_id of -1 is
+             stored as null ("any app"), null is refused 422. On a protected branch with status checks
+             off it turns them on, unless patch_needs_checks is set: then 404.
+             `POST branches/B/protection/required_status_checks/contexts --input -` adds contexts
+             bound to no app, turning status checks on.
+             `PUT branches/B/protection --input -` replaces everything: the body must hold
              required_status_checks, enforce_admins, required_pull_request_reviews and restrictions;
-             a boolean setting the body omits is reset to disabled; `checks` [{context, app_id}] feed
-             `contexts`.
+             a boolean setting the body omits is reset to disabled.
   protection_error  {status, message}: every branch protection call fails like gh ("gh: <message>
-             (HTTP <status>)"); put_error the same for the PUT only
+             (HTTP <status>)"); put_error the same for the writes only
   puts       bodies of the successful branch protection PUTs
   reviews    [{id, user: {login}, state, body, submitted_at}]  (optional)
   commits    [{sha, date}] oldest first, date = commit time (optional)
@@ -44,7 +51,7 @@ State is the JSON file $GH_FAKE_STATE:
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
 Supported: `gh api` (user, pulls/N/reviews, pulls/N/comments (review comments, always empty),
 pulls/N/commits, pulls (open list), `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
-issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
+issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection[/required_status_checks[/contexts]]; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
 """
 import json
 import os
@@ -229,30 +236,58 @@ def api(args):
         log(False)
         found = st.get("statuses", {}).get(m.group(1), [])
         return emit(found if "--paginate" in args else found[:30], jq, include)  # GitHub's page: 30
-    if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks)?", path):
+    if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks(/contexts)?)?", path):
         write = method != "GET"
+        def refuse(message, status=404):
+            log(write); print(f"gh: {message} (HTTP {status})", file=sys.stderr); sys.exit(1)
         err = st.get("protection_error") or (write and st.get("put_error"))
         if err:
-            log(write); print(f"gh: {err['message']} (HTTP {err['status']})", file=sys.stderr); sys.exit(1)
+            refuse(err["message"], err["status"])
         if m.group(1) != st.get("default_branch", "main"):
-            log(write); print("gh: Branch not found (HTTP 404)", file=sys.stderr); sys.exit(1)
+            refuse("Branch not found")
+        prot = st.get("protection")
+        if prot is None and "required_checks" in st:
+            prot = {"required_status_checks": {"strict": False, "contexts": st["required_checks"],
+                                               "checks": [{"context": c, "app_id": None}
+                                                          for c in st["required_checks"]]}}
+        def checks_of(given):
+            if any(c.get("app_id", -1) is None for c in given):
+                refuse("Invalid request. For 'properties/app_id', nil is not an integer.", 422)
+            return [{"context": c["context"], "app_id": None if c.get("app_id", -1) == -1 else c["app_id"]}
+                    for c in given]
+        def store(rsc):
+            rsc["contexts"] = [c["context"] for c in rsc["checks"]]
+            prot["required_status_checks"] = rsc
+            log(True); st["protection"] = prot; save()
+            return emit(rsc, jq, include)
+        if m.group(2) and prot is None:
+            refuse("Branch not protected")
         if method == "GET":
-            log(False)
-            prot = st.get("protection")
-            if prot is None and "required_checks" in st:
-                prot = {"required_status_checks": {"strict": False, "contexts": st["required_checks"],
-                                                   "checks": [{"context": c, "app_id": None}
-                                                              for c in st["required_checks"]]}}
             if prot is None:
-                print("gh: Branch not protected (HTTP 404)", file=sys.stderr); sys.exit(1)
+                refuse("Branch not protected")
+            if m.group(2) and prot["required_status_checks"] is None:
+                refuse("Required status checks not enabled")
+            log(False)
             return emit(prot["required_status_checks"] if m.group(2) else prot, jq, include)
+        rsc = prot["required_status_checks"] if prot else None
+        if method == "PATCH" and m.group(2) and not m.group(3):
+            if rsc is None and st.get("patch_needs_checks"):
+                refuse("Required status checks not enabled")
+            rsc = rsc or {"strict": False, "checks": []}
+            return store({"strict": bool(fields.get("strict", rsc["strict"])),
+                          "checks": checks_of(fields["checks"]) if "checks" in fields else rsc["checks"]})
+        if method == "POST" and m.group(3):
+            rsc = rsc or {"strict": False, "checks": []}
+            new = [{"context": c, "app_id": None} for c in fields.get("contexts", [])
+                   if c not in [x["context"] for x in rsc["checks"]]]
+            return store({"strict": rsc["strict"], "checks": rsc["checks"] + new})
         if method == "PUT" and not m.group(2):
             missing = [k for k in ("required_status_checks", "enforce_admins",
                                    "required_pull_request_reviews", "restrictions") if k not in fields]
             if missing:
                 die(f"HTTP 422: Invalid request, missing {missing}", True)
             rsc = fields["required_status_checks"] or {"strict": False, "checks": []}
-            checks = [{"context": c["context"], "app_id": c.get("app_id")} for c in rsc.get("checks", [])]
+            checks = checks_of(rsc.get("checks", []))
             prot = {"required_status_checks": {"strict": bool(rsc.get("strict")), "checks": checks,
                                                "contexts": [c["context"] for c in checks]},
                     "enforce_admins": {"enabled": bool(fields["enforce_admins"])},
