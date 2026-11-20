@@ -9,8 +9,6 @@ import argparse
 import atexit
 import fcntl
 import hashlib
-import http.client
-import io
 import json
 import os
 import re
@@ -19,17 +17,16 @@ import shutil
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 import sys
-from contextlib import contextmanager, redirect_stderr
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+import exam  # the sibling module: this script's folder is first on sys.path
+
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
-EXAM_CONTEXT = "exam"
 SKILL_DIRS = (".my-skills", ".agents/skills", ".claude/skills")  # where a skill is installed, under $HOME or a repo
 PR_RISK = ("pr-risk", ("merge_risk.py", "merge_policy.py"))  # a skill and the files babysit-pr runs from it
 PR_EXAM = ("pr-exam", ("pr_exam.py",))
@@ -326,7 +323,7 @@ def ci_state(repo, number, wait):
     for line in out.splitlines():
         if line:
             status = json.loads(line)
-            if status["context"] != EXAM_CONTEXT:  # the exam is asked for after CI: it never gates CI
+            if status["context"] != exam.CONTEXT:  # the exam is asked for after CI: it never gates CI
                 latest.setdefault(status["context"], status)
     reset_terminal_statuses(pr, f"{repo}#{sha}#status:", latest)
     red = red or any(s["state"] in ("failure", "error") for s in latest.values())
@@ -533,11 +530,10 @@ def warn_exam_not_required(repo, number):
     Advisory: when the PR or the config on origin/<base> cannot be read (no fetch yet, invalid file, no
     install), it stays silent; `exam` and `merge` stop on the same cause with the full message."""
     try:
-        with redirect_stderr(io.StringIO()):
-            base = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))["base"]
-            if base.get("repo", {}).get("private") is not False or not exam_enabled(base["ref"]):
-                return
-    except (SystemExit, ValueError, KeyError):
+        base = json.loads(gh("api", f"repos/{repo}/pulls/{number}", check=False))["base"]
+        if base.get("repo", {}).get("private") is not False or not exams_enabled(base["ref"]):
+            return
+    except (ValueError, KeyError, exam.ExamError):
         return
     p = subprocess.run(["gh", "api", f"repos/{repo}/branches/{base['ref']}/protection/required_status_checks"],
                        text=True, capture_output=True)
@@ -548,8 +544,8 @@ def warn_exam_not_required(repo, number):
     except ValueError:
         return
     required = required.get("contexts") or []
-    if EXAM_CONTEXT not in required:
-        print(f"warning: `{EXAM_CONTEXT}` is not a required check on {repo}@{base['ref']}: "
+    if exam.CONTEXT not in required:
+        print(f"warning: `{exam.CONTEXT}` is not a required check on {repo}@{base['ref']}: "
               f"run `pr-exam setup {repo}`", file=sys.stderr)
 
 
@@ -691,93 +687,26 @@ def load_merge_risk(base=None):
     return import_merge_risk(folder)
 
 
-def exam_enabled(base):
-    """Whether exams run for this repo, from the config on origin/<base>; fails when it cannot be known."""
+def exams_enabled(base):
+    """exam.enabled with the trusted pr_exam.py, if there is one; raises exam.ExamError."""
     folder = trusted_install(*PR_EXAM, base)
-    script = folder / "pr_exam.py" if folder else None
-    if subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True).returncode:
-        fail(f"origin/{base} is not readable: run git fetch origin")
-    shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
-    config = {"enabled": True}
-    if shown.returncode == 0:  # a config only on the PR branch never counts
-        if script is None:
-            fail(not_installed("pr-exam"))
-        with tempfile.TemporaryDirectory(prefix="babysit-pr-exam-", dir="/tmp") as tmp:
-            Path(tmp, ".pr-exam.json").write_text(shown.stdout)
-            p = subprocess.run([sys.executable, "-I", str(script), "config", str(Path(tmp, ".pr-exam.json"))],
-                               capture_output=True, text=True)
-        if p.returncode:
-            fail(f".pr-exam.json on origin/{base} is invalid:\n{p.stderr.strip()}")
-        config = json.loads(p.stdout)
-    if not config["enabled"]:
-        return False
-    if script is None:
-        fail(not_installed("pr-exam"))
-    return True
+    return exam.enabled(base, folder / "pr_exam.py" if folder else None)
 
 
 def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
     info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
-    base, head = info["base"]["ref"], info["head"]["sha"]  # a head that moves after this is requested again
-    if not exam_enabled(base):
-        return print("exams are disabled for this repo")
-    host = os.environ.get("PR_EXAM_HOST")
-    if not host:
-        fail("PR_EXAM_HOST is not set: point it at the pr-exam host")
-    if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
-        return print("the PR is not ready: CI is not green or a review is open")
-    answer = request_exam(host, repo, number)
-    if wait:
-        wait_for_exam(repo, number, session, lease_host, host, answer, head)
-
-
-def request_exam(host, repo, number):
-    req = urllib.request.Request(host.rstrip("/") + "/api/exam", method="POST",
-                                 data=json.dumps({"repo": repo, "pr": int(number)}).encode(),
-                                 headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            answer = json.load(r)
-    except (urllib.error.URLError, OSError) as e:
-        fail(f"pr-exam host unreachable at {host}: {e}")
-    print(json.dumps({k: answer.get(k) for k in ("url", "state", "debt", "detail")}), flush=True)
-    if answer.get("state") == "skipped":
-        print("exam bypassed")
-    elif answer.get("debt"):
-        print("exam deferred")
-    return answer
-
-
-def exam_passed(repo, sha):
-    """Whether the newest `exam` commit status of `sha` is success, read over every page."""
-    out = gh("api", "--paginate", f"repos/{repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
-    latest = next((st for st in map(json.loads, out.splitlines()) if st["context"] == EXAM_CONTEXT), None)
-    return latest is not None and latest["state"] == "success"
-
-
-def wait_for_exam(repo, number, session, lease_host, host, answer, head):
-    """No time limit: renew the lease, follow the head, end on the head's `exam` success, a closed PR or a lost lease.
-
-    A host answer never ends the wait: it may be about an earlier head. The host retries a failed job
-    only when asked again, so an `error` is asked again after 2, 4, 8, then every 16 polls."""
-    pr = Pr(repo, number)
-    errors, polls = int(answer.get("state") == "error"), 0  # error answers in a row; polls since the last answer
-    while True:
-        info = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))
-        if info.get("merged"):
-            fail(f"PR {number} is merged")
-        if info["state"] != "open":
-            fail(f"PR {number} is {info['state']}")
-        lease("check", repo, number, session, lease_host)  # names the holder when it is not us
-        lease("renew", repo, number, session, lease_host)
-        sha = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))["head"]["sha"]  # it may have moved during renewal
-        polls += 1
-        if sha != head or (errors and polls >= min(2 ** errors, 16)):
-            answer, head, polls = request_exam(host, repo, number), sha, 0
-            errors = errors + 1 if answer.get("state") == "error" else 0
-        if exam_passed(repo, sha):
-            return print("success")
-        time.sleep(float(os.environ.get("BABYSIT_EXAM_POLL_SECONDS", "60")))
+        if not exams_enabled(info["base"]["ref"]):
+            return print("exams are disabled for this repo")
+        exam.host()  # not configured: stop before asking GitHub anything more
+        if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
+            return print("the PR is not ready: CI is not green or a review is open")
+        answer = exam.request(repo, number)
+        if wait:  # `check` names the holder when it is not us
+            keep_lease = lambda: [lease(verb, repo, number, session, lease_host) for verb in ("check", "renew")]
+            exam.wait(repo, number, info["head"]["sha"], answer, keep_lease)
+    except exam.ExamError as e:
+        fail(e)
 
 
 JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
@@ -989,10 +918,12 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
 
     if pr["head"]["sha"] != sha:
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
-    exams = exam_enabled(base)
-    if exams:  # every approval path needs the pass of this exact sha; a refusal is no handoff
-        if not exam_passed(repo, sha):
+    try:  # every approval path needs the pass of this exact sha; a refusal is no handoff
+        exams = exams_enabled(base)
+        if exams and not exam.passed(repo, sha):
             fail("exam not passed")
+    except exam.ExamError as e:
+        fail(e)
     if session_approved:
         own_lease(repo, number, session)
         gate = "gate: explicit session authorization"
@@ -1070,13 +1001,8 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     pr.post("🤖 Merged by babysit-pr: " + (
         f"session {session} authorized merge at {sha}" if session_approved else
         f"{risk_line}gate passed, judge {judge_label}" if approved is None else f"owner approved {approved}"))
-    if exams and (host := os.environ.get("PR_EXAM_HOST")):  # lets the host clean up; never fails the merge
-        try:
-            urllib.request.urlopen(urllib.request.Request(
-                host.rstrip("/") + "/api/exam", method="POST", data=json.dumps({"repo": repo, "pr": int(number)}).encode(),
-                headers={"Content-Type": "application/json"}), timeout=30).close()
-        except (OSError, ValueError, http.client.HTTPException):
-            pass
+    if exams:
+        exam.notify_merged(repo, number)
     if session:
         release(pr, session)
 

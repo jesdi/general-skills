@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 from exam_host import FakeHost  # noqa: E402
-from test_babysit import SCRIPT, T, MIN, World, iso
+from test_babysit import STAGED, SCRIPT, T, MIN, World, iso
 from test_babysit_judge import git, commit
 
 PR_EXAM_INSTALL = "npx @jesdi/skills-cli install pr-exam"
@@ -205,7 +205,7 @@ def test_exams_enabled_without_pr_exam_installed_names_the_install_command(tmp_p
     w = Exam(tmp_path)
     stage = tmp_path / "stage" / "skills" / "babysit-pr"  # no sibling pr-exam, none under HOME
     stage.mkdir(parents=True)
-    for name in ("babysit.py", "judge-prompt.md"):
+    for name in STAGED:
         shutil.copy(SCRIPT.parent / name, stage / name)
     with FakeHost() as host:
         p = w.exam(host.url, script=stage / "babysit.py")
@@ -227,7 +227,7 @@ def _stage(tmp_path):
     """babysit.py with no sibling pr-exam, so only the checkout and HOME can supply one."""
     stage = tmp_path / "stage" / "skills" / "babysit-pr"
     stage.mkdir(parents=True)
-    for name in ("babysit.py", "judge-prompt.md"):
+    for name in STAGED:
         shutil.copy(SCRIPT.parent / name, stage / name)
     return stage / "babysit.py"
 
@@ -252,7 +252,7 @@ def _in_checkout(w, src):
     # Exercise the sibling-install candidate while babysit itself lives in the reviewed repo.
     stage = w.project / "skills/babysit-pr"
     stage.mkdir()
-    for name in ("babysit.py", "judge-prompt.md"):
+    for name in STAGED:
         shutil.copy(SCRIPT.parent / name, stage / name)
     return stage / "babysit.py"
 
@@ -303,3 +303,22 @@ def test_an_install_committed_on_the_base_branch_is_used_not_the_working_tree_on
     assert p.returncode == 0, p.output
     assert not marker.exists(), "the working tree's pr_exam.py was executed"
     assert len(host.requests) == 1
+
+
+def test_exams_turned_off_need_no_pr_exam_install(tmp_path):
+    w = Exam(tmp_path, base_config='{"enabled": false}')
+    with FakeHost() as host:
+        p = w.exam(host.url, script=_stage(tmp_path))
+    assert p.returncode == 0, p.output
+    assert "disabled" in p.output.lower(), p.output
+    assert host.requests == []
+
+
+@pytest.mark.parametrize("config", ['{"enabled": true}', '{"enabled": "false"}', '{"bypassLabels": {}}', "[]", "{"])
+def test_any_other_config_needs_the_install_to_validate_it(tmp_path, config):
+    w = Exam(tmp_path, base_config=config)
+    with FakeHost() as host:
+        p = w.exam(host.url, script=_stage(tmp_path))
+    assert p.returncode != 0, p.output
+    assert PR_EXAM_INSTALL in p.output
+    assert host.requests == []
