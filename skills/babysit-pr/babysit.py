@@ -23,7 +23,8 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-import exam  # the sibling module: this script's folder is first on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the sibling module, ahead of the current directory:
+import exam  # noqa: E402  a loader that is not `python babysit.py` may have the PR's checkout first
 
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
