@@ -46,13 +46,15 @@ def validated(config, script, base):
 
 
 def enabled(base, script):
-    """Whether exams run for the repo, from `.pr-exam.json` on origin/<base>; a config only on the PR branch never counts.
+    """Whether exams run for the repo, from `.pr-exam.json` on origin/<base>. A config only on the PR
+    branch never counts.
 
     `script` is a trusted pr_exam.py, or None when there is none. Without one, a config that says
     `"enabled": false` is still honoured (that one boolean is read, nothing else): a repo that
     turned exams off does not need pr-exam. No config, or any other one, needs the script.
     """
-    if subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True).returncode:
+    known = subprocess.run(["git", "rev-parse", "--verify", "-q", f"origin/{base}^{{commit}}"], capture_output=True)
+    if known.returncode:
         raise ExamError(f"origin/{base} is not readable: run git fetch origin")
     shown = subprocess.run(["git", "show", f"origin/{base}:.pr-exam.json"], capture_output=True, text=True)
     config = shown.stdout if shown.returncode == 0 else None
