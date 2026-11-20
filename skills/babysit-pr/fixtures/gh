@@ -12,6 +12,7 @@ State is the JSON file $GH_FAKE_STATE:
   head_sha   head commit of every PR (default "head1")
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
   statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
+             (only the first 30 without --paginate, like GitHub's default page)
   required_checks  [name] returned as branch protection contexts of the default branch
   private, default_branch  visibility (default public) and default branch (default "main") of the repo
   protection  branch protection of the default branch in GitHub's response shape (absent: 404
@@ -226,7 +227,8 @@ def api(args):
         return emit({"total_count": len(runs), "check_runs": runs}, jq, include)
     if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
         log(False)
-        return emit(st.get("statuses", {}).get(m.group(1), []), jq, include)
+        found = st.get("statuses", {}).get(m.group(1), [])
+        return emit(found if "--paginate" in args else found[:30], jq, include)  # GitHub's page: 30
     if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks)?", path):
         write = method != "GET"
         err = st.get("protection_error") or (write and st.get("put_error"))

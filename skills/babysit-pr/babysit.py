@@ -755,9 +755,20 @@ def request_exam(host, repo, number):
     return answer
 
 
+def exam_passed(repo, sha):
+    """Whether the newest `exam` commit status of `sha` is success, read over every page."""
+    out = gh("api", "--paginate", f"repos/{repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
+    latest = next((st for st in map(json.loads, out.splitlines()) if st["context"] == EXAM_CONTEXT), None)
+    return latest is not None and latest["state"] == "success"
+
+
 def wait_for_exam(repo, number, session, lease_host, host, answer, head):
-    """No time limit: renew the lease, follow the head, end on success, a closed PR or a lost lease."""
+    """No time limit: renew the lease, follow the head, end on the head's `exam` success, a closed PR or a lost lease.
+
+    A host answer never ends the wait: it may be about an earlier head. The host retries a failed job
+    only when asked again, so an `error` is asked again after 2, 4, 8, then every 16 polls."""
     pr = Pr(repo, number)
+    errors, polls = int(answer.get("state") == "error"), 0  # error answers in a row; polls since the last answer
     while True:
         info = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))
         if info.get("merged"):
@@ -767,13 +778,11 @@ def wait_for_exam(repo, number, session, lease_host, host, answer, head):
         lease("check", repo, number, session, lease_host)  # names the holder when it is not us
         lease("renew", repo, number, session, lease_host)
         sha = json.loads(gh("api", f"{pr.repo}/pulls/{number}"))["head"]["sha"]  # it may have moved during renewal
-        if sha != head:
-            answer, head = request_exam(host, repo, number), sha
-        if answer.get("state") == "passed":
-            return print("success")
-        out = gh("api", f"{pr.repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
-        latest = next((st for st in map(json.loads, out.splitlines()) if st["context"] == EXAM_CONTEXT), None)
-        if latest and latest["state"] == "success":
+        polls += 1
+        if sha != head or (errors and polls >= min(2 ** errors, 16)):
+            answer, head, polls = request_exam(host, repo, number), sha, 0
+            errors = errors + 1 if answer.get("state") == "error" else 0
+        if exam_passed(repo, sha):
             return print("success")
         time.sleep(float(os.environ.get("BABYSIT_EXAM_POLL_SECONDS", "60")))
 
@@ -989,9 +998,7 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
     exams = exam_enabled(base)
     if exams:  # every approval path needs the pass of this exact sha; a refusal is no handoff
-        out = gh("api", "--paginate", f"repos/{repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
-        exam = next((x for x in map(json.loads, out.splitlines()) if x["context"] == EXAM_CONTEXT), None)
-        if not exam or exam["state"] != "success":
+        if not exam_passed(repo, sha):
             fail("exam not passed")
     if session_approved:
         own_lease(repo, number, session)

@@ -9,11 +9,12 @@ Interface under test:
            time limit, and keep the lease of --session/--host alive (`lease renew`) while waiting.
            Real seconds between two polls: $BABYSIT_EXAM_POLL_SECONDS (default 60; tests set 0).
            All time it reads is GitHub's clock (the fake gh `now`), never the host clock.
-    exit 0, printing "success"   the head's `exam` status is success, or the host answers `passed`
-                                 to a request for the current head
+    exit 0, printing "success"   the head's `exam` status is success, read over every page of the
+                                 head's statuses. A host answer never ends the wait.
     exit non-zero, saying why    the PR is closed or merged; another session holds the lease
     head moved                   POST the host again ({"repo", "pr"}) and wait on the new head
-    host state `error`           print its `detail` and go on waiting
+    host state `error`           print its `detail`, go on waiting and ask the host again (the
+                                 contract: "the next request retries"), each time after a longer pause
     never prints "CI stalled" for a pending `exam`.
 
 Controllable clock: the `gh` first on PATH is a wrapper around fixtures/gh. Every gh call advances
@@ -181,9 +182,8 @@ def test_a_new_head_while_waiting_sends_a_new_request_and_waits_on_the_new_head(
 
 
 def test_after_a_pass_a_new_head_the_host_answers_passed_for_ends_the_wait(tmp_path):
-    w = world(tmp_path, timeline=[
-        (20, {"head_sha": "def456", "statuses": {"def456": []}}),
-        (60, {"statuses": {"def456": SUCCESS}})])
+    # the host posts success on the head it answers `passed` for (route contract, state table)
+    w = world(tmp_path, timeline=[(20, {"head_sha": "def456", "statuses": {"def456": SUCCESS}})])
     with HeadHost(w.state, {"abc123": {"state": "open"},
                             "def456": {"state": "passed", "pending": False}}) as host:
         p = wait(w, host)
@@ -242,3 +242,52 @@ def test_a_host_error_is_printed_with_its_detail_and_the_wait_goes_on(tmp_path):
     assert "generation session crashed twice" in p.output, p.output
     assert p.returncode == 0, p.output
     assert minutes(w) >= 30
+
+
+def test_a_passed_answer_for_an_earlier_head_does_not_end_the_wait(tmp_path):
+    w = world(tmp_path, timeline=[(150, {"statuses": {"abc123": SUCCESS}})])
+    stale = {"state": "passed", "head_sha": "old999", "pending": False}
+    with HeadHost(w.state, {"abc123": stale}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert minutes(w) >= 150, minutes(w)  # ended by the status of abc123, not by the answer
+
+
+def test_a_passed_answer_for_the_head_still_waits_for_its_status(tmp_path):
+    w = world(tmp_path, timeline=[(150, {"statuses": {"abc123": SUCCESS}})])
+    with HeadHost(w.state, {"abc123": {"state": "passed", "pending": False}}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert minutes(w) >= 150, minutes(w)
+
+
+def test_success_is_found_behind_more_than_a_page_of_newer_statuses(tmp_path):
+    newer = [{"context": f"ci-{i}", "state": "success"} for i in range(35)]
+    w = world(tmp_path, statuses={"abc123": newer + SUCCESS})
+    with HeadHost(w.state, {}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert "success" in p.stdout.lower()
+
+
+class FailsOnce(HeadHost):
+    """`error` to the first request, `open` to every later one."""
+
+    @property
+    def answer(self):
+        state = {"state": "open"} if len(self.requests) > 1 else {"state": "error", "detail": "session crashed"}
+        return {**HeadHost.answer.fget(self), **state}
+
+    @answer.setter
+    def answer(self, value):
+        self._base = value
+
+
+def test_a_host_error_is_asked_again_without_a_new_head(tmp_path):
+    w = world(tmp_path, timeline=[(150, {"statuses": {"abc123": SUCCESS}})])
+    with FailsOnce(w.state, {}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert "session crashed" in p.output
+    assert len(host.requests) == 2, host.requests  # the retry, and no more once the host answers `open`
+    assert all(r["body"] == {"repo": "jesdi/demo", "pr": 58} for r in host.requests)
