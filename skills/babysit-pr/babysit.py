@@ -402,7 +402,9 @@ def renew(repo, number, session):
 def lease(verb, repo, number, session, host):
     # Every lease-body writer reads its snapshot inside the same lock as rounds.
     with locked():
-        return lease_locked(verb, repo, number, session, host)
+        lease_locked(verb, repo, number, session, host)
+    if verb == "acquire":  # advisory, once per run: outside the lock, it never holds another session up
+        warn_exam_not_required(repo, number)
 
 
 def confirmed_leases(comments, user):
@@ -521,32 +523,23 @@ def lease_locked(verb, repo, number, session, host):
                 if l[0] != c["id"] and l[3] <= now:
                     end(pr, l[4])
         pr.label(add=["babysitting"], remove=["needs-human"])
-        warn_exam_not_required(repo, number)
 
 
 def warn_exam_not_required(repo, number):
-    """Once per run (acquire only): a public repo with exams on but `exam` not required. Never fails the lease.
+    """A public repo with exams on whose default branch does not require `exam`: say how to fix it.
 
-    Advisory: when the PR or the config on origin/<base> cannot be read (no fetch yet, invalid file, no
-    install), it stays silent; `exam` and `merge` stop on the same cause with the full message."""
+    Silent whenever the answer is unknown (no fetch yet, an invalid config, no install, GitHub down):
+    `exam` and `merge` stop on the same cause with the full message."""
     try:
         base = json.loads(gh("api", f"repos/{repo}/pulls/{number}", check=False))["base"]
-        if base.get("repo", {}).get("private") is not False or not exams_enabled(base["ref"]):
+        script = pr_exam_script(base["ref"])
+        if base["repo"]["private"] is not False or not exam.enabled(base["ref"], script):
             return
-    except (ValueError, KeyError, exam.ExamError):
+    except (ValueError, KeyError, TypeError, exam.ExamError):
         return
-    p = subprocess.run(["gh", "api", f"repos/{repo}/branches/{base['ref']}/protection/required_status_checks"],
-                       text=True, capture_output=True)
-    if p.returncode and "not protected" not in p.stderr and "not enabled" not in p.stderr:
-        return  # unknown: stay quiet
-    try:  # absent or null required checks: none required
-        required = (json.loads(p.stdout or "null") if p.returncode == 0 else None) or {}
-    except ValueError:
-        return
-    required = required.get("contexts") or []
-    if exam.CONTEXT not in required:
-        print(f"warning: `{exam.CONTEXT}` is not a required check on {repo}@{base['ref']}: "
-              f"run `pr-exam setup {repo}`", file=sys.stderr)
+    if exam.required(repo, script) is False:
+        print(f"warning: `{exam.CONTEXT}` is not a required check on {repo}: run `pr-exam setup {repo}`",
+              file=sys.stderr)
 
 
 def connection(repo, number, name):
@@ -687,16 +680,16 @@ def load_merge_risk(base=None):
     return import_merge_risk(folder)
 
 
-def exams_enabled(base):
-    """exam.enabled with the trusted pr_exam.py, if there is one; raises exam.ExamError."""
+def pr_exam_script(base):
+    """The trusted pr_exam.py, or None when pr-exam is not installed."""
     folder = trusted_install(*PR_EXAM, base)
-    return exam.enabled(base, folder / "pr_exam.py" if folder else None)
+    return folder / "pr_exam.py" if folder else None
 
 
 def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
     info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
     try:
-        if not exams_enabled(info["base"]["ref"]):
+        if not exam.enabled(info["base"]["ref"], pr_exam_script(info["base"]["ref"])):
             return print("exams are disabled for this repo")
         exam.host()  # not configured: stop before asking GitHub anything more
         if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
@@ -919,7 +912,7 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     if pr["head"]["sha"] != sha:
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
     try:  # every approval path needs the pass of this exact sha; a refusal is no handoff
-        exams = exams_enabled(base)
+        exams = exam.enabled(base, pr_exam_script(base))
         if exams and not exam.passed(repo, sha):
             fail("exam not passed")
     except exam.ExamError as e:

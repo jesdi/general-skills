@@ -63,6 +63,16 @@ def enabled(base, script):
     return config is None or validated(config, script, base)["enabled"]
 
 
+def required(repo, script):
+    """Whether `exam` is a required check of the repo's default branch, as the trusted pr_exam.py reads
+    GitHub (`setup --check`); None when it could not tell."""
+    p = subprocess.run([sys.executable, "-I", str(script), "setup", "--check", repo], capture_output=True, text=True)
+    try:
+        return json.loads(p.stdout)["required"] if p.returncode == 0 else None
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def host():
     url = os.environ.get("PR_EXAM_HOST")
     if not url:
