@@ -196,3 +196,57 @@ def test_public_prints_only_what_the_page_may_see(tmp_path):
     }
     for word in ("key", "concepts", "answer", "rubric", "explanation", "hunk"):
         assert f'"{word}"' not in r.stdout
+
+
+def mut_not_object(e): return [e]
+def mut_questions_not_list(e): e["questions"] = {q["id"]: q for q in e["questions"]}
+def mut_one_option(e): e["questions"][2]["options"] = ["alpha beta"]
+def mut_text_options(e): e["questions"][0]["options"] = ["alpha beta", "gamma delta"]
+def mut_mode(e): e["mode"] = "final"
+
+
+@pytest.mark.parametrize("mutate,words", [
+    (mut_not_object, ["exam must be a JSON object"]),
+    (mut_questions_not_list, ["questions must be a list of objects"]),
+    (mut_one_option, ["q3", "choice needs a list of options", "answer is not an index"]),
+    (mut_text_options, ["q1", "text question must not have options"]),
+    (mut_mode, ["mode must be first, followup or delta", "differs from the request"]),
+])
+def test_each_shape_and_mode_rule_is_refused_with_its_own_message(tmp_path, mutate, words):
+    e = five()
+    e = mutate(e) or e
+    refused(run(tmp_path, e), *words)
+
+
+def mut_empty_id(e): e["questions"][2]["id"] = ""
+def mut_empty_prompt(e): e["questions"][2]["prompt"] = ""
+def mut_empty_option(e): e["questions"][2]["options"] = ["alpha beta", "", "zeta eta"]
+def mut_kind(e): e["concepts"][4]["kind"] = "trivia"
+def mut_listed_twice(e): e["concepts"].append(copy.deepcopy(e["concepts"][4]))
+def mut_duplicate_options(e): e["questions"][2]["options"] = ["alpha beta", "alpha beta", "zeta eta"]
+def mut_choice_rubric(e): e["key"]["q3"]["rubric"] = {"pass": "p", "partial": "q"}
+def mut_text_answer(e): e["key"]["q1"]["answer"] = 0
+def mut_explanation(e): e["key"]["q3"]["explanation"] = ""
+def mut_empty_hunk(e): e["key"]["q3"]["hunk"] = ""
+def mut_entry(e): e["key"]["q3"] = "the second option"
+
+
+@pytest.mark.parametrize("mutate,message", [
+    (mut_empty_id, "question '': id must be a non-empty string"),
+    (mut_empty_prompt, "question q3: prompt must be a non-empty string"),
+    (mut_empty_option, "question q3: options must be non-empty strings"),
+    (mut_kind, f"concept c-beh: kind must be one of {KINDS}"),
+    (mut_listed_twice, "concept c-beh: listed twice"),
+    (mut_duplicate_options, "question q3: options contain duplicates"),
+    (mut_choice_rubric, "key q3: choice question must not have a rubric"),
+    (mut_text_answer, "key q1: text question must not have an answer"),
+    (mut_explanation, "key q3: explanation must be non-empty"),
+    (mut_empty_hunk, "key q3: hunk must be non-empty"),
+    (mut_entry, "key q3: entry must be an object"),
+])
+def test_each_question_concept_and_key_rule_prints_its_exact_message(tmp_path, mutate, message):
+    e = five()
+    mutate(e)
+    r = run(tmp_path, e)
+    refused(r)
+    assert message in r.stderr.splitlines(), r.stderr

@@ -231,3 +231,39 @@ def test_setup_without_a_host_configured_fails_and_changes_nothing(tmp_path, hos
     assert p.returncode != 0, p.output
     assert r.writes() == []
     assert r.setup("jesdi/agent-ops", host.url).returncode == 0
+
+
+def test_review_allowances_and_push_restrictions_go_back_as_names_without_urls(tmp_path, host):
+    people = {"url": "https://api.github.com/x", "users": [{"login": "ana", "url": "u"}],
+              "teams": [{"slug": "core", "url": "u"}], "apps": [{"slug": "bot", "url": "u"}]}
+    protection = copy.deepcopy(PROTECTION)
+    protection["restrictions"] = copy.deepcopy(people)
+    protection["required_pull_request_reviews"] = {
+        "url": "https://api.github.com/r", "required_approving_review_count": 1,
+        "dismissal_restrictions": copy.deepcopy(people), "bypass_pull_request_allowances": {"users": [], "teams": []}}
+    r = Repo(tmp_path, private=False, protection=protection)
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode == 0, p.output
+    after = r.github()["protection"]
+    names = {"users": ["ana"], "teams": ["core"], "apps": ["bot"]}
+    assert after["restrictions"] == names
+    assert after["required_pull_request_reviews"] == {
+        "required_approving_review_count": 1, "dismissal_restrictions": names,
+        "bypass_pull_request_allowances": {"users": [], "teams": [], "apps": []}}
+
+
+def test_a_protected_branch_without_required_reviews_keeps_none(tmp_path, host):
+    r = Repo(tmp_path, private=False, protection={**copy.deepcopy(PROTECTION), "required_pull_request_reviews": None})
+    p = r.setup("jesdi/agent-ops", host.url)
+    assert p.returncode == 0, p.output
+    assert r.github()["protection"]["required_pull_request_reviews"] is None
+    assert exam_check() in r.github()["protection"]["required_status_checks"]["checks"]
+
+
+def test_a_repo_github_cannot_read_fails_and_changes_nothing(tmp_path, host):
+    r = Repo(tmp_path, private=False, protection=copy.deepcopy(PROTECTION))
+    p = r.setup("agent-ops", host.url)  # no owner: `gh api repos/agent-ops` fails
+    assert p.returncode != 0, p.output
+    assert "fake gh: unsupported api GET repos/agent-ops" in p.stderr, p.stderr
+    assert r.writes() == []
+    assert r.github()["protection"] == PROTECTION

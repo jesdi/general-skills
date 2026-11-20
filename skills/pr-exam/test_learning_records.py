@@ -238,3 +238,30 @@ def test_concurrent_record_calls_on_one_concept_leave_exactly_one_active_record(
         files = sorted(records.glob("*.md"))
         assert len(files) == 7, (rnd, [p.name for p in files])
         assert [field(p, "status") for p in files].count("active") == 1, (rnd, [field(p, "status") for p in files])
+
+
+def test_record_with_a_malformed_status_is_an_error_naming_the_file(tmp_path):
+    records = tmp_path / "records"
+    write_record(records, 1, "merge-lease", "demonstrated", WEEK, status="superseded")
+    r = learned(records)
+    assert r.returncode == 1 and "0001-merge-lease.md" in r.stderr, (r.returncode, r.stdout, r.stderr)
+
+
+def test_a_markdown_file_that_is_not_a_record_is_ignored(tmp_path):
+    records = tmp_path / "records"
+    write_record(records, 1, "merge-lease", "demonstrated", WEEK)
+    (records / "README.md").write_text("# Notes, not a record\n")
+    assert learned_ok(records) == {"merge-lease": "skip"}
+
+
+def test_validate_and_record_refuse_a_malformed_record_naming_the_file(tmp_path):
+    records = tmp_path / "records"
+    write_record(records, 1, "merge-lease", "learned", WEEK)
+    r = validate(tmp_path, records, exam_with([("other", "text", "why")]))
+    assert r.returncode == 1 and "0001-merge-lease.md" in r.stderr, (r.returncode, r.stdout, r.stderr)
+    (tmp_path / "rexam.json").write_text(json.dumps(exam_with([("merge-lease", "text", "concept")])))
+    (tmp_path / "result.json").write_text(json.dumps({"questions": [{"id": "q1", "concept": "merge-lease", "points": 1}]}))
+    r = cli("record", "--records", records, "--exam", tmp_path / "rexam.json",
+            "--result", tmp_path / "result.json", "--today", TODAY)
+    assert r.returncode == 1 and "0001-merge-lease.md" in r.stderr, (r.returncode, r.stdout, r.stderr)
+    assert sorted(p.name for p in records.glob("*.md")) == ["0001-merge-lease.md"]

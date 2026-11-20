@@ -73,3 +73,11 @@ def test_invalid_json(tmp_path):
 def test_two_errors_both_named(tmp_path):
     out = refused(cfg(tmp_path, {"enabled": "yes", "colour": 1}))
     assert "enabled" in out and "colour" in out
+
+
+def test_config_that_is_not_an_object(tmp_path):
+    assert "config: must be a JSON object" in refused(cfg(tmp_path, ["enabled"]))
+
+
+def test_bypass_labels_that_are_not_an_object(tmp_path):
+    assert "bypassLabels" in refused(cfg(tmp_path, {"bypassLabels": ["exam:skip"]}))
