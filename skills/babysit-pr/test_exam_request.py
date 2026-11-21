@@ -277,15 +277,19 @@ def _home_is_checkout(w, src):
     (w.project / ".claude/skills/pr-exam/pr_exam.py").write_text(src)
 
 
-def _home_symlink(w, src):
+def _home_symlink(w, src, skills=".claude/skills"):
     (w.project / "vendored").mkdir()
     (w.project / "vendored/pr_exam.py").write_text(src)
-    d = w.home / ".claude/skills/pr-exam"
+    d = w.home / skills / "pr-exam"
     d.mkdir(parents=True)
     (d / "pr_exam.py").symlink_to(w.project / "vendored/pr_exam.py")
 
 
-@pytest.mark.parametrize("place", [_in_checkout, _home_is_checkout, _home_symlink])
+def _codex_home_symlink(w, src):
+    _home_symlink(w, src, ".codex/skills")
+
+
+@pytest.mark.parametrize("place", [_in_checkout, _home_is_checkout, _home_symlink, _codex_home_symlink])
 def test_a_pr_exam_inside_the_reviewed_checkout_never_runs(tmp_path, place):
     p, marker, host = _run_with_install(tmp_path, place)
     assert not marker.exists(), "the PR's own pr_exam.py was executed"
@@ -294,9 +298,10 @@ def test_a_pr_exam_inside_the_reviewed_checkout_never_runs(tmp_path, place):
     assert host.requests == []
 
 
-def test_a_trusted_install_under_home_still_works(tmp_path):
+@pytest.mark.parametrize("skills", [".claude/skills", ".codex/skills"])  # .codex: the box's Codex home
+def test_a_trusted_install_under_home_still_works(tmp_path, skills):
     w = Exam(tmp_path, base_config='{"enabled": true}')
-    d = w.home / ".claude/skills/pr-exam"
+    d = w.home / skills / "pr-exam"
     d.mkdir(parents=True)
     shutil.copy(SCRIPT.parent.parent / "pr-exam" / "pr_exam.py", d / "pr_exam.py")
     with FakeHost({"state": "open"}) as host:

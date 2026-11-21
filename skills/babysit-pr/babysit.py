@@ -29,6 +29,7 @@ import exam  # noqa: E402  a loader that is not `python babysit.py` may have the
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
 SKILL_DIRS = (".my-skills", ".agents/skills", ".claude/skills")  # where a skill is installed, under $HOME or a repo
+HOME_SKILL_DIRS = (*SKILL_DIRS, ".codex/skills")  # a Codex session on the box sees only its ~/.codex
 PR_RISK = ("pr-risk", ("merge_risk.py", "merge_policy.py"))  # a skill and the files babysit-pr runs from it
 PR_EXAM = ("pr-exam", ("pr_exam.py",))
 CLAIM_PENDING = "<!-- babysit-pr claim: pending -->\n"
@@ -646,7 +647,7 @@ def trusted_install(skill, files, base=None):
     """
     root = checkout_root()
     outside = lambda p: not p.resolve().is_relative_to(root)
-    for d in [Path(__file__).resolve().parent.parent / skill, *(Path.home() / s / skill for s in SKILL_DIRS)]:
+    for d in [Path(__file__).resolve().parent.parent / skill, *(Path.home() / s / skill for s in HOME_SKILL_DIRS)]:
         if d.is_dir() and outside(d) and all((d / n).is_file() and outside(d / n) for n in files):
             return d.resolve()
     for s in SKILL_DIRS if base else ():

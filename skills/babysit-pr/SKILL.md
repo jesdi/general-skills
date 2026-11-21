@@ -21,7 +21,7 @@ Invoking the skill alone, or a hook starting it, does not grant this explicit au
 
 ## Before anything
 
-- `pr-risk` must be in `.my-skills/pr-risk`, `.agents/skills/pr-risk`, `.claude/skills/pr-risk` or `~/.my-skills/pr-risk`, in this order. If it is in none, stop and print the install command.
+- `pr-risk` must be installed, in this order: next to this skill; under `~` in `.my-skills`, `.agents/skills`, `.claude/skills` or `.codex/skills`; or committed on `origin/<base>` in one of the first three. A copy inside the PR checkout never counts. If it is in none, stop and print the install command.
 - `PR_EXAM_HOST` and `PR_EXAM_APP` (the slug of the box's GitHub App: only its `exam` status counts) must be set, and `pr-exam` must be installed the same way as `pr-risk`. If one is missing, stop and name it; for `pr-exam`, print the install command.
 - Codex needs `--profile babysit` (network on). If `gh` cannot reach GitHub, hand off at once with reason `no network for gh`; never wait on an approval prompt.
 - `lease acquire`. If another session holds it, stop with no comment and no push.
