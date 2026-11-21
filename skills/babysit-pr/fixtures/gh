@@ -13,8 +13,10 @@ State is the JSON file $GH_FAKE_STATE:
   pr_state   "open" (default), "closed" or "merged": the PR's REST `state` ("closed" when merged)
              and `merged`, and `gh pr view`'s upper-case `state`
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
-  statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
-             (only the first 30 without --paginate, like GitHub's default page)
+  statuses   {sha: [{context, state, creator}]}  newest first; commits/SHA/statuses is [] when unseeded
+             (only the first 30 without --paginate, like GitHub's default page). `creator` is a login
+             and is served as GitHub's user object: an App posts as "<slug>[bot]", type "Bot",
+             anyone else as type "User"; without it, creator is null
   required_checks  [name] returned as branch protection contexts of the default branch
   private, default_branch  visibility (default public) and default branch (default "main") of the repo
   protection  branch protection of the default branch in GitHub's response shape (absent: 404
@@ -113,6 +115,16 @@ def emit(obj, jq, include=False):
         sys.stderr.write(p.stderr)
         sys.exit(p.returncode)
     print(json.dumps(obj))
+
+
+def user(login):
+    """GitHub's user object for `login`, as a status's `creator`; None stays null."""
+    if login is None:
+        return None
+    bot = login.endswith("[bot]")
+    return {"login": login, "id": 40209326 if bot else 1000, "type": "Bot" if bot else "User",
+            "site_admin": False, "url": f"https://api.github.com/users/{login.replace('[', '%5B').replace(']', '%5D')}",
+            "html_url": f"https://github.com/apps/{login[:-5]}" if bot else f"https://github.com/{login}"}
 
 
 def labels_obj():
@@ -238,7 +250,7 @@ def api(args):
         return emit({"total_count": len(runs), "check_runs": runs}, jq, include)
     if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
         log(False)
-        found = st.get("statuses", {}).get(m.group(1), [])
+        found = [{**s, "creator": user(s.get("creator"))} for s in st.get("statuses", {}).get(m.group(1), [])]
         return emit(found if "--paginate" in args else found[:30], jq, include)  # GitHub's page: 30
     if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks(/contexts)?)?", path):
         write = method != "GET"

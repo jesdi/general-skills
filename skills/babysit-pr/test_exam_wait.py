@@ -9,8 +9,9 @@ Interface under test:
            time limit, and keep the lease of --session/--host alive (`lease renew`) while waiting.
            Real seconds between two polls: $BABYSIT_EXAM_POLL_SECONDS (default 60; tests set 0).
            All time it reads is GitHub's clock (the fake gh `now`), never the host clock.
-    exit 0, printing "success"   the head's `exam` status is success, read over every page of the
-                                 head's statuses. A host answer never ends the wait.
+    exit 0, printing "success"   the newest `exam` status the box's GitHub App ($PR_EXAM_APP[bot])
+                                 posted on the head is success, read over every page of the head's
+                                 statuses. A status from anyone else and a host answer never end it.
     exit non-zero, saying why    the PR is closed or merged; another session holds the lease
     head moved                   POST the host again ({"repo", "pr"}) and wait on the new head
     head's `exam` still pending  ask the host again whatever it answered last (a job may fail after
@@ -35,12 +36,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 from exam_host import FakeHost  # noqa: E402
-from test_babysit import FAKE_GH, LEASE, MIN, T, iso, lease_comment, parse
+from test_babysit import BOT, FAKE_GH, LEASE, MIN, T, iso, lease_comment, parse
 from test_exam_request import Exam
 
 STEP = 2  # minutes of GitHub time per gh call
-PENDING = [{"context": "exam", "state": "pending"}]
-SUCCESS = [{"context": "exam", "state": "success", "description": "passed"}]
+PENDING = [{"context": "exam", "state": "pending", "creator": BOT}]
+SUCCESS = [{"context": "exam", "state": "success", "description": "passed", "creator": BOT}]
 GREEN_RUN = [{"name": "test", "status": "completed", "conclusion": "success", "started_at": iso(T)}]
 
 WRAPPER = '''#!/usr/bin/env python3
@@ -268,6 +269,17 @@ def test_success_is_found_behind_more_than_a_page_of_newer_statuses(tmp_path):
         p = wait(w, host)
     assert p.returncode == 0, p.output
     assert "success" in p.stdout.lower()
+
+
+@pytest.mark.parametrize("creator", ["jesdi", "other-app[bot]", None], ids=["operator", "other-app", "none"])
+def test_an_exam_success_posted_by_anyone_but_the_app_does_not_end_the_wait(tmp_path, creator):
+    foreign = {"context": "exam", "state": "success", "description": "passed", "creator": creator}
+    w = world(tmp_path, statuses={"abc123": [foreign, *PENDING]},  # newer than the App's pending
+              timeline=[(150, {"statuses": {"abc123": [*SUCCESS, foreign, *PENDING]}})])
+    with HeadHost(w.state, {}) as host:
+        p = wait(w, host)
+    assert p.returncode == 0, p.output
+    assert minutes(w) >= 150, minutes(w)  # ended by the App's success, not the foreign one
 
 
 class FailsOnce(HeadHost):

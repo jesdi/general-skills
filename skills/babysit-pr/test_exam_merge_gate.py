@@ -2,7 +2,9 @@
 
 Interface under test (extends `merge` of test_merge_and_handoff.py):
   In a repo with exams enabled (`.pr-exam.json` on origin/<base> absent or enabled), `merge` goes
-  ahead only when the `exam` commit status of --sha is success, on every approval path. Otherwise it
+  ahead only when the newest `exam` commit status of --sha that the box's GitHub App posted
+  (creator `$PR_EXAM_APP[bot]`, type Bot) is success, on every approval path; a status from any
+  other creator is ignored, and PR_EXAM_APP unset stops the merge naming it. Otherwise it
   exits non-zero printing "exam not passed", runs no `gh pr merge`, posts no handoff comment and
   keeps the lease and the `babysitting` label. Success with any description ("bypassed", "deferred")
   is a pass. A pass changes nothing else. With `{"enabled": false}` the status is not read.
@@ -19,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 from exam_host import FakeHost  # noqa: E402
+from test_babysit import BOT
 from test_babysit_judge import commit as git_commit, git
 from test_merge_and_handoff import EXAM_OK, commit, handoffs, merge, world
 
@@ -28,7 +31,7 @@ PATHS = {
     "judge": JUDGE,
     "approved-sha": ("--approved-sha", "a1b2c3d"),
 }
-PENDING = {"context": "exam", "state": "pending", "description": "attempt 1"}
+PENDING = {"context": "exam", "state": "pending", "description": "attempt 1", "creator": BOT}
 
 
 def set_exam(w, sha, *statuses):
@@ -63,7 +66,7 @@ def test_merge_is_refused_without_a_passed_exam(tmp_path, path, statuses):
 
 
 def test_a_failed_exam_does_not_pass_either(tmp_path):
-    w = world(tmp_path, statuses={"a1b2c3d": [{"context": "exam", "state": "failure"}]})
+    w = world(tmp_path, statuses={"a1b2c3d": [{"context": "exam", "state": "failure", "creator": BOT}]})
     refused(w, run(w, tmp_path, "session"))
 
 
@@ -76,6 +79,36 @@ def test_the_status_read_is_the_one_of_the_sha_not_of_an_earlier_commit(tmp_path
 def test_the_newest_exam_status_of_the_sha_counts(tmp_path):
     w = world(tmp_path, statuses={"a1b2c3d": [PENDING, EXAM_OK]})  # newest first
     refused(w, run(w, tmp_path, "judge"))
+
+
+FOREIGN = {"operator": "jesdi", "other-app": "other-app[bot]", "none": None}
+
+
+@pytest.mark.parametrize("creator", FOREIGN.values(), ids=FOREIGN.keys())
+def test_an_exam_success_posted_by_anyone_but_the_app_is_refused(tmp_path, creator):
+    foreign = {**EXAM_OK, "creator": creator}
+    w = world(tmp_path, statuses={"a1b2c3d": [foreign, PENDING]})  # newer than the App's pending
+    refused(w, run(w, tmp_path, "judge"))
+
+
+@pytest.mark.parametrize("creator", FOREIGN.values(), ids=FOREIGN.keys())
+def test_the_apps_success_merges_whatever_anyone_else_posted_after_it(tmp_path, creator):
+    foreign = {"context": "exam", "state": "failure", "creator": creator}
+    w = world(tmp_path, statuses={"a1b2c3d": [foreign, EXAM_OK]})  # newest first
+    p = run(w, tmp_path, "judge")
+    assert p.returncode == 0, p.output
+    [m] = w.github()["merges"]
+    assert m["match"] == "a1b2c3d"
+
+
+def test_merge_without_the_app_variable_stops_naming_it(tmp_path):
+    w = world(tmp_path)
+    w.env.pop("PR_EXAM_APP")
+    p = run(w, tmp_path, "judge")
+    assert p.returncode != 0
+    assert "PR_EXAM_APP" in p.output
+    assert not w.github().get("merges")
+    assert handoffs(w) == []
 
 
 def test_a_pass_merges_the_pinned_head_after_a_refusal(tmp_path):
@@ -92,7 +125,7 @@ def test_a_pass_merges_the_pinned_head_after_a_refusal(tmp_path):
 def test_a_bypassed_or_deferred_exam_merges_like_a_pass(tmp_path, description):
     w = world(tmp_path, statuses={"a1b2c3d": [PENDING]})
     refused(w, run(w, tmp_path, "judge"))
-    set_exam(w, "a1b2c3d", {"context": "exam", "state": "success", "description": description})
+    set_exam(w, "a1b2c3d", {"context": "exam", "state": "success", "description": description, "creator": BOT})
     p = merge(w, tmp_path, "a1b2c3d", *JUDGE, "--session", "s1")
     assert p.returncode == 0, p.output
     assert len(w.github()["merges"]) == 1

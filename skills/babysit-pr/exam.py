@@ -71,6 +71,21 @@ def host():
     return url.rstrip("/")
 
 
+def app():
+    """The login of the box's GitHub App, `<PR_EXAM_APP>[bot]`: the only creator whose `exam` counts.
+    Read from the environment, never from the host, so the merge gate works while the box is down."""
+    slug = os.environ.get("PR_EXAM_APP")
+    if not slug:
+        raise ExamError("PR_EXAM_APP is not set: set it to the slug of the pr-exam host's GitHub App")
+    return f"{slug}[bot]"
+
+
+def by_app(status, login):
+    """Whether the App posted `status`. A missing or unexpected creator never counts."""
+    creator = status.get("creator")
+    return isinstance(creator, dict) and creator.get("type") == "Bot" and creator.get("login") == login
+
+
 def post(repo, number):
     """The one call babysit-pr makes, `POST /api/exam` with {repo, pr}: "bring this PR's exam in line with GitHub"."""
     req = urllib.request.Request(host() + "/api/exam", method="POST", headers={"Content-Type": "application/json"},
@@ -102,9 +117,12 @@ def notify_merged(repo, number):
 
 
 def passed(repo, sha):
-    """Whether the newest `exam` commit status of `sha` is success, read over every page."""
+    """Whether the newest `exam` commit status the App posted on `sha` is success, read over every
+    page. Agents on the Mac share the operator's login, so a status from anyone else is ignored."""
+    login = app()
     out = gh_api("--paginate", f"repos/{repo}/commits/{sha}/statuses", "--jq", ".[] | tojson")
-    latest = next((st for st in map(json.loads, out.splitlines()) if st["context"] == CONTEXT), None)
+    latest = next((st for st in map(json.loads, out.splitlines())
+                   if st["context"] == CONTEXT and by_app(st, login)), None)
     return latest is not None and latest["state"] == "success"
 
 

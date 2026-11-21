@@ -692,7 +692,7 @@ def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
     try:
         if not exam.enabled(info["base"]["ref"], pr_exam_script(info["base"]["ref"])):
             return print("exams are disabled for this repo")
-        exam.host()  # not configured: stop before asking GitHub anything more
+        exam.host(), exam.app()  # not configured: stop before asking GitHub anything more
         if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
             return print("the PR is not ready: CI is not green or a review is open")
         exam.request(repo, number)

@@ -31,7 +31,7 @@ import sys
 
 import pytest
 
-from test_babysit import SCRIPT, T, World, iso
+from test_babysit import BOT, SCRIPT, T, World, iso
 from test_babysit_judge import commit as git_commit, git
 
 BLOCK = """## Summary
@@ -57,7 +57,7 @@ def commit(sha, message="feat: x", author="jesdi", parents=("p0",)):
     return {"sha": sha, "date": iso(T), "message": message, "author": author, "parents": list(parents)}
 
 
-EXAM_OK = {"context": "exam", "state": "success", "description": "passed"}
+EXAM_OK = {"context": "exam", "state": "success", "description": "passed", "creator": BOT}
 
 
 def checkout(w, shas, policy, exam_config=None):

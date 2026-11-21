@@ -30,6 +30,8 @@ INSTALL = "npx @jesdi/skills-cli install pr-risk"
 STAGED = ("babysit.py", "exam.py", "judge-prompt.md")  # the skill's own files a staged copy needs
 T = datetime(2020, 1, 1, 10, 5, tzinfo=timezone.utc)
 MIN = timedelta(minutes=1)
+APP = "agent-ops-hel1"  # PR_EXAM_APP of every world
+BOT = f"{APP}[bot]"  # the login the box's GitHub App posts statuses as
 
 
 def iso(dt):
@@ -78,7 +80,7 @@ class World:
             "next_id": max([c["id"] for c in comments] + [1000]) + 1}))
         self.env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
                     "HOME": str(self.home), "GH_FAKE_STATE": str(self.state),
-                    "GH_FAKE_LOG": str(self.log)}
+                    "GH_FAKE_LOG": str(self.log), "PR_EXAM_APP": APP}
 
     def run(self, verb, session, repo="jesdi/demo", pr="58"):
         p = subprocess.run(

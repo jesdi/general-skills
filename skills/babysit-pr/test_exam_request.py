@@ -12,7 +12,7 @@ Interface under test:
       with "bypassed" (state skipped) or "deferred" (a deferred open exam: debt true).
       Not ready (a check pending, or owner-comments would hand off): prints "not ready", asks
       nothing. Exams off in `.pr-exam.json`: prints "disabled", asks nothing. Invalid config,
-      PR_EXAM_HOST unset, pr-exam not installed or an unreachable host: non-zero, with the reason.
+      PR_EXAM_HOST or PR_EXAM_APP unset, pr-exam not installed or an unreachable host: non-zero, with the reason.
   babysit.py checks ...: the `exam` commit status never counts as pending, stalled or red.
 `.pr-exam.json` is read from `origin/<base>` of the checkout in the current directory. `gh` is the
 fake in fixtures/gh, the host is fixtures/exam_host.py, reached through PR_EXAM_HOST.
@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent / "fixtures"))
 from exam_host import FakeHost  # noqa: E402
-from test_babysit import STAGED, SCRIPT, T, MIN, World, iso
+from test_babysit import BOT, STAGED, SCRIPT, T, MIN, World, iso
 from test_babysit_judge import git, commit
 
 PR_EXAM_INSTALL = "npx @jesdi/skills-cli install pr-exam"
@@ -188,7 +188,7 @@ def test_a_deferred_exam_is_reported_as_deferred(tmp_path):
 
 @pytest.mark.parametrize("state", ["pending", "error", "failure"])
 def test_checks_ignore_the_exam_status_whatever_its_state_and_age(tmp_path, state):
-    w = Exam(tmp_path, statuses=[{"context": "exam", "state": state}])
+    w = Exam(tmp_path, statuses=[{"context": "exam", "state": state, "creator": BOT}])
     first = w.checks()
     assert "green" in first.output.lower(), first.output
     w.set_now(T + 3 * 24 * 60 * MIN)  # three days later, far beyond --wait-minutes
@@ -203,6 +203,16 @@ def test_exams_enabled_without_the_host_variable_names_it(tmp_path):
     p = w.exam(None)
     assert p.returncode != 0, p.output
     assert "PR_EXAM_HOST" in p.output
+
+
+def test_exams_enabled_without_the_app_variable_names_it(tmp_path):
+    w = Exam(tmp_path)
+    w.env.pop("PR_EXAM_APP")
+    with FakeHost() as host:
+        p = w.exam(host.url)
+    assert p.returncode != 0, p.output
+    assert "PR_EXAM_APP" in p.output
+    assert host.requests == []
 
 
 def test_exams_enabled_without_pr_exam_installed_names_the_install_command(tmp_path):
