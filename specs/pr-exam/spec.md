@@ -18,8 +18,10 @@
    - normal PRs: 3–5 questions;
    - at most 8 questions.
 5. **Question types:**
-   - Every exam mixes multiple-choice and free-text questions, except a 1-question exam.
-   - Every exam with at least 3 questions has at least one free-text *why* question.
+   - A first exam with 2 or more questions mixes multiple-choice and free-text questions.
+   - A first exam with at least 3 questions has at least one free-text *why* question.
+   - Follow-up and delta exams are exempt from both rules: their questions are fixed by the missed
+     or new concepts, and a due concept must be multiple choice.
    - All options of a multiple-choice question have the same word count.
    - Where the repo has a `GLOSSARY.md`, questions use its terms.
 6. **Scoring:**
