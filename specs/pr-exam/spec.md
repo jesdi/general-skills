@@ -55,7 +55,8 @@
     - It waits for the `exam` status with no time limit and does not report it as "CI stalled".
     - It shows the exam link in its status output.
 12. **babysit-pr refuses to merge** a PR in a repo with exams enabled unless the PR's head commit
-    has `exam` = success. This holds whatever the approval path, including session approval.
+    has `exam` = success, posted by the box's GitHub App. This holds whatever the approval path,
+    including session approval. A status posted by anyone else doesn't count.
 13. **Pushes after the exam:**
     - While the exam is open, a new push replaces it with an exam on the new head.
     - After a pass, a new push gets a delta judgment from the host:
@@ -98,6 +99,13 @@
 - **Given** head `abc123` with `exam` = success and the automatic judge says `agree` at risk 2
 - **When** babysit-pr merges
 - **Then** `gh pr merge --match-head-commit abc123` runs
+
+### Scenario: a status posted by anyone else doesn't count
+
+- **Given** head `abc123` whose `exam` status from the box's GitHub App is pending, and a newer
+  `exam` = success posted with the operator's login
+- **When** babysit-pr waits for the exam or runs `merge`
+- **Then** the wait goes on, and the merge is refused with "exam not passed"
 
 ### Scenario: a pass is not merge approval
 
