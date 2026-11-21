@@ -10,9 +10,31 @@ State is the JSON file $GH_FAKE_STATE:
   repo_labels  [name] labels that exist in the repository (optional; when set, assigning a label
              that is not in it fails 422 like GitHub, and `POST repos/O/R/labels -f name=X` creates it)
   head_sha   head commit of every PR (default "head1")
+  pr_state   "open" (default), "closed" or "merged": the PR's REST `state` ("closed" when merged)
+             and `merged`, and `gh pr view`'s upper-case `state`
   check_runs {sha: [{name, status, conclusion, created_at, started_at}]}  (REST check-runs shape)
-  statuses   {sha: [{context, state}]}  newest first; commits/SHA/statuses is [] when unseeded
-  required_checks  [name] returned as branch protection contexts of any branch
+  statuses   {sha: [{context, state, creator}]}  newest first; commits/SHA/statuses is [] when unseeded
+             (only the first 30 without --paginate, like GitHub's default page). `creator` is a login
+             and is served as GitHub's user object: an App posts as "<slug>[bot]", type "Bot",
+             anyone else as type "User"; without it, creator is null
+  required_checks  [name] returned as branch protection contexts of the default branch
+  private, default_branch  visibility (default public) and default branch (default "main") of the repo
+  protection  branch protection of the default branch in GitHub's response shape (absent: 404
+             "Branch not protected"; derived from required_checks when that is set; its
+             required_status_checks null: 404 "Required status checks not enabled" for that
+             sub-resource). Writes, like GitHub:
+             `PATCH branches/B/protection/required_status_checks --input -` changes only that
+             sub-resource: `strict` and `checks` [{context, app_id}] when given; an app_id of -1 is
+             stored as null ("any app"), null is refused 422. On a protected branch with status checks
+             off it turns them on, unless patch_needs_checks is set: then 404.
+             `POST branches/B/protection/required_status_checks/contexts --input -` adds contexts
+             bound to no app, turning status checks on.
+             `PUT branches/B/protection --input -` replaces everything: the body must hold
+             required_status_checks, enforce_admins, required_pull_request_reviews and restrictions;
+             a boolean setting the body omits is reset to disabled.
+  protection_error  {status, message}: every branch protection call fails like gh ("gh: <message>
+             (HTTP <status>)"); put_error the same for the writes only
+  puts       bodies of the successful branch protection PUTs
   reviews    [{id, user: {login}, state, body, submitted_at}]  (optional)
   commits    [{sha, date}] oldest first, date = commit time (optional)
   threads    [{user: {login}, resolved}] review threads (optional)
@@ -33,7 +55,7 @@ State is the JSON file $GH_FAKE_STATE:
 Every call is appended to $GH_FAKE_LOG as one JSON line {argv, write, unsupported}.
 Supported: `gh api` (user, pulls/N/reviews, pulls/N/comments (review comments, always empty),
 pulls/N/commits, pulls (open list), `graphql` (answers the one connection the query asks for, with only the fields it selects), issues/N, pulls/N, issues/N/comments, issues/comments/ID,
-issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection/required_status_checks; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
+issues/N/labels[/NAME], commits/SHA/check-runs, commits/SHA/statuses, branches/B/protection[/required_status_checks[/contexts]]; -X, -f/-F, --input, --jq, --paginate, -i), `gh pr|issue view|comment|edit`.
 """
 import json
 import os
@@ -95,6 +117,16 @@ def emit(obj, jq, include=False):
     print(json.dumps(obj))
 
 
+def user(login):
+    """GitHub's user object for `login`, as a status's `creator`; None stays null."""
+    if login is None:
+        return None
+    bot = login.endswith("[bot]")
+    return {"login": login, "id": 40209326 if bot else 1000, "type": "Bot" if bot else "User",
+            "site_admin": False, "url": f"https://api.github.com/users/{login.replace('[', '%5B').replace(']', '%5D')}",
+            "html_url": f"https://github.com/apps/{login[:-5]}" if bot else f"https://github.com/{login}"}
+
+
 def labels_obj():
     return [{"name": n} for n in st["labels"]]
 
@@ -151,7 +183,9 @@ def api(args):
         log(False); return emit({"login": st["user"]}, jq, include)
     if m := re.fullmatch(rf"(?:issues|pulls)/{n}", path) and method == "GET":
         log(False)
-        return emit({"number": int(path.split("/")[1]), "state": "open", "labels": labels_obj(),
+        pr_state = st.get("pr_state", "open")
+        return emit({"number": int(path.split("/")[1]), "state": "open" if pr_state == "open" else "closed",
+                     "merged": pr_state == "merged", "labels": labels_obj(),
                      "user": {"login": st["user"]},
                      "title": st.get("title", ""), "body": st.get("body", ""),
                      "head": {"sha": st.get("head_sha", "head1"), "ref": st.get("head_ref", "feature")},
@@ -163,8 +197,10 @@ def api(args):
                      if fields.get("base") in (None, p["base"])], jq, include)
     if re.fullmatch(r"repos/[^/]+/[^/]+", path) and method == "GET":
         log(False)
-        return emit(st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
-                                             "allow_squash_merge": False}), jq, include)
+        return emit({**st.get("repo_settings", {"allow_rebase_merge": True, "allow_merge_commit": True,
+                                                "allow_squash_merge": False}),
+                     "private": st.get("private", False),
+                     "default_branch": st.get("default_branch", "main")}, jq, include)
     if re.fullmatch(rf"pulls/{n}/reviews", path) and method == "GET":
         log(False)
         return emit([{"id": r["id"], "user": r["user"], "state": r["state"], "body": r.get("body", ""),
@@ -214,10 +250,70 @@ def api(args):
         return emit({"total_count": len(runs), "check_runs": runs}, jq, include)
     if m := re.fullmatch(r"commits/([^/]+)/statuses", path):
         log(False)
-        return emit(st.get("statuses", {}).get(m.group(1), []), jq, include)
-    if re.fullmatch(r"branches/[^/]+/protection/required_status_checks", path):
-        log(False)
-        return emit({"strict": False, "contexts": st.get("required_checks", [])}, jq, include)
+        found = [{**s, "creator": user(s.get("creator"))} for s in st.get("statuses", {}).get(m.group(1), [])]
+        return emit(found if "--paginate" in args else found[:30], jq, include)  # GitHub's page: 30
+    if m := re.fullmatch(r"branches/([^/]+)/protection(/required_status_checks(/contexts)?)?", path):
+        write = method != "GET"
+        def refuse(message, status=404):
+            log(write); print(f"gh: {message} (HTTP {status})", file=sys.stderr); sys.exit(1)
+        err = st.get("protection_error") or (write and st.get("put_error"))
+        if err:
+            refuse(err["message"], err["status"])
+        if m.group(1) != st.get("default_branch", "main"):
+            refuse("Branch not found")
+        prot = st.get("protection")
+        if prot is None and "required_checks" in st:
+            prot = {"required_status_checks": {"strict": False, "contexts": st["required_checks"],
+                                               "checks": [{"context": c, "app_id": None}
+                                                          for c in st["required_checks"]]}}
+        def checks_of(given):
+            if any(c.get("app_id", -1) is None for c in given):
+                refuse("Invalid request. For 'properties/app_id', nil is not an integer.", 422)
+            return [{"context": c["context"], "app_id": None if c.get("app_id", -1) == -1 else c["app_id"]}
+                    for c in given]
+        def store(rsc):
+            rsc["contexts"] = [c["context"] for c in rsc["checks"]]
+            prot["required_status_checks"] = rsc
+            log(True); st["protection"] = prot; save()
+            return emit(rsc, jq, include)
+        if m.group(2) and prot is None:
+            refuse("Branch not protected")
+        if method == "GET":
+            if prot is None:
+                refuse("Branch not protected")
+            if m.group(2) and prot["required_status_checks"] is None:
+                refuse("Required status checks not enabled")
+            log(False)
+            return emit(prot["required_status_checks"] if m.group(2) else prot, jq, include)
+        rsc = prot["required_status_checks"] if prot else None
+        if method == "PATCH" and m.group(2) and not m.group(3):
+            if rsc is None and st.get("patch_needs_checks"):
+                refuse("Required status checks not enabled")
+            rsc = rsc or {"strict": False, "checks": []}
+            return store({"strict": bool(fields.get("strict", rsc["strict"])),
+                          "checks": checks_of(fields["checks"]) if "checks" in fields else rsc["checks"]})
+        if method == "POST" and m.group(3):
+            rsc = rsc or {"strict": False, "checks": []}
+            new = [{"context": c, "app_id": None} for c in fields.get("contexts", [])
+                   if c not in [x["context"] for x in rsc["checks"]]]
+            return store({"strict": rsc["strict"], "checks": rsc["checks"] + new})
+        if method == "PUT" and not m.group(2):
+            missing = [k for k in ("required_status_checks", "enforce_admins",
+                                   "required_pull_request_reviews", "restrictions") if k not in fields]
+            if missing:
+                die(f"HTTP 422: Invalid request, missing {missing}", True)
+            rsc = fields["required_status_checks"] or {"strict": False, "checks": []}
+            checks = checks_of(rsc.get("checks", []))
+            prot = {"required_status_checks": {"strict": bool(rsc.get("strict")), "checks": checks,
+                                               "contexts": [c["context"] for c in checks]},
+                    "enforce_admins": {"enabled": bool(fields["enforce_admins"])},
+                    "required_pull_request_reviews": fields["required_pull_request_reviews"],
+                    "restrictions": fields["restrictions"]}
+            for k in ("required_linear_history", "allow_force_pushes", "allow_deletions", "block_creations",
+                      "required_conversation_resolution", "lock_branch", "allow_fork_syncing"):
+                prot[k] = {"enabled": bool(fields.get(k))}
+            log(True); st["protection"] = prot; st.setdefault("puts", []).append(fields); save()
+            return emit(prot, jq, include)
     if re.fullmatch(rf"issues/{n}/comments", path):
         if method == "GET":
             log(False); return emit(visible(), jq, include)
@@ -276,7 +372,7 @@ def pr_like(args):
         comments = [{"id": str(c["id"]), "body": c["body"], "author": c["user"],
                      "createdAt": c["created_at"], "updatedAt": c["updated_at"]} for c in visible()]
         log(False)
-        return emit({"labels": labels_obj(), "comments": comments, "state": "OPEN",
+        return emit({"labels": labels_obj(), "comments": comments, "state": st.get("pr_state", "open").upper(),
                      "title": st.get("title", ""), "body": st.get("body", ""),
                      "headRefOid": st.get("head_sha", "head1")}, jq)
     if verb == "merge":

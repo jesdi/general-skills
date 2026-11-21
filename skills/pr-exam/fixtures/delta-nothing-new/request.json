@@ -1,0 +1,43 @@
+{
+  "mode": "delta",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "diff": "diff.patch",
+  "body": "body.md",
+  "glossary": null,
+  "records": "records",
+  "today": "2026-11-18",
+  "only_concepts": null,
+  "prior_concepts": [
+    "single-sync-leader",
+    "stale-leader-writes",
+    "fencing-token",
+    "lease-expiry",
+    "injected-monotonic-clock",
+    "leader-lifecycle",
+    "lease-rollback",
+    "sync-blast-radius",
+    "renew-checks-ownership",
+    "write-checks-token",
+    "release-by-owner",
+    "owner-reacquire"
+  ],
+  "prior_prompts": [],
+  "out": "exam.json",
+  "passed_diff": "passed.diff",
+  "passed_concepts": [
+    "single-sync-leader",
+    "stale-leader-writes",
+    "fencing-token",
+    "lease-expiry",
+    "injected-monotonic-clock",
+    "leader-lifecycle",
+    "lease-rollback",
+    "sync-blast-radius",
+    "renew-checks-ownership",
+    "write-checks-token",
+    "release-by-owner",
+    "owner-reacquire"
+  ]
+}

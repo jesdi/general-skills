@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from test_babysit import INSTALL, World
+from test_babysit import STAGED, INSTALL, World
 from test_babysit_judge import Judge, git, commit
 
 SKILLS = Path(__file__).resolve().parent.parent
@@ -23,7 +23,7 @@ HERE = Path(__file__).resolve().parent
 def stage_script(tmp_path):
     dest = tmp_path / "stage" / "skills" / "babysit-pr"
     dest.mkdir(parents=True)
-    for name in ("babysit.py", "judge-prompt.md"):
+    for name in STAGED:
         shutil.copy(HERE / name, dest / name)
     return dest / "babysit.py"
 

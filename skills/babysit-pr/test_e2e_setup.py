@@ -25,7 +25,7 @@ babysit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(babysit)
 reviewed = Path('.claude/skills/pr-risk').resolve()
 assert not reviewed.is_relative_to(Path.cwd()), reviewed
-assert babysit.trusted_pr_risk_dirs()[0] == reviewed
+assert babysit.trusted_install(*babysit.PR_RISK) == reviewed
 assert Path(babysit.load_merge_risk().__file__).resolve() == reviewed / 'merge_risk.py'
 assert Path('.agents/skills/babysit-pr').resolve() == Path('.claude/skills/babysit-pr').resolve()
 """

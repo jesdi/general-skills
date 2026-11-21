@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "mode": "first",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "concepts": [
+    {
+      "id": "single-sync-leader",
+      "title": "One worker runs the nightly sync",
+      "kind": "why"
+    },
+    {
+      "id": "stale-leader-writes",
+      "title": "A stalled leader must stop writing",
+      "kind": "why"
+    },
+    {
+      "id": "fencing-token",
+      "title": "Fencing token",
+      "kind": "concept"
+    },
+    {
+      "id": "lease-expiry",
+      "title": "Lease expiry after the TTL",
+      "kind": "concept"
+    },
+    {
+      "id": "injected-monotonic-clock",
+      "title": "Injected monotonic clock",
+      "kind": "architecture"
+    },
+    {
+      "id": "leader-lifecycle",
+      "title": "Acquire, renew and release around the work",
+      "kind": "architecture"
+    },
+    {
+      "id": "lease-rollback",
+      "title": "Rolling the lease back",
+      "kind": "risk"
+    },
+    {
+      "id": "sync-blast-radius",
+      "title": "Blast radius of the lease",
+      "kind": "risk"
+    },
+    {
+      "id": "renew-checks-ownership",
+      "title": "Renew checks owner and token",
+      "kind": "behaviour"
+    },
+    {
+      "id": "write-checks-token",
+      "title": "Write checks the current token",
+      "kind": "behaviour"
+    },
+    {
+      "id": "release-by-owner",
+      "title": "Only the owner releases",
+      "kind": "behaviour"
+    },
+    {
+      "id": "owner-reacquire",
+      "title": "The owner can re-acquire a held lease",
+      "kind": "behaviour"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "concept": "single-sync-leader",
+      "type": "text",
+      "prompt": "Why does the nightly sync need a lease at all? Say what went wrong without one."
+    },
+    {
+      "id": "q2",
+      "concept": "stale-leader-writes",
+      "type": "text",
+      "prompt": "A worker holding the lease pauses longer than its TTL, and another worker takes over. Why is the lease alone not enough here, and what stops the first worker's late writes?"
+    },
+    {
+      "id": "q3",
+      "concept": "fencing-token",
+      "type": "choice",
+      "prompt": "What makes a write under an old fencing token fail?",
+      "options": [
+        "The token encodes the owner's process identifier",
+        "Every new acquisition increments the stored token",
+        "Each token carries its own signed expiry"
+      ]
+    },
+    {
+      "id": "q4",
+      "concept": "lease-expiry",
+      "type": "choice",
+      "prompt": "When can a second worker take a lease that another worker holds?",
+      "options": [
+        "Whenever it asks with a higher worker priority value",
+        "Only after the holder explicitly calls release on it",
+        "Once the holder has stopped renewing past the TTL"
+      ]
+    },
+    {
+      "id": "q5",
+      "concept": "injected-monotonic-clock",
+      "type": "choice",
+      "prompt": "Why does the lease store take its clock as a parameter that defaults to a monotonic clock?",
+      "options": [
+        "Wall-clock jumps cannot shorten leases, and tests control time",
+        "Leases persist across restarts because monotonic time is stored",
+        "Workers on different hosts then share one synchronised time"
+      ]
+    },
+    {
+      "id": "q6",
+      "concept": "leader-lifecycle",
+      "type": "text",
+      "prompt": "How does the leader loop keep the lease while work runs, and what happens to the lease when the work fails or the lease is lost?"
+    },
+    {
+      "id": "q7",
+      "concept": "lease-rollback",
+      "type": "choice",
+      "prompt": "If this change is reverted while a worker holds a lease, what happens to that lease?",
+      "options": [
+        "It blocks the sync until manually deleted",
+        "It expires by itself after the TTL",
+        "It passes to the next worker immediately"
+      ]
+    },
+    {
+      "id": "q8",
+      "concept": "sync-blast-radius",
+      "type": "choice",
+      "prompt": "Which part of the system can a bug in the lease store break?",
+      "options": [
+        "Every write to the store",
+        "All scheduled jobs on workers",
+        "Only the nightly sync job"
+      ]
+    }
+  ],
+  "key": {
+    "q1": {
+      "explanation": "Before the lease, two workers sometimes ran the nightly sync at the same time and overwrote each other's results; the lease makes one worker the single writer.",
+      "hunk": "+def run_leader(store, name, owner, work, interval=10):\n+    token = store.acquire(name, owner)\n+    if token is None:\n+        return False",
+      "rubric": {
+        "pass": "Says two workers could run the sync concurrently and overwrite each other's results, and that the lease lets only one worker run it at a time.",
+        "partial": "Says the lease gives a single worker, or names concurrent runs, without saying that results were overwritten."
+      }
+    },
+    "q2": {
+      "explanation": "After a pause (GC, network) both workers can believe they lead. Every write carries the fencing token from acquire, and write raises LeaseLost when the stored token differs, so the stale leader's late writes are refused.",
+      "hunk": "+    def write(self, name, token, key, value):\n+        held = self.backend.get(name)\n+        if not held or held[\"token\"] != token:\n+            raise LeaseLost(name)",
+      "rubric": {
+        "pass": "Says the paused worker still believes it leads, and that each write carries a fencing token the store compares with the current one, refusing the stale token.",
+        "partial": "Mentions the fencing token or the stale leader, but not how the store uses the token to refuse the late write."
+      }
+    },
+    "q3": {
+      "explanation": "acquire stores the previous token plus one, so the newest holder always has the highest token and any older token no longer matches.",
+      "hunk": "+        token = (held[\"token\"] + 1) if held else 1",
+      "answer": 1
+    },
+    "q4": {
+      "explanation": "acquire refuses only while the lease has not expired and belongs to someone else; renew pushes expires forward, so a holder that stops renewing loses the lease after the TTL.",
+      "hunk": "+        if held and held[\"expires\"] > now and held[\"owner\"] != owner:\n+            return None",
+      "answer": 2
+    },
+    "q5": {
+      "explanation": "The clock defaults to time.monotonic, which never jumps with wall-clock changes, and injecting it lets tests advance time without sleeping.",
+      "hunk": "+    def __init__(self, backend, ttl=30, clock=time.monotonic):",
+      "answer": 0
+    },
+    "q6": {
+      "explanation": "run_leader renews the lease after every unit of work, stops with False when renew raises LeaseLost, and releases the lease in a finally block so it is freed whatever happens.",
+      "hunk": "+    try:\n+        while work(token):\n+            store.renew(name, owner, token)\n+            time.sleep(interval)\n+    except LeaseLost:\n+        return False\n+    finally:\n+        store.release(name, owner, token)",
+      "rubric": {
+        "pass": "Says the loop renews the lease between units of work, stops when the lease is lost, and always releases the lease in a finally block.",
+        "partial": "Names renewing or releasing, but not both, or does not say the release happens on failure too."
+      }
+    },
+    "q7": {
+      "explanation": "The merge-risk block gives the rollback as a revert, safe because leases expire after the TTL: no lease outlives the code that renews it.",
+      "hunk": "+        self.backend.put(name, {\"owner\": owner, \"token\": token, \"expires\": now + self.ttl})",
+      "answer": 1
+    },
+    "q8": {
+      "explanation": "The merge-risk block limits the blast radius to the nightly sync: only it runs under run_leader.",
+      "hunk": "+def run_leader(store, name, owner, work, interval=10):",
+      "answer": 2
+    }
+  }
+}

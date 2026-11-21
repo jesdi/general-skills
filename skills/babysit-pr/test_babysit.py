@@ -27,8 +27,11 @@ SCRIPT = Path(__file__).with_name("babysit.py").resolve()
 FAKE_GH = Path(__file__).parent / "fixtures" / "gh"
 LEASE = re.compile(r"<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 INSTALL = "npx @jesdi/skills-cli install pr-risk"
+STAGED = ("babysit.py", "exam.py", "judge-prompt.md")  # the skill's own files a staged copy needs
 T = datetime(2020, 1, 1, 10, 5, tzinfo=timezone.utc)
 MIN = timedelta(minutes=1)
+APP = "agent-ops-hel1"  # PR_EXAM_APP of every world
+BOT = f"{APP}[bot]"  # the login the box's GitHub App posts statuses as
 
 
 def iso(dt):
@@ -58,8 +61,11 @@ class World:
         if not pr_risk:  # no sibling pr-risk beside the script, no install under HOME
             stage = tmp_path / "stage" / "skills" / "babysit-pr"
             stage.mkdir(parents=True)
-            for name in ("babysit.py", "judge-prompt.md"):
+            for name in STAGED:
                 shutil.copy(SCRIPT.parent / name, stage / name)
+            # pr-exam stays installed: exams are on by default, and every real run past `exam` has it
+            (stage.parent / "pr-exam").mkdir()
+            shutil.copy(SCRIPT.parent.parent / "pr-exam" / "pr_exam.py", stage.parent / "pr-exam")
             self.script = stage / "babysit.py"
         if pr_risk:
             skill = self.home / ".agents" / "skills" / "pr-risk"
@@ -74,7 +80,7 @@ class World:
             "next_id": max([c["id"] for c in comments] + [1000]) + 1}))
         self.env = {**os.environ, "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
                     "HOME": str(self.home), "GH_FAKE_STATE": str(self.state),
-                    "GH_FAKE_LOG": str(self.log)}
+                    "GH_FAKE_LOG": str(self.log), "PR_EXAM_APP": APP}
 
     def run(self, verb, session, repo="jesdi/demo", pr="58"):
         p = subprocess.run(
