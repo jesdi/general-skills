@@ -1,0 +1,66 @@
+diff --git a/lease.py b/lease.py
+new file mode 100644
+--- /dev/null
++++ b/lease.py
+@@ -0,0 +1,61 @@
++import time
++
++
++class LeaseLost(Exception):
++    """Raised when the caller no longer owns the lease it tried to write under."""
++
++
++class LeaseStore:
++    """Single-writer lease over a key-value store.
++
++    Two workers can both believe they lead after a pause (GC, network). A
++    fencing token lets the store reject the older leader's late writes.
++    """
++
++    def __init__(self, backend, ttl=30, clock=time.monotonic):
++        self.backend = backend
++        self.ttl = ttl
++        self.clock = clock
++
++    def acquire(self, name, owner):
++        current = self.clock()
++        held = self.backend.get(name)
++        if held and held["expires"] > current and held["owner"] != owner:
++            return None
++        token = (held["token"] + 1) if held else 1
++        self.backend.put(name, {"owner": owner, "token": token, "expires": current + self.ttl})
++        return token
++
++    def renew(self, name, owner, token):
++        held = self.backend.get(name)
++        if not held or held["owner"] != owner or held["token"] != token:
++            raise LeaseLost(name)
++        held["expires"] = self.clock() + self.ttl
++        self.backend.put(name, held)
++
++    def write(self, name, token, key, value):
++        held = self.backend.get(name)
++        if not held or held["token"] != token:
++            raise LeaseLost(name)
++        self.backend.put(key, value)
++
++    def release(self, name, owner, token):
++        held = self.backend.get(name)
++        if held and held["owner"] == owner and held["token"] == token:
++            held["expires"] = 0
++            self.backend.put(name, held)
++
++
++def run_leader(store, name, owner, work, interval=10):
++    token = store.acquire(name, owner)
++    if token is None:
++        return False
++    try:
++        while work(token):
++            store.renew(name, owner, token)
++            time.sleep(interval)
++    except LeaseLost:
++        return False
++    finally:
++        store.release(name, owner, token)
++    return True

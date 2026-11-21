@@ -1,0 +1,15 @@
+{
+  "mode": "first",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "diff": "diff.patch",
+  "body": "body.md",
+  "glossary": null,
+  "records": "records",
+  "today": "2026-11-18",
+  "only_concepts": [],
+  "prior_concepts": [],
+  "prior_prompts": [],
+  "out": "exam.json"
+}

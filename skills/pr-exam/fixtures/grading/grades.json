@@ -1,0 +1,14 @@
+{
+  "q1": {
+    "grade": "pass",
+    "feedback": "Names both the concurrent runs overwriting each other's results and the lease limiting the sync to one worker at a time."
+  },
+  "q2": {
+    "grade": "pass",
+    "feedback": "Says the paused worker still believes it leads and that the store compares each write's fencing token with the current one, raising LeaseLost on a stale token."
+  },
+  "q6": {
+    "grade": "partial",
+    "feedback": "Names renewing between rounds of work, but leaves out that the loop stops when the lease is lost and that the lease is always released in a finally block, on failure too."
+  }
+}

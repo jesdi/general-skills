@@ -1,12 +1,13 @@
 [run]
 branch = True
 data_file = .crap/.coverage
-# test:python sets this for skills/test-prune, whose black-box tests drive prune.py in subprocesses.
+# test:python sets this for skills/test-prune and skills/pr-exam, whose black-box tests drive their scripts in subprocesses.
 patch = ${COVERAGE_SUBPROCESS_PATCH-}
 source =
     skills/backlog
     skills/crap-gate
     skills/implement-spec
+    skills/pr-exam
     skills/test-prune
 omit =
     */skills/**/test_*.py

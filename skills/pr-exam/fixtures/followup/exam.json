@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "mode": "followup",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "concepts": [
+    {"id": "leader-lifecycle", "title": "Leader lifecycle", "kind": "architecture"},
+    {"id": "lease-rollback", "title": "Lease rollback", "kind": "risk"},
+    {"id": "sync-blast-radius", "title": "Sync blast radius", "kind": "risk"}
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "concept": "leader-lifecycle",
+      "type": "text",
+      "prompt": "A leader learns that another worker has taken over its lease, and its cleanup still releases the lease on the way out. Why does that release not end the new leader's lease?"
+    },
+    {
+      "id": "q2",
+      "concept": "lease-rollback",
+      "type": "text",
+      "prompt": "You roll this change back with a revert. What manual cleanup do the leases left in the store need, and why?"
+    },
+    {
+      "id": "q3",
+      "concept": "sync-blast-radius",
+      "type": "choice",
+      "prompt": "A bug makes the lease store refuse every attempt to take a lease. What stops running?",
+      "options": [
+        "Every worker job entirely",
+        "All backend writes everywhere",
+        "The nightly sync only",
+        "Nothing at all stops"
+      ]
+    }
+  ],
+  "key": {
+    "q1": {
+      "rubric": {
+        "pass": "Says release only acts when the caller's owner and token match the lease currently held, so the old leader's release, carrying its old owner or token, changes nothing for the new leader.",
+        "partial": "Says the release is harmless or ignored for a leader that lost the lease, without saying that it is the owner and token check against the held lease that makes it so."
+      },
+      "explanation": "The leader loop always releases in its cleanup, but release expires the lease only when the held record has the caller's owner and token. After a takeover the record carries the new leader's owner and a higher token, so the old leader's release does nothing.",
+      "hunk": "+    def release(self, name, owner, token):\n+        held = self.backend.get(name)\n+        if held and held[\"owner\"] == owner and held[\"token\"] == token:\n+            held[\"expires\"] = 0\n+            self.backend.put(name, held)"
+    },
+    "q2": {
+      "rubric": {
+        "pass": "Says none is needed, because every lease carries an expiry one TTL ahead and lapses on its own once nothing renews it.",
+        "partial": "Says no cleanup is needed without giving the TTL expiry as the reason, or names the TTL expiry but still asks for a manual step."
+      },
+      "explanation": "The rollback is a plain revert. A lease is stored with an expiry of now plus the TTL and only a renew extends it, so once the reverted code stops renewing, every lease lapses within one TTL without anyone deleting it.",
+      "hunk": "+        self.backend.put(name, {\"owner\": owner, \"token\": token, \"expires\": now + self.ttl})"
+    },
+    "q3": {
+      "answer": 2,
+      "explanation": "Only the nightly sync runs under the leader loop, which returns without doing any work when it cannot take the lease. Other jobs and other writes never go through the lease store, so the blast radius is the nightly sync only.",
+      "hunk": "+    token = store.acquire(name, owner)\n+    if token is None:\n+        return False"
+    }
+  }
+}

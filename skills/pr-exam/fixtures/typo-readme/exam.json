@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "mode": "first",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "concepts": [
+    {"id": "readme-spelling-fix", "title": "README spelling fix", "kind": "why"}
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "concept": "readme-spelling-fix",
+      "type": "choice",
+      "prompt": "Why does this PR change the README?",
+      "options": [
+        "To document a new skill",
+        "To rename the whole project",
+        "To fix a misspelt word"
+      ]
+    }
+  ],
+  "key": {
+    "q1": {
+      "explanation": "The PR corrects one misspelt word in the README, \"skils\" to \"skills\"; no code or behaviour changes.",
+      "hunk": "-Personal agent skils, installable into Claude Code.\n+Personal agent skills, installable into Claude Code.",
+      "answer": 2
+    }
+  }
+}

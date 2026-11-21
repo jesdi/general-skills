@@ -6,6 +6,7 @@ gh user. Expiry is judged against GitHub's clock (the `Date` header of `gh api -
 clock. Among valid lease comments the lowest comment id holds the lease; the label is not the lock.
 """
 import argparse
+import atexit
 import fcntl
 import hashlib
 import json
@@ -22,10 +23,15 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # the sibling module, ahead of the current directory:
+import exam  # noqa: E402  a loader that is not `python babysit.py` may have the PR's checkout first
+
 LEASE = re.compile(r"\A<!-- babysit-pr lease: (\S+) (\S+) (\S+) -->")
 TTL = timedelta(minutes=90)
-INSTALL = "npx @jesdi/skills-cli install pr-risk"
-PR_RISK_DIRS = (".my-skills/pr-risk", ".agents/skills/pr-risk", ".claude/skills/pr-risk")
+SKILL_DIRS = (".my-skills", ".agents/skills", ".claude/skills")  # where a skill is installed, under $HOME or a repo
+HOME_SKILL_DIRS = (*SKILL_DIRS, ".codex/skills")  # a Codex session on the box sees only its ~/.codex
+PR_RISK = ("pr-risk", ("merge_risk.py", "merge_policy.py"))  # a skill and the files babysit-pr runs from it
+PR_EXAM = ("pr-exam", ("pr_exam.py",))
 CLAIM_PENDING = "<!-- babysit-pr claim: pending -->\n"
 CLAIM_HELD = "<!-- babysit-pr claim: held -->\n"
 MAX_ROUNDS = 5
@@ -319,7 +325,8 @@ def ci_state(repo, number, wait):
     for line in out.splitlines():
         if line:
             status = json.loads(line)
-            latest.setdefault(status["context"], status)
+            if status["context"] != exam.CONTEXT:  # the exam is asked for after CI: it never gates CI
+                latest.setdefault(status["context"], status)
     reset_terminal_statuses(pr, f"{repo}#{sha}#status:", latest)
     red = red or any(s["state"] in ("failure", "error") for s in latest.values())
     pending_runs = [r for r in runs if r["status"] != "completed"]
@@ -380,13 +387,13 @@ def extend(pr, c, session, host, expires, user):
 
 
 def require_pr_risk(repo, number):
-    if trusted_pr_risk_dirs():
+    if trusted_install(*PR_RISK):
         return
     if subprocess.run(["git", "rev-parse", "--git-dir"], capture_output=True).returncode == 0:
         base = gh("api", f"repos/{repo}/pulls/{number}", "--jq", ".base.ref", check=False).strip()
-        if base and base_install(base):
+        if base and trusted_install(*PR_RISK, base):
             return
-    fail(f"pr-risk is not installed. Run: {INSTALL}")
+    fail(not_installed("pr-risk"))
 
 
 def renew(repo, number, session):
@@ -397,7 +404,9 @@ def renew(repo, number, session):
 def lease(verb, repo, number, session, host):
     # Every lease-body writer reads its snapshot inside the same lock as rounds.
     with locked():
-        return lease_locked(verb, repo, number, session, host)
+        lease_locked(verb, repo, number, session, host)
+    if verb == "acquire":  # advisory, once per run: outside the lock, it never holds another session up
+        warn_exam_not_required(repo, number)
 
 
 def confirmed_leases(comments, user):
@@ -518,6 +527,23 @@ def lease_locked(verb, repo, number, session, host):
         pr.label(add=["babysitting"], remove=["needs-human"])
 
 
+def warn_exam_not_required(repo, number):
+    """A public repo with exams on whose default branch does not require `exam`: say how to fix it.
+
+    Silent whenever the answer is unknown (no fetch yet, an invalid config, no install, GitHub down):
+    `exam` and `merge` stop on the same cause with the full message."""
+    try:
+        base = json.loads(gh("api", f"repos/{repo}/pulls/{number}", check=False))["base"]
+        script = pr_exam_script(base["ref"])
+        if base["repo"]["private"] is not False or not exam.enabled(base["ref"], script):
+            return
+    except (ValueError, KeyError, TypeError, exam.ExamError):
+        return
+    if exam.required(repo, script) is False:
+        print(f"warning: `{exam.CONTEXT}` is not a required check on {repo}: run `pr-exam setup {repo}`",
+              file=sys.stderr)
+
+
 def connection(repo, number, name):
     """All nodes of one PR connection over GraphQL (REST has no comment `editor`)."""
     owner, _, repo_name = repo.partition("/")
@@ -608,30 +634,32 @@ def checkout_root():
     return Path(p.stdout.strip() if p.returncode == 0 else ".").resolve()
 
 
-def trusted_pr_risk_dirs():
-    """Installs a PR cannot change: next to this skill, and under $HOME. Never inside the checkout.
+def not_installed(skill):
+    return f"{skill} is not installed. Run: npx @jesdi/skills-cli install {skill}"
 
-    A path counts only if it, and the module files in it, resolve outside the checkout:
-    HOME may be the checkout, and a symlink may point into it. A project install is
-    read from origin/<base> instead.
+
+def trusted_install(skill, files, base=None):
+    """The folder of an install of `skill` that a PR cannot change, holding `files`; None when there is none.
+
+    Next to this skill or under $HOME, and only if the folder and its files resolve outside the
+    checkout: HOME may be the checkout, and a symlink may point into it. A project install counts
+    only as committed on origin/<base>: it is copied out of git into a folder removed at exit.
     """
     root = checkout_root()
-    home = Path.home()
     outside = lambda p: not p.resolve().is_relative_to(root)
-    return [d.resolve() for d in [Path(__file__).resolve().parent.parent / "pr-risk",
-                                  *(home / n for n in PR_RISK_DIRS)]
-            if d.is_dir() and outside(d)
-            and all((d / n).is_file() and outside(d / n) for n in ("merge_risk.py", "merge_policy.py"))]
-
-
-def base_install(base):
-    """[(file name, bytes)] of a pr-risk install committed on origin/<base>, else None."""
-    names = ("merge_risk.py", "merge_policy.py")
-    for d in PR_RISK_DIRS:  # a project install counts only as committed on origin/<base>
-        shown = [subprocess.run(["git", "show", f"origin/{base}:{d}/{n}"], capture_output=True)
-                 for n in names]
+    for d in [Path(__file__).resolve().parent.parent / skill, *(Path.home() / s / skill for s in HOME_SKILL_DIRS)]:
+        if d.is_dir() and outside(d) and all((d / n).is_file() and outside(d / n) for n in files):
+            return d.resolve()
+    for s in SKILL_DIRS if base else ():
+        shown = [subprocess.run(["git", "show", f"origin/{base}:{s}/{skill}/{n}"], capture_output=True)
+                 for n in files]
         if all(p.returncode == 0 for p in shown):
-            return [(n, p.stdout) for n, p in zip(names, shown)]
+            tmp = Path(tempfile.mkdtemp(prefix=f"babysit-{skill}-", dir="/tmp"))  # never TMPDIR: it may be the checkout
+            atexit.register(shutil.rmtree, tmp, ignore_errors=True)
+            for n, p in zip(files, shown):
+                (tmp / n).write_bytes(p.stdout)
+            return tmp
+    return None
 
 
 def import_merge_risk(folder):
@@ -648,16 +676,32 @@ def import_merge_risk(folder):
 
 
 def load_merge_risk(base=None):
-    for d in trusted_pr_risk_dirs():
-        if (d / "merge_risk.py").is_file():
-            return import_merge_risk(d)
-    files = base_install(base) if base else None
-    if files:
-        with tempfile.TemporaryDirectory(prefix="babysit-pr-risk-", dir="/tmp") as tmp:
-            for n, data in files:
-                (Path(tmp) / n).write_bytes(data)
-            return import_merge_risk(tmp)
-    fail(f"pr-risk is not installed. Run: {INSTALL}")
+    folder = trusted_install(*PR_RISK, base)
+    if folder is None:
+        fail(not_installed("pr-risk"))
+    return import_merge_risk(folder)
+
+
+def pr_exam_script(base):
+    """The trusted pr_exam.py, or None when pr-exam is not installed."""
+    folder = trusted_install(*PR_EXAM, base)
+    return folder / "pr_exam.py" if folder else None
+
+
+def exam_cmd(repo, number, wait=False, session=None, lease_host=None):
+    info = json.loads(gh("api", f"repos/{repo}/pulls/{number}"))
+    try:
+        if not exam.enabled(info["base"]["ref"], pr_exam_script(info["base"]["ref"])):
+            return print("exams are disabled for this repo")
+        exam.host(), exam.app()  # not configured: stop before asking GitHub anything more
+        if ci_state(repo, number, 60) != "green" or owner_comments(repo, number)["handoff"]:
+            return print("the PR is not ready: CI is not green or a review is open")
+        exam.request(repo, number)
+        if wait:  # `check` names the holder when it is not us
+            keep_lease = lambda: [lease(verb, repo, number, session, lease_host) for verb in ("check", "renew")]
+            exam.wait(repo, number, info["head"]["sha"], keep_lease)
+    except exam.ExamError as e:
+        fail(e)
 
 
 JUDGE_NEEDS = ("base_policy", "classify_diff", "diff_stats", "FENCE")
@@ -869,6 +913,12 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
 
     if pr["head"]["sha"] != sha:
         fail(f"head moved to {pr['head']['sha']} since the gate saw {sha}: gate again")
+    try:  # every approval path needs the pass of this exact sha; a refusal is no handoff
+        exams = exam.enabled(base, pr_exam_script(base))
+        if exams and not exam.passed(repo, sha):
+            fail("exam not passed")
+    except exam.ExamError as e:
+        fail(e)
     if session_approved:
         own_lease(repo, number, session)
         gate = "gate: explicit session authorization"
@@ -946,6 +996,8 @@ def merge_cmd(repo, number, sha, body_file, policy, judge_label, approved, sessi
     pr.post("🤖 Merged by babysit-pr: " + (
         f"session {session} authorized merge at {sha}" if session_approved else
         f"{risk_line}gate passed, judge {judge_label}" if approved is None else f"owner approved {approved}"))
+    if exams:
+        exam.notify_merged(repo, number)
     if session:
         release(pr, session)
 
@@ -964,6 +1016,12 @@ def main():
     cp.add_argument("--repo", required=True)
     cp.add_argument("--pr", required=True)
     cp.add_argument("--wait-minutes", type=int, required=True)
+    xp = sub.add_parser("exam")
+    xp.add_argument("--repo", required=True)
+    xp.add_argument("--pr", required=True)
+    xp.add_argument("--wait", action="store_true")
+    xp.add_argument("--session")
+    xp.add_argument("--host", help="lease host")
     rp = sub.add_parser("round")
     rp.add_argument("verb", choices=["start", "record-failure"])
     for a in ("repo", "pr", "session", "host"):
@@ -1003,6 +1061,10 @@ def main():
         print(json.dumps(owner_comments(a.repo, a.pr)))
     elif a.cmd == "checks":
         checks_cmd(a.repo, a.pr, a.wait_minutes)
+    elif a.cmd == "exam":
+        if a.wait and not (a.session and a.host):
+            ap.error("--wait needs --session and --host")
+        exam_cmd(a.repo, a.pr, a.wait, a.session, a.host)
     elif a.cmd == "round":
         if a.verb == "record-failure" and not (a.check and a.error):
             ap.error("record-failure needs --check and --error")

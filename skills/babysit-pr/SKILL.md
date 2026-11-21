@@ -21,7 +21,8 @@ Invoking the skill alone, or a hook starting it, does not grant this explicit au
 
 ## Before anything
 
-- `pr-risk` must be in `.my-skills/pr-risk`, `.agents/skills/pr-risk`, `.claude/skills/pr-risk` or `~/.my-skills/pr-risk`, in this order. If it is in none, stop and print the install command.
+- `pr-risk` must be installed, in this order: next to this skill; under `~` in `.my-skills`, `.agents/skills`, `.claude/skills` or `.codex/skills`; or committed on `origin/<base>` in one of the first three. A copy inside the PR checkout never counts. If it is in none, stop and print the install command.
+- `PR_EXAM_HOST` and `PR_EXAM_APP` (the slug of the box's GitHub App: only its `exam` status counts) must be set, and `pr-exam` must be installed the same way as `pr-risk`. If one is missing, stop and name it; for `pr-exam`, print the install command.
 - Codex needs `--profile babysit` (network on). If `gh` cannot reach GitHub, hand off at once with reason `no network for gh`; never wait on an approval prompt.
 - `lease acquire`. If another session holds it, stop with no comment and no push.
 
@@ -31,7 +32,13 @@ Invoking the skill alone, or a hook starting it, does not grant this explicit au
 2. `update-plan --base <base>` when the base moved; follow its plan (see Base moved). Every step uses `origin/<base>` of the PR (a stacked PR's parent), never `main`.
 3. `checks --wait-minutes <waitMinutes>` until the head is green, red, stalled (`CI stalled`) or empty (`no checks`). Green means every check passed.
 4. Red: `round start --op <id>` (keep the id), then the fix round below. Renew the lease each round and `lease check` before each push.
-5. Green: with explicit session authorization, use its merge path above. Otherwise, absent an owner commit approval, run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's label and risk to `merge --judge agree --judge-risk <risk>` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw, and hands off when the gate's or the judge's risk is above the repo's limit.
+5. Green: with reviews clear, run `exam` (`python3 babysit.py exam --repo <owner/name> --pr <n>`) before any gate, judge or merge, on every approval path: session authorization, the owner's `@babysitter merge <sha>` comment, and the automatic path. A session never skips it. A pass is not merge approval: it only lets the usual path continue.
+6. Show the operator the exam link, then wait with `exam --wait`. In Claude Code run it in the background. It has no time limit: never report it as `CI stalled`, and never hand off for waiting.
+7. Passed: with explicit session authorization, use its merge path above. Otherwise, absent an owner commit approval, run the gate (`pr-risk` `merge_risk.py gate`), then `judge`, then `merge-method` and `merge`. Pass the judge's label and risk to `merge --judge agree --judge-risk <risk>` (or `--judge 'same-model agree'` for fallback), never an output file path. The merge pins the head SHA the gate and judge saw, and hands off when the gate's or the judge's risk is above the repo's limit.
+
+If `merge` refuses with `exam not passed`, go back to waiting with `exam --wait`: no handoff. After a push or rebase following a pass, run `exam` again before merging; an earlier pass does not carry over.
+
+An agent never applies, removes or re-applies a bypass label, and never posts an `exam` status. Only the repo owner's label counts.
 
 ## A fix round
 

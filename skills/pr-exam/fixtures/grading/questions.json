@@ -1,0 +1,26 @@
+[
+  {
+    "id": "q1",
+    "prompt": "Why does the nightly sync need a lease at all? Say what went wrong without one.",
+    "rubric": {
+      "pass": "Says two workers could run the sync concurrently and overwrite each other's results, and that the lease lets only one worker run it at a time.",
+      "partial": "Says the lease gives a single worker, or names concurrent runs, without saying that results were overwritten."
+    }
+  },
+  {
+    "id": "q2",
+    "prompt": "A worker holding the lease pauses longer than its TTL, and another worker takes over. Why is the lease alone not enough here, and what stops the first worker's late writes?",
+    "rubric": {
+      "pass": "Says the paused worker still believes it leads, and that each write carries a fencing token the store compares with the current one, refusing the stale token.",
+      "partial": "Mentions the fencing token or the stale leader, but not how the store uses the token to refuse the late write."
+    }
+  },
+  {
+    "id": "q6",
+    "prompt": "How does the leader loop keep the lease while work runs, and what happens to the lease when the work fails or the lease is lost?",
+    "rubric": {
+      "pass": "Says the loop renews the lease between units of work, stops when the lease is lost, and always releases the lease in a finally block.",
+      "partial": "Names renewing or releasing, but not both, or does not say the release happens on failure too."
+    }
+  }
+]

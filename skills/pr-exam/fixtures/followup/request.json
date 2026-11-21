@@ -1,0 +1,41 @@
+{
+  "mode": "followup",
+  "repo": "jesdi/general-skills",
+  "pr": 240,
+  "head_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "diff": "diff.patch",
+  "body": "body.md",
+  "glossary": null,
+  "records": "records",
+  "today": "2026-11-18",
+  "only_concepts": [
+    "leader-lifecycle",
+    "lease-rollback",
+    "sync-blast-radius"
+  ],
+  "prior_concepts": [
+    "single-sync-leader",
+    "stale-leader-writes",
+    "fencing-token",
+    "lease-expiry",
+    "injected-monotonic-clock",
+    "leader-lifecycle",
+    "lease-rollback",
+    "sync-blast-radius",
+    "renew-checks-ownership",
+    "write-checks-token",
+    "release-by-owner",
+    "owner-reacquire"
+  ],
+  "prior_prompts": [
+    "Why does the nightly sync need a lease at all? Say what went wrong without one.",
+    "A worker holding the lease pauses longer than its TTL, and another worker takes over. Why is the lease alone not enough here, and what stops the first worker's late writes?",
+    "What makes a write under an old fencing token fail?",
+    "When can a second worker take a lease that another worker holds?",
+    "Why does the lease store take its clock as a parameter that defaults to a monotonic clock?",
+    "How does the leader loop keep the lease while work runs, and what happens to the lease when the work fails or the lease is lost?",
+    "If this change is reverted while a worker holds a lease, what happens to that lease?",
+    "Which part of the system can a bug in the lease store break?"
+  ],
+  "out": "exam.json"
+}
