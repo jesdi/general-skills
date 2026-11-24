@@ -533,9 +533,11 @@ def flag_shape_errors(flags):
 
 
 def flag_errors(exam, flags):
-    shape = flag_shape_errors(flags)
-    if shape:
-        return shape
+    return flag_shape_errors(flags) or flag_ref_errors(exam, flags)
+
+
+def flag_ref_errors(exam, flags):
+    """Every flag key is known, every flagged id is a question, and at most one is bypassed."""
     ids = question_ids(exam)
     errors = [f"flags: unknown key {k!r}" for k in flags if k not in FLAG_KEYS]
     errors += [f"flags: unknown question {qid}" for qid in flagged(flags) if qid not in ids]
