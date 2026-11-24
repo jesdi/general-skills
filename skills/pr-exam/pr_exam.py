@@ -524,7 +524,18 @@ def flagged(flags):
     return [qid for k in FLAG_KEYS for qid in flags.get(k, [])]
 
 
+def flag_shape_errors(flags):
+    """flags.json is an object whose flag collections are lists of question id strings."""
+    if not isinstance(flags, dict):
+        return ["flags: must be a JSON object"]
+    return [f"flags: {k} must be a list of question ids" for k in FLAG_KEYS
+            if not (isinstance(flags.get(k, []), list) and all(isinstance(q, str) for q in flags.get(k, [])))]
+
+
 def flag_errors(exam, flags):
+    shape = flag_shape_errors(flags)
+    if shape:
+        return shape
     ids = question_ids(exam)
     errors = [f"flags: unknown key {k!r}" for k in flags if k not in FLAG_KEYS]
     errors += [f"flags: unknown question {qid}" for qid in flagged(flags) if qid not in ids]
@@ -547,7 +558,7 @@ def answer_errors(exam, answers, grades, bypassed):
 
 
 def score_errors(exam, answers, grades, flags=None):
-    flags = flags or {}
+    flags = {} if flags is None else flags
     return flag_errors(exam, flags) or answer_errors(exam, answers, grades, flags.get("bypassed", []))
 
 
