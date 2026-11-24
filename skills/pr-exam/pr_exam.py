@@ -500,10 +500,12 @@ def public(args):
 GRADE_POINTS = {"pass": 1, "partial": 0.5, "fail": 0}
 
 
-def grade_errors(grades, texts):
-    """Only text questions are graded, each pass, partial or fail."""
+def grade_errors(grades, texts, bypassed=()):
+    """Only text questions are graded, each pass, partial or fail; a bypassed question's grade is ignored."""
     errors = []
     for qid, g in grades.items():
+        if qid in bypassed:
+            continue
         if qid not in texts:
             errors.append(f"grade for {qid}: not a text question")
         elif g.get("grade") not in GRADE_POINTS:
@@ -514,30 +516,39 @@ def grade_errors(grades, texts):
 FLAG_KEYS = ("bypassed", "assisted")
 
 
+def question_ids(exam):
+    return {q["id"] for q in exam["questions"]}
+
+
+def flagged(flags):
+    return [qid for k in FLAG_KEYS for qid in flags.get(k, [])]
+
+
 def flag_errors(exam, flags):
-    ids = {q["id"] for q in exam["questions"]}
+    ids = question_ids(exam)
     errors = [f"flags: unknown key {k!r}" for k in flags if k not in FLAG_KEYS]
-    errors += [f"flags: unknown question {qid}" for k in FLAG_KEYS for qid in flags.get(k, []) if qid not in ids]
+    errors += [f"flags: unknown question {qid}" for qid in flagged(flags) if qid not in ids]
     if len(flags.get("bypassed", [])) > 1:
         errors.append("flags: at most one question can be bypassed, got " + ", ".join(flags["bypassed"]))
     return errors
 
 
+def answer_errors(exam, answers, grades, bypassed):
+    """Every question not bypassed is answered and, if text, graded pass, partial or fail."""
+    texts = {q["id"] for q in exam["questions"] if q["type"] == "text"}
+    errors = []
+    for q in exam["questions"]:
+        if q["id"] not in bypassed:
+            errors += broken((
+                (q["id"] not in answers, f"question {q['id']}: unanswered"),
+                (q["id"] in texts and q["id"] not in grades, f"question {q['id']}: text question has no grade"),
+            ))
+    return errors + grade_errors(grades, texts, bypassed)
+
+
 def score_errors(exam, answers, grades, flags=None):
     flags = flags or {}
-    errors = flag_errors(exam, flags)
-    if errors:
-        return errors
-    texts = {q["id"] for q in exam["questions"] if q["type"] == "text"}
-    for q in exam["questions"]:
-        if q["id"] in flags.get("bypassed", []):
-            continue
-        errors += broken((
-            (q["id"] not in answers, f"question {q['id']}: unanswered"),
-            (q["id"] in texts and q["id"] not in grades, f"question {q['id']}: text question has no grade"),
-        ))
-    kept = {k: v for k, v in grades.items() if k not in flags.get("bypassed", [])}
-    return errors + grade_errors(kept, texts)
+    return flag_errors(exam, flags) or answer_errors(exam, answers, grades, flags.get("bypassed", []))
 
 
 def points(q, k, answers, grades):
@@ -572,14 +583,18 @@ def helped(qid, flags):
     return next((k for k in FLAG_KEYS if qid in flags.get(k, [])), None)
 
 
-def scored(exam, answers, grades, flags=None):
-    """result.json: points per question, the missed concepts, and whether the attempt passed."""
-    flags = flags or {}
-    out = [question_result(q, exam["key"][q["id"]], answers, grades, helped(q["id"], flags)) for q in exam["questions"]]
+def tally(exam, out):
+    """result.json from the question results; a bypassed question counts toward neither score nor max."""
     counted = [r for r in out if r.get("help") != "bypassed"]
     missed = [r["concept"] for r in counted if r["points"] < 1]
     total = sum(r["points"] for r in counted)
     return {"passed": passed(exam, missed, total, len(counted)), "score": total, "max": len(counted), "questions": out, "missed": missed}
+
+
+def scored(exam, answers, grades, flags=None):
+    """result.json: points per question, the missed concepts, and whether the attempt passed."""
+    flags = flags or {}
+    return tally(exam, [question_result(q, exam["key"][q["id"]], answers, grades, helped(q["id"], flags)) for q in exam["questions"]])
 
 
 def score(args):
