@@ -501,15 +501,33 @@ def grade_errors(grades, texts):
     return errors
 
 
-def score_errors(exam, answers, grades):
+FLAG_KEYS = ("bypassed", "assisted")
+
+
+def flag_errors(exam, flags):
+    ids = {q["id"] for q in exam["questions"]}
+    errors = [f"flags: unknown key {k!r}" for k in flags if k not in FLAG_KEYS]
+    errors += [f"flags: unknown question {qid}" for k in FLAG_KEYS for qid in flags.get(k, []) if qid not in ids]
+    if len(flags.get("bypassed", [])) > 1:
+        errors.append("flags: at most one question can be bypassed, got " + ", ".join(flags["bypassed"]))
+    return errors
+
+
+def score_errors(exam, answers, grades, flags=None):
+    flags = flags or {}
+    errors = flag_errors(exam, flags)
+    if errors:
+        return errors
     texts = {q["id"] for q in exam["questions"] if q["type"] == "text"}
-    errors = []
     for q in exam["questions"]:
+        if q["id"] in flags.get("bypassed", []):
+            continue
         errors += broken((
             (q["id"] not in answers, f"question {q['id']}: unanswered"),
             (q["id"] in texts and q["id"] not in grades, f"question {q['id']}: text question has no grade"),
         ))
-    return errors + grade_errors(grades, texts)
+    kept = {k: v for k, v in grades.items() if k not in flags.get("bypassed", [])}
+    return errors + grade_errors(kept, texts)
 
 
 def points(q, k, answers, grades):
@@ -518,37 +536,49 @@ def points(q, k, answers, grades):
     return GRADE_POINTS[grades[q["id"]]["grade"]]
 
 
-def question_result(q, k, answers, grades):
-    """A question's points; below full points, also its explanation, hunk and (text) grader feedback."""
+def question_result(q, k, answers, grades, help=None):
+    """A question's points; below full points, also its explanation, hunk and (text) grader feedback.
+    A bypassed question has no points but carries its explanation and hunk."""
+    if help == "bypassed":
+        return {"id": q["id"], "concept": q["concept"], "help": help, "explanation": k["explanation"], "hunk": k["hunk"]}
     r = {"id": q["id"], "concept": q["concept"], "points": points(q, k, answers, grades)}
     if r["points"] < 1:
         r.update(explanation=k["explanation"], hunk=k["hunk"])
         if q["type"] == "text":
             r["feedback"] = grades[q["id"]].get("feedback", "")
+    if help:
+        r["help"] = help
     return r
 
 
-def passed(exam, missed, total):
+def passed(exam, missed, total, maximum):
     """At least 80% of the points, and no why concept missed."""
     kinds = {c["id"]: c["kind"] for c in exam["concepts"]}
     why_ok = all(kinds.get(c) != "why" for c in missed)
-    return total / len(exam["questions"]) >= 0.8 and why_ok
+    return total >= 0.8 * maximum and why_ok
 
 
-def scored(exam, answers, grades):
+def helped(qid, flags):
+    return next((k for k in FLAG_KEYS if qid in flags.get(k, [])), None)
+
+
+def scored(exam, answers, grades, flags=None):
     """result.json: points per question, the missed concepts, and whether the attempt passed."""
-    out = [question_result(q, exam["key"][q["id"]], answers, grades) for q in exam["questions"]]
-    missed = [r["concept"] for r in out if r["points"] < 1]
-    total = sum(r["points"] for r in out)
-    return {"passed": passed(exam, missed, total), "score": total, "max": len(out), "questions": out, "missed": missed}
+    flags = flags or {}
+    out = [question_result(q, exam["key"][q["id"]], answers, grades, helped(q["id"], flags)) for q in exam["questions"]]
+    counted = [r for r in out if r.get("help") != "bypassed"]
+    missed = [r["concept"] for r in counted if r["points"] < 1]
+    total = sum(r["points"] for r in counted)
+    return {"passed": passed(exam, missed, total, len(counted)), "score": total, "max": len(counted), "questions": out, "missed": missed}
 
 
 def score(args):
     exam, answers, grades = load(args.exam), load(args.answers), load(args.grades)
-    errors = score_errors(exam, answers, grades)
+    flags = load(args.flags) if args.flags else {}
+    errors = score_errors(exam, answers, grades, flags)
     if errors:
         return fail("\n".join(errors))
-    print(json.dumps(scored(exam, answers, grades)))
+    print(json.dumps(scored(exam, answers, grades, flags)))
     return 0
 
 
@@ -681,6 +711,7 @@ def main(argv=None):
     sc = sub.add_parser("score")
     for f in ("exam", "answers", "grades"):
         sc.add_argument(f"--{f}", required=True)
+    sc.add_argument("--flags")
     sc.set_defaults(fn=score)
     ln = sub.add_parser("learned")
     ln.add_argument("--records", required=True)

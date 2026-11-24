@@ -17,7 +17,7 @@ stderr.
 |---|---|
 | `python3 pr_exam.py validate --request <request.json> <exam.json>` | Checks a generated exam against its request; prints its summary. |
 | `python3 pr_exam.py public <exam.json>` | Prints the exam the page may show: no key, concepts or answers. |
-| `python3 pr_exam.py score --exam <exam.json> --answers <answers.json> --grades <grades.json>` | Scores an attempt and names what was missed. |
+| `python3 pr_exam.py score --exam <exam.json> --answers <answers.json> --grades <grades.json> [--flags <flags.json>]` | Scores an attempt and names what was missed. `--flags` holds `{"bypassed": [id], "assisted": [id, ...]}`: one bypassed question leaves the score; both are reported as `help`. |
 | `python3 pr_exam.py learned --records <dir> --today <YYYY-MM-DD>` | Lists concepts known, due or wrong. |
 | `python3 pr_exam.py record --records <dir> --exam <exam.json> --result <result.json> --today <YYYY-MM-DD>` | Writes learning records for a scored attempt. |
 | `python3 pr_exam.py config [<.pr-exam.json>]` | Reads and validates the repo's exam config. |
