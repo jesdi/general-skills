@@ -15,6 +15,9 @@ with the prompt the host uses (agent-ops `dispatcher/exam_runner.py`). One live 
   `passed.diff`) → `exam.json`, 2 questions on concepts no earlier exam covered.
 - `delta-nothing-new/`: `delta`, after a pass: the push only rewords a docstring and renames a
   variable → an empty `exam.json`.
+- `tip-choice/`, `tip-text/`, `chat-answer/`: three live turns on the twelve-concept exam (a tip on a
+  `choice` question, tip 1 on a `text` question, a `question` chat turn "what is the answer?"). Each has
+  `turn.json`, `prompt.md` (what `context` prints for it) and `reply.md` (`claude -p --tools ''` on the prompt).
 
 The requests are written as the host writes them, with paths made relative. Every generation run
 finished on `validate` exit 0. `test_skill_fixtures.py` checks the outputs again.
