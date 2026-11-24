@@ -362,7 +362,7 @@ def check_record(f):
     """ValueError naming what is wrong with a record's frontmatter fields."""
     if any(not f.get(k) for k in FIELDS):
         raise ValueError("missing field")
-    if f["state"] not in ("demonstrated", "misconception"):
+    if f["state"] not in ("demonstrated", "assisted", "misconception"):
         raise ValueError("state")
     datetime.date.fromisoformat(f["date"])
     if not re.fullmatch(r"active|superseded by LR-\d{4,}", f["status"]):
@@ -398,6 +398,8 @@ def learned_states(directory, today):
             continue
         if f["state"] == "misconception":
             states[f["concept"]] = "misconception"
+        elif f["state"] == "assisted":
+            states[f["concept"]] = "due"
         else:
             age = (today - datetime.date.fromisoformat(f["date"])).days
             states[f["concept"]] = "skip" if age < 30 else "due"
@@ -442,9 +444,16 @@ def publish(path, text):
     os.replace(tmp, path)
 
 
-def publish_record(args, q, n, explanation, source):
+def record_state(q):
+    """The state a question's record takes, or None when it leaves no record (half a point)."""
+    if q.get("help") == "bypassed" or q["points"] == 0:
+        return "misconception"
+    if q["points"] == 1:
+        return "assisted" if q.get("help") == "assisted" else "demonstrated"
+
+
+def publish_record(args, q, state, n, explanation, source):
     concept = q["concept"]
-    state = "demonstrated" if q["points"] == 1 else "misconception"
     publish(Path(args.records) / f"{n:04d}-{concept}.md",
             f"---\nconcept: {concept}\nstate: {state}\ndate: {args.today}\nsource: {source}\n"
             f"status: active\n---\n# {concept}\n\n{explanation}\n")
@@ -462,11 +471,12 @@ def supersede(existing, concept, n):
 def write_records(args, result, existing, explanations, source):
     n = max([r[0] for r in existing], default=0)
     for q in result["questions"]:
-        if q["points"] in (0, 1):
+        state = record_state(q)
+        if state:
             n += 1
             # The successor is published before its predecessor is superseded: a failure in between
             # leaves two active records, and the newest one counts, so no state is ever lost.
-            publish_record(args, q, n, explanations.get(q["id"], ""), source)
+            publish_record(args, q, state, n, explanations.get(q["id"], ""), source)
             supersede(existing, q["concept"], n)
     return 0
 

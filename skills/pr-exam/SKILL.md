@@ -19,7 +19,7 @@ stderr.
 | `python3 pr_exam.py public <exam.json>` | Prints the exam the page may show: no key, concepts or answers. |
 | `python3 pr_exam.py score --exam <exam.json> --answers <answers.json> --grades <grades.json> [--flags <flags.json>]` | Scores an attempt and names what was missed. `--flags` holds `{"bypassed": [id], "assisted": [id, ...]}`: one bypassed question leaves the score; both are reported as `help`. |
 | `python3 pr_exam.py learned --records <dir> --today <YYYY-MM-DD>` | Lists concepts known, due or wrong. |
-| `python3 pr_exam.py record --records <dir> --exam <exam.json> --result <result.json> --today <YYYY-MM-DD>` | Writes learning records for a scored attempt. |
+| `python3 pr_exam.py record --records <dir> --exam <exam.json> --result <result.json> --today <YYYY-MM-DD>` | Writes learning records for a scored attempt: `demonstrated`, `assisted` (a full point with help, always `due`) or `misconception`. An older `pr_exam.py` refuses an `assisted` record, so never roll the host pin back past this version. |
 | `python3 pr_exam.py config [<.pr-exam.json>]` | Reads and validates the repo's exam config. |
 | `python3 pr_exam.py setup [--check] <owner/repo>` | Run by the operator: makes `exam` a required check of the default branch. `--check` only reports whether it is one. |
 
