@@ -736,30 +736,37 @@ def skill_section(name):
 
 
 def turn_errors(turn, exam):
-    kind = turn.get("kind")
-    if kind not in TURN_KINDS:
+    if turn.get("kind") not in TURN_KINDS:
         return ["turn kind: must be tip, question or general"]
-    errors = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS)]
-    if kind == "general":
-        errors += [f"a {f} is not allowed on a general turn" for f in ("question", "tip", "submitted", "points", "feedback") if f in turn]
-        if "draft" in turn:
-            errors.append("a draft is not allowed on a general turn")
-    else:
-        if turn.get("question") not in {q["id"] for q in exam["questions"]}:
-            errors.append(f"question {turn.get('question')}: not in the exam")
-        if not isinstance(turn.get("draft", ""), str):
-            errors.append("draft: must be a string")
-    if kind == "tip":
-        t = turn.get("tip")
-        if type(t) is not int or not 1 <= t <= 3:
-            errors.append(f"tip {t}: must be in the range 1-3")
-    elif "tip" in turn:
-        errors.append("tip: only on a tip turn")
-    if kind != "tip" and not isinstance(turn.get("message"), str):
-        errors.append("message: required on a chat turn")
-    if ("points" in turn or "feedback" in turn) and "submitted" not in turn:
-        errors.append("points and feedback need a submitted answer")
-    return errors
+    unknown = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS)]
+    return unknown + target_errors(turn, exam) + tip_errors(turn) + reply_errors(turn)
+
+
+GENERAL_BARRED = ("question", "tip", "submitted", "points", "feedback", "draft")
+
+
+def target_errors(turn, exam):
+    """A general turn names no question; the others name one of the exam's, with a string draft."""
+    if turn["kind"] == "general":
+        return [f"a {f} is not allowed on a general turn" for f in GENERAL_BARRED if f in turn]
+    return broken((
+        (turn.get("question") not in question_ids(exam), f"question {turn.get('question')}: not in the exam"),
+        (not isinstance(turn.get("draft", ""), str), "draft: must be a string"),
+    ))
+
+
+def tip_errors(turn):
+    t = turn.get("tip")
+    if turn["kind"] == "tip":
+        return broken(((type(t) is not int or not 1 <= t <= 3, f"tip {t}: must be in the range 1-3"),))
+    return broken((("tip" in turn, "tip: only on a tip turn"),))
+
+
+def reply_errors(turn):
+    return broken((
+        (turn["kind"] != "tip" and not isinstance(turn.get("message"), str), "message: required on a chat turn"),
+        (("points" in turn or "feedback" in turn) and "submitted" not in turn, "points and feedback need a submitted answer"),
+    ))
 
 
 def key_block(exam, qid):
@@ -768,26 +775,29 @@ def key_block(exam, qid):
 
 
 def turn_parts(turn, exam):
-    kind, parts = turn["kind"], []
-    if kind == "general":
-        parts.append("All questions:\n" + "\n".join(key_block(exam, q["id"]) for q in exam["questions"]))
-    else:
-        parts.append(key_block(exam, turn["question"]))
-        if "draft" in turn:
-            parts.append(f"Draft: {turn['draft']}")
-    if kind == "tip":
-        parts.append(f"Tip number: {turn['tip']}")
-        parts += [f"Tip {i}: {t}" for i, t in enumerate(turn.get("tips", []), 1)]
-        return parts
-    if "submitted" in turn:
-        parts.append(f"Submitted answer: {turn['submitted']}")
-    if "points" in turn:
-        parts.append(f"Points: {turn['points']}")
-    if "feedback" in turn:
-        parts.append(f"Feedback: {turn['feedback']}")
-    parts += [f"{m['role']}: {m['text']}" for m in turn.get("thread", [])]
-    parts.append(f"Message: {turn['message']}")
+    return target_parts(turn, exam) + (tip_parts(turn) if turn["kind"] == "tip" else chat_parts(turn))
+
+
+def target_parts(turn, exam):
+    if turn["kind"] == "general":
+        return ["All questions:\n" + "\n".join(key_block(exam, q["id"]) for q in exam["questions"])]
+    parts = [key_block(exam, turn["question"])]
+    if "draft" in turn:
+        parts.append(f"Draft: {turn['draft']}")
     return parts
+
+
+def tip_parts(turn):
+    return [f"Tip number: {turn['tip']}"] + [f"Tip {i}: {t}" for i, t in enumerate(turn.get("tips", []), 1)]
+
+
+CHAT_LABELS = (("submitted", "Submitted answer"), ("points", "Points"), ("feedback", "Feedback"))
+
+
+def chat_parts(turn):
+    parts = [f"{label}: {turn[k]}" for k, label in CHAT_LABELS if k in turn]
+    parts += [f"{m['role']}: {m['text']}" for m in turn.get("thread", [])]
+    return parts + [f"Message: {turn['message']}"]
 
 
 def context(args):
