@@ -20,6 +20,7 @@ stderr.
 | `python3 pr_exam.py score --exam <exam.json> --answers <answers.json> --grades <grades.json> [--flags <flags.json>]` | Scores an attempt and names what was missed. `--flags` holds `{"bypassed": [id], "assisted": [id, ...]}`: one bypassed question leaves the score; both are reported as `help`. |
 | `python3 pr_exam.py learned --records <dir> --today <YYYY-MM-DD>` | Lists concepts known, due or wrong. |
 | `python3 pr_exam.py record --records <dir> --exam <exam.json> --result <result.json> --today <YYYY-MM-DD>` | Writes learning records for a scored attempt: `demonstrated`, `assisted` (a full point with help, always `due`) or `misconception`. An older `pr_exam.py` refuses an `assisted` record, so never roll the host pin back past this version. |
+| `python3 pr_exam.py context --exam <exam.json> --diff <diff> --body <body> --turn <turn.json>` | Prints the prompt for one tip or chat turn: the section below for its kind, the diff, the body, then the turn. |
 | `python3 pr_exam.py config [<.pr-exam.json>]` | Reads and validates the repo's exam config. |
 | `python3 pr_exam.py setup [--check] <owner/repo>` | Run by the operator: makes `exam` a required check of the default branch. `--check` only reports whether it is one. |
 
@@ -125,6 +126,25 @@ nothing else from generation. No key, no explanation, no earlier attempt.
 
 `choice` questions are never graded by the session, and you do not score the attempt: the host runs
 `pr_exam.py score`, which marks them from the key and refuses a grade for one.
+
+## Tips
+
+A tip helps a reader who is stuck on one question. You get the question, its key, the draft
+and the earlier tips. Climb one rung per tip number:
+
+1. Where to look: point at a file or hunk, nothing more.
+2. The missing idea: name what the draft leaves out.
+3. One step away: bring the reader next to the answer, never onto it.
+
+React to the draft. Never state the answer, never quote the key. On a `choice` question never
+quote, name or rule out an option. Do not repeat an earlier tip. Reply in two sentences at most.
+
+## Chat
+
+The chat answers freely, the key included: explain, compare, and say whether the draft is
+right. After a submit, use the submitted answer, its points and its feedback to explain the
+result. Ground every claim in the diff and the PR body, and say so when they do not settle it.
+Be brief.
 
 ## Never
 

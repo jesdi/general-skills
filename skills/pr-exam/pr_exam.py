@@ -708,6 +708,90 @@ def setup(args):
     return require_exam(got, path, f"{args.repo}@{branch}", app)
 
 
+PROMPT_LIMIT = 400_000
+TURN_KINDS = {"tip": "Tips", "question": "Chat", "general": "Chat"}
+TURN_FIELDS = {"kind", "question", "tip", "draft", "submitted", "points", "feedback", "tips", "thread", "message"}
+
+
+def skill_section(name):
+    m = re.search(rf"^## {name}\n(.*?)(?=^## |\Z)", (Path(__file__).parent / "SKILL.md").read_text(), re.M | re.S)
+    if not m:
+        raise ValueError(f"SKILL.md has no '## {name}' section")
+    return m.group(1).strip()
+
+
+def turn_errors(turn, exam):
+    kind = turn.get("kind")
+    if kind not in TURN_KINDS:
+        return ["turn kind: must be tip, question or general"]
+    errors = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS)]
+    if kind == "general":
+        errors += [f"a {f} is not allowed on a general turn" for f in ("question", "tip", "submitted", "points", "feedback") if f in turn]
+        if "draft" in turn:
+            errors.append("a draft is not allowed on a general turn")
+    else:
+        if turn.get("question") not in {q["id"] for q in exam["questions"]}:
+            errors.append(f"question {turn.get('question')}: not in the exam")
+        if not isinstance(turn.get("draft", ""), str):
+            errors.append("draft: must be a string")
+    if kind == "tip":
+        t = turn.get("tip")
+        if type(t) is not int or not 1 <= t <= 3:
+            errors.append(f"tip {t}: must be in the range 1-3")
+    elif "tip" in turn:
+        errors.append("tip: only on a tip turn")
+    if kind != "tip" and not isinstance(turn.get("message"), str):
+        errors.append("message: required on a chat turn")
+    if ("points" in turn or "feedback" in turn) and "submitted" not in turn:
+        errors.append("points and feedback need a submitted answer")
+    return errors
+
+
+def key_block(exam, qid):
+    q = next(q for q in exam["questions"] if q["id"] == qid)
+    return f"Question: {json.dumps(q)}\nKey: {json.dumps(exam['key'][qid])}"
+
+
+def turn_parts(turn, exam):
+    kind, parts = turn["kind"], []
+    if kind == "general":
+        parts.append("All questions:\n" + "\n".join(key_block(exam, q["id"]) for q in exam["questions"]))
+    else:
+        parts.append(key_block(exam, turn["question"]))
+        if "draft" in turn:
+            parts.append(f"Draft: {turn['draft']}")
+    if kind == "tip":
+        parts.append(f"Tip number: {turn['tip']}")
+        parts += [f"Tip {i}: {t}" for i, t in enumerate(turn.get("tips", []), 1)]
+        return parts
+    if "submitted" in turn:
+        parts.append(f"Submitted answer: {turn['submitted']}")
+    if "points" in turn:
+        parts.append(f"Points: {turn['points']}")
+    if "feedback" in turn:
+        parts.append(f"Feedback: {turn['feedback']}")
+    parts += [f"{m['role']}: {m['text']}" for m in turn.get("thread", [])]
+    parts.append(f"Message: {turn['message']}")
+    return parts
+
+
+def context(args):
+    exam, turn = load(args.exam), load(args.turn)
+    errors = turn_errors(turn, exam)
+    if errors:
+        return fail("\n".join(errors))
+    try:
+        rules = skill_section(TURN_KINDS[turn["kind"]])
+    except ValueError as e:
+        return fail(e)
+    prompt = "\n\n".join([rules, "Diff:\n" + Path(args.diff).read_text(), "PR body:\n" + Path(args.body).read_text(),
+                          *turn_parts(turn, exam)])
+    if len(prompt) > PROMPT_LIMIT:
+        return fail(f"prompt is {len(prompt):,} characters, over the {PROMPT_LIMIT:,}-character limit")
+    print(prompt)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pr_exam")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -738,6 +822,10 @@ def main(argv=None):
     st.add_argument("--check", action="store_true", help="only report whether `exam` is a required check")
     st.add_argument("repo")
     st.set_defaults(fn=setup)
+    cx = sub.add_parser("context")
+    for f in ("exam", "diff", "body", "turn"):
+        cx.add_argument(f"--{f}", required=True)
+    cx.set_defaults(fn=context)
     args = p.parse_args(argv)
     return args.fn(args)
 
