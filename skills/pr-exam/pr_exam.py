@@ -736,7 +736,24 @@ def setup(args):
 
 PROMPT_LIMIT = 400_000
 TURN_KINDS = {"tip": "Tips", "question": "Chat", "general": "Chat"}
-TURN_FIELDS = {"kind", "question", "tip", "draft", "submitted", "points", "feedback", "tips", "thread", "message"}
+TURN_SHAPES = {"tip": {"question", "tip", "draft", "tips"},
+               "question": {"question", "draft", "submitted", "points", "feedback", "thread", "message"},
+               "general": {"thread", "message"}}
+TURN_FIELDS = set().union(*TURN_SHAPES.values())
+
+
+def is_text_list(v):
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def is_thread(v):
+    return isinstance(v, list) and all(isinstance(m, dict) and set(m) == {"role", "text"} and is_text_list(list(m.values())) for m in v)
+
+
+FIELD_TYPES = {"draft": (lambda v: isinstance(v, str), "a string"), "submitted": (lambda v: isinstance(v, str), "a string"),
+               "feedback": (lambda v: isinstance(v, str), "a string"), "message": (lambda v: isinstance(v, str), "a string"),
+               "points": (lambda v: type(v) in (int, float), "a number"), "tips": (is_text_list, "a list of strings"),
+               "thread": (is_thread, "a list of {role, text} strings")}
 
 
 def skill_section(name):
@@ -747,35 +764,33 @@ def skill_section(name):
 
 
 def turn_errors(turn, exam):
-    if turn.get("kind") not in TURN_KINDS:
+    """Each kind of turn has its own fields (TURN_SHAPES), each of its documented type (FIELD_TYPES)."""
+    if not isinstance(turn, dict) or turn.get("kind") not in TURN_SHAPES:
         return ["turn kind: must be tip, question or general"]
-    unknown = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS)]
-    return unknown + target_errors(turn, exam) + tip_errors(turn) + reply_errors(turn)
+    return turn_shape_errors(turn) + target_errors(turn, exam) + tip_errors(turn) + reply_errors(turn)
 
 
-GENERAL_BARRED = ("question", "tip", "submitted", "points", "feedback", "draft")
+def turn_shape_errors(turn):
+    kind = turn["kind"]
+    errors = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS - {"kind"})]
+    errors += [f"a {f} is not allowed on a {kind} turn" for f in sorted((set(turn) & TURN_FIELDS) - TURN_SHAPES[kind])]
+    return errors + [f"{f}: must be {what}" for f, (ok, what) in FIELD_TYPES.items() if f in turn and not ok(turn[f])]
 
 
 def target_errors(turn, exam):
-    """A general turn names no question; the others name one of the exam's, with a string draft."""
-    if turn["kind"] == "general":
-        return [f"a {f} is not allowed on a general turn" for f in GENERAL_BARRED if f in turn]
-    return broken((
-        (turn.get("question") not in question_ids(exam), f"question {turn.get('question')}: not in the exam"),
-        (not isinstance(turn.get("draft", ""), str), "draft: must be a string"),
-    ))
+    """A tip or question turn names one of the exam's questions."""
+    q = turn.get("question")
+    return broken(((turn["kind"] != "general" and q not in question_ids(exam), f"question {q}: not in the exam"),))
 
 
 def tip_errors(turn):
     t = turn.get("tip")
-    if turn["kind"] == "tip":
-        return broken(((type(t) is not int or not 1 <= t <= 3, f"tip {t}: must be in the range 1-3"),))
-    return broken((("tip" in turn, "tip: only on a tip turn"),))
+    return broken(((turn["kind"] == "tip" and (type(t) is not int or not 1 <= t <= 3), f"tip {t}: must be in the range 1-3"),))
 
 
 def reply_errors(turn):
     return broken((
-        (turn["kind"] != "tip" and not isinstance(turn.get("message"), str), "message: required on a chat turn"),
+        (turn["kind"] != "tip" and "message" not in turn, "message: required on a chat turn"),
         (("points" in turn or "feedback" in turn) and "submitted" not in turn, "points and feedback need a submitted answer"),
     ))
 
@@ -793,7 +808,7 @@ def target_parts(turn, exam):
     if turn["kind"] == "general":
         return ["All questions:\n" + "\n".join(key_block(exam, q["id"]) for q in exam["questions"])]
     parts = [key_block(exam, turn["question"])]
-    if "draft" in turn:
+    if "draft" in turn and "submitted" not in turn:  # after submit, the submitted answer replaces the draft
         parts.append(f"Draft: {turn['draft']}")
     return parts
 
