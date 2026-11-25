@@ -77,3 +77,17 @@ describe('pr-exam SKILL.md', () => {
     );
   });
 });
+
+describe('pr-exam SKILL.md assist sections', () => {
+  const words = (text: string, name: string) => {
+    const m = new RegExp(`^## ${name}\\n([\\s\\S]*?)(?=^## |$(?![\\s\\S]))`, 'm').exec(text);
+    expect(m, `## ${name} section`).not.toBeNull();
+    return m![1].trim().split(/\s+/).length;
+  };
+
+  it('has Tips and Chat sections of at most 150 words and lists context', async () => {
+    const text = await readFile(join(DIR, 'SKILL.md'), 'utf8');
+    for (const name of ['Tips', 'Chat']) expect(words(text, name)).toBeLessThanOrEqual(150);
+    expect(text).toMatch(/pr_exam\.py context/);
+  });
+});

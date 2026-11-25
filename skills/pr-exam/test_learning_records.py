@@ -265,3 +265,91 @@ def test_validate_and_record_refuse_a_malformed_record_naming_the_file(tmp_path)
             "--result", tmp_path / "result.json", "--today", TODAY)
     assert r.returncode == 1 and "0001-merge-lease.md" in r.stderr, (r.returncode, r.stdout, r.stderr)
     assert sorted(p.name for p in records.glob("*.md")) == ["0001-merge-lease.md"]
+
+
+# --- spec specs/pr-exam-assist: requirements 9-10 (assisted and bypassed records) ---
+# A result question may carry help="bypassed"|"assisted"; a bypassed one has no `points`.
+# `record` writes `misconception` for bypassed, `assisted` for a full point with help="assisted".
+# `learned` reports an active `assisted` record as "due" at any age.
+ASSIST = [("merge-lease", "concept"), ("retry-budget", "concept"), ("head-recheck", "architecture"),
+          ("lease-owner", "why"), ("fencing-token", "concept"), ("stale-lease", "concept")]
+SKILL = Path(__file__).parent / "SKILL.md"
+ASSIST_TODAY = "2026-11-24"
+
+
+def record_result(tmp_path, records, questions, today=ASSIST_TODAY, kinds=None):
+    """questions: [(concept, points|None, help|None)]; one text question per entry."""
+    exam = exam_with([(c, "text", (kinds or {}).get(c, "concept")) for c, _, _ in questions])
+    rq = []
+    for i, (c, p, h) in enumerate(questions, 1):
+        q = {"id": f"q{i}", "concept": c}
+        if p is not None:
+            q["points"] = p
+        if h:
+            q["help"] = h
+        rq.append(q)
+    result = {"passed": True, "score": 0, "max": 0, "missed": [], "questions": rq}
+    (tmp_path / "rexam.json").write_text(json.dumps(exam))
+    (tmp_path / "result.json").write_text(json.dumps(result))
+    return cli("record", "--records", records, "--exam", tmp_path / "rexam.json",
+               "--result", tmp_path / "result.json", "--today", today)
+
+
+def active(records):
+    out = {}
+    for p in sorted(records.glob("*.md")):
+        if field(p, "status") == "active":
+            out[field(p, "concept")] = (field(p, "state"), field(p, "date"))
+    return out
+
+
+def test_each_outcome_writes_its_record(tmp_path):
+    records = tmp_path / "records"
+    r = record_result(tmp_path, records, [
+        ("merge-lease", 1, None), ("retry-budget", 1, "assisted"), ("head-recheck", 0, "assisted"),
+        ("lease-owner", None, "bypassed"), ("fencing-token", 0.5, "assisted"), ("stale-lease", 1, None)],
+        kinds={"lease-owner": "why"})
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert active(records) == {
+        "merge-lease": ("demonstrated", ASSIST_TODAY), "stale-lease": ("demonstrated", ASSIST_TODAY),
+        "retry-budget": ("assisted", ASSIST_TODAY), "head-recheck": ("misconception", ASSIST_TODAY),
+        "lease-owner": ("misconception", ASSIST_TODAY)}
+
+
+def test_bypassing_the_only_question_writes_a_misconception_record(tmp_path):
+    records = tmp_path / "records"
+    r = record_result(tmp_path, records, [("readme-typo", None, "bypassed")])
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert active(records) == {"readme-typo": ("misconception", ASSIST_TODAY)}
+
+
+def test_assisted_record_is_due_at_any_age_and_demonstrated_of_the_same_age_is_skipped(tmp_path):
+    assisted, demonstrated = tmp_path / "a", tmp_path / "d"
+    write_record(assisted, 1, "retry-budget", "assisted", "2026-11-22")
+    write_record(demonstrated, 1, "retry-budget", "demonstrated", "2026-11-22")
+    assert learned_ok(assisted, ASSIST_TODAY) == {"retry-budget": "due"}
+    assert learned_ok(demonstrated, ASSIST_TODAY) == {"retry-budget": "skip"}
+
+
+def test_unassisted_full_point_supersedes_an_assisted_record(tmp_path):
+    records = tmp_path / "records"
+    write_record(records, 1, "retry-budget", "assisted", "2026-11-20")
+    r = record_result(tmp_path, records, [("retry-budget", 1, None)])
+    assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+    assert field(records / "0001-retry-budget.md", "status") == "superseded by LR-0002"
+    assert active(records) == {"retry-budget": ("demonstrated", ASSIST_TODAY)}
+    assert learned_ok(records, ASSIST_TODAY) == {"retry-budget": "skip"}
+
+
+def test_assisted_is_a_valid_state_and_any_other_state_is_still_refused(tmp_path):
+    records = tmp_path / "records"
+    write_record(records, 1, "retry-budget", "assisted", WEEK)
+    assert learned(records).returncode == 0, learned(records).stderr
+    write_record(records, 2, "merge-lease", "learned", WEEK)
+    r = learned(records)
+    assert r.returncode == 1 and "0002-merge-lease.md" in r.stderr, (r.returncode, r.stdout, r.stderr)
+
+
+def test_skill_md_names_the_assisted_state_and_warns_about_older_scripts():
+    sentences = re.split(r"(?<=[.!?])\s+", SKILL.read_text().replace("\n", " "))
+    assert any("assisted" in s and "older" in s and "pr_exam.py" in s for s in sentences)

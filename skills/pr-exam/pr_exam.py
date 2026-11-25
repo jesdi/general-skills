@@ -362,7 +362,7 @@ def check_record(f):
     """ValueError naming what is wrong with a record's frontmatter fields."""
     if any(not f.get(k) for k in FIELDS):
         raise ValueError("missing field")
-    if f["state"] not in ("demonstrated", "misconception"):
+    if f["state"] not in ("demonstrated", "assisted", "misconception"):
         raise ValueError("state")
     datetime.date.fromisoformat(f["date"])
     if not re.fullmatch(r"active|superseded by LR-\d{4,}", f["status"]):
@@ -398,6 +398,8 @@ def learned_states(directory, today):
             continue
         if f["state"] == "misconception":
             states[f["concept"]] = "misconception"
+        elif f["state"] == "assisted":
+            states[f["concept"]] = "due"
         else:
             age = (today - datetime.date.fromisoformat(f["date"])).days
             states[f["concept"]] = "skip" if age < 30 else "due"
@@ -442,9 +444,16 @@ def publish(path, text):
     os.replace(tmp, path)
 
 
-def publish_record(args, q, n, explanation, source):
+def record_state(q):
+    """The state a question's record takes, or None when it leaves no record (half a point)."""
+    if q.get("help") == "bypassed" or q["points"] == 0:
+        return "misconception"
+    if q["points"] == 1:
+        return "assisted" if q.get("help") == "assisted" else "demonstrated"
+
+
+def publish_record(args, q, state, n, explanation, source):
     concept = q["concept"]
-    state = "demonstrated" if q["points"] == 1 else "misconception"
     publish(Path(args.records) / f"{n:04d}-{concept}.md",
             f"---\nconcept: {concept}\nstate: {state}\ndate: {args.today}\nsource: {source}\n"
             f"status: active\n---\n# {concept}\n\n{explanation}\n")
@@ -462,11 +471,12 @@ def supersede(existing, concept, n):
 def write_records(args, result, existing, explanations, source):
     n = max([r[0] for r in existing], default=0)
     for q in result["questions"]:
-        if q["points"] in (0, 1):
+        state = record_state(q)
+        if state:
             n += 1
             # The successor is published before its predecessor is superseded: a failure in between
             # leaves two active records, and the newest one counts, so no state is ever lost.
-            publish_record(args, q, n, explanations.get(q["id"], ""), source)
+            publish_record(args, q, state, n, explanations.get(q["id"], ""), source)
             supersede(existing, q["concept"], n)
     return 0
 
@@ -490,10 +500,12 @@ def public(args):
 GRADE_POINTS = {"pass": 1, "partial": 0.5, "fail": 0}
 
 
-def grade_errors(grades, texts):
-    """Only text questions are graded, each pass, partial or fail."""
+def grade_errors(grades, texts, bypassed=()):
+    """Only text questions are graded, each pass, partial or fail; a bypassed question's grade is ignored."""
     errors = []
     for qid, g in grades.items():
+        if qid in bypassed:
+            continue
         if qid not in texts:
             errors.append(f"grade for {qid}: not a text question")
         elif g.get("grade") not in GRADE_POINTS:
@@ -501,15 +513,55 @@ def grade_errors(grades, texts):
     return errors
 
 
-def score_errors(exam, answers, grades):
+FLAG_KEYS = ("bypassed", "assisted")
+
+
+def question_ids(exam):
+    return {q["id"] for q in exam["questions"]}
+
+
+def flagged(flags):
+    return [qid for k in FLAG_KEYS for qid in flags.get(k, [])]
+
+
+def flag_shape_errors(flags):
+    """flags.json is an object whose flag collections are lists of question id strings."""
+    if not isinstance(flags, dict):
+        return ["flags: must be a JSON object"]
+    return [f"flags: {k} must be a list of question ids" for k in FLAG_KEYS
+            if not (isinstance(flags.get(k, []), list) and all(isinstance(q, str) for q in flags.get(k, [])))]
+
+
+def flag_errors(exam, flags):
+    return flag_shape_errors(flags) or flag_ref_errors(exam, flags)
+
+
+def flag_ref_errors(exam, flags):
+    """Every flag key is known, every flagged id is a question, and at most one is bypassed."""
+    ids = question_ids(exam)
+    errors = [f"flags: unknown key {k!r}" for k in flags if k not in FLAG_KEYS]
+    errors += [f"flags: unknown question {qid}" for qid in flagged(flags) if qid not in ids]
+    if len(flags.get("bypassed", [])) > 1:
+        errors.append("flags: at most one question can be bypassed, got " + ", ".join(flags["bypassed"]))
+    return errors
+
+
+def answer_errors(exam, answers, grades, bypassed):
+    """Every question not bypassed is answered and, if text, graded pass, partial or fail."""
     texts = {q["id"] for q in exam["questions"] if q["type"] == "text"}
     errors = []
     for q in exam["questions"]:
-        errors += broken((
-            (q["id"] not in answers, f"question {q['id']}: unanswered"),
-            (q["id"] in texts and q["id"] not in grades, f"question {q['id']}: text question has no grade"),
-        ))
-    return errors + grade_errors(grades, texts)
+        if q["id"] not in bypassed:
+            errors += broken((
+                (q["id"] not in answers, f"question {q['id']}: unanswered"),
+                (q["id"] in texts and q["id"] not in grades, f"question {q['id']}: text question has no grade"),
+            ))
+    return errors + grade_errors(grades, texts, bypassed)
+
+
+def score_errors(exam, answers, grades, flags=None):
+    flags = {} if flags is None else flags
+    return flag_errors(exam, flags) or answer_errors(exam, answers, grades, flags.get("bypassed", []))
 
 
 def points(q, k, answers, grades):
@@ -518,37 +570,53 @@ def points(q, k, answers, grades):
     return GRADE_POINTS[grades[q["id"]]["grade"]]
 
 
-def question_result(q, k, answers, grades):
-    """A question's points; below full points, also its explanation, hunk and (text) grader feedback."""
+def question_result(q, k, answers, grades, help=None):
+    """A question's points; below full points, also its explanation, hunk and (text) grader feedback.
+    A bypassed question has no points but carries its explanation and hunk."""
+    if help == "bypassed":
+        return {"id": q["id"], "concept": q["concept"], "help": help, "explanation": k["explanation"], "hunk": k["hunk"]}
     r = {"id": q["id"], "concept": q["concept"], "points": points(q, k, answers, grades)}
     if r["points"] < 1:
         r.update(explanation=k["explanation"], hunk=k["hunk"])
         if q["type"] == "text":
             r["feedback"] = grades[q["id"]].get("feedback", "")
+    if help:
+        r["help"] = help
     return r
 
 
-def passed(exam, missed, total):
+def passed(exam, missed, total, maximum):
     """At least 80% of the points, and no why concept missed."""
     kinds = {c["id"]: c["kind"] for c in exam["concepts"]}
     why_ok = all(kinds.get(c) != "why" for c in missed)
-    return total / len(exam["questions"]) >= 0.8 and why_ok
+    return total >= 0.8 * maximum and why_ok
 
 
-def scored(exam, answers, grades):
+def helped(qid, flags):
+    return next((k for k in FLAG_KEYS if qid in flags.get(k, [])), None)
+
+
+def tally(exam, out):
+    """result.json from the question results; a bypassed question counts toward neither score nor max."""
+    counted = [r for r in out if r.get("help") != "bypassed"]
+    missed = [r["concept"] for r in counted if r["points"] < 1]
+    total = sum(r["points"] for r in counted)
+    return {"passed": passed(exam, missed, total, len(counted)), "score": total, "max": len(counted), "questions": out, "missed": missed}
+
+
+def scored(exam, answers, grades, flags=None):
     """result.json: points per question, the missed concepts, and whether the attempt passed."""
-    out = [question_result(q, exam["key"][q["id"]], answers, grades) for q in exam["questions"]]
-    missed = [r["concept"] for r in out if r["points"] < 1]
-    total = sum(r["points"] for r in out)
-    return {"passed": passed(exam, missed, total), "score": total, "max": len(out), "questions": out, "missed": missed}
+    flags = flags or {}
+    return tally(exam, [question_result(q, exam["key"][q["id"]], answers, grades, helped(q["id"], flags)) for q in exam["questions"]])
 
 
 def score(args):
     exam, answers, grades = load(args.exam), load(args.answers), load(args.grades)
-    errors = score_errors(exam, answers, grades)
+    flags = load(args.flags) if args.flags else {}
+    errors = score_errors(exam, answers, grades, flags)
     if errors:
         return fail("\n".join(errors))
-    print(json.dumps(scored(exam, answers, grades)))
+    print(json.dumps(scored(exam, answers, grades, flags)))
     return 0
 
 
@@ -668,6 +736,115 @@ def setup(args):
     return require_exam(got, path, f"{args.repo}@{branch}", app)
 
 
+PROMPT_LIMIT = 400_000
+TURN_KINDS = {"tip": "Tips", "question": "Chat", "general": "Chat"}
+TURN_SHAPES = {"tip": {"question", "tip", "draft", "tips"},
+               "question": {"question", "draft", "submitted", "points", "feedback", "thread", "message"},
+               "general": {"thread", "message"}}
+TURN_FIELDS = set().union(*TURN_SHAPES.values())
+
+
+def is_text_list(v):
+    return isinstance(v, list) and all(isinstance(x, str) for x in v)
+
+
+def is_thread(v):
+    return isinstance(v, list) and all(isinstance(m, dict) and set(m) == {"role", "text"} and is_text_list(list(m.values())) for m in v)
+
+
+FIELD_TYPES = {"draft": (lambda v: isinstance(v, str), "a string"), "submitted": (lambda v: isinstance(v, str), "a string"),
+               "feedback": (lambda v: isinstance(v, str), "a string"), "message": (lambda v: isinstance(v, str), "a string"),
+               "points": (lambda v: type(v) in (int, float), "a number"), "tips": (is_text_list, "a list of strings"),
+               "thread": (is_thread, "a list of {role, text} strings")}
+
+
+def skill_section(name):
+    m = re.search(rf"^## {name}\n(.*?)(?=^## |\Z)", (Path(__file__).parent / "SKILL.md").read_text(), re.M | re.S)
+    if not m:
+        raise ValueError(f"SKILL.md has no '## {name}' section")
+    return m.group(1).strip()
+
+
+def turn_errors(turn, exam):
+    """Each kind of turn has its own fields (TURN_SHAPES), each of its documented type (FIELD_TYPES)."""
+    if not isinstance(turn, dict) or turn.get("kind") not in TURN_SHAPES:
+        return ["turn kind: must be tip, question or general"]
+    return turn_shape_errors(turn) + target_errors(turn, exam) + tip_errors(turn) + reply_errors(turn)
+
+
+def turn_shape_errors(turn):
+    kind = turn["kind"]
+    errors = [f"turn field {f}: unknown" for f in sorted(set(turn) - TURN_FIELDS - {"kind"})]
+    errors += [f"a {f} is not allowed on a {kind} turn" for f in sorted((set(turn) & TURN_FIELDS) - TURN_SHAPES[kind])]
+    return errors + [f"{f}: must be {what}" for f, (ok, what) in FIELD_TYPES.items() if f in turn and not ok(turn[f])]
+
+
+def target_errors(turn, exam):
+    """A tip or question turn names one of the exam's questions."""
+    q = turn.get("question")
+    return broken(((turn["kind"] != "general" and q not in question_ids(exam), f"question {q}: not in the exam"),))
+
+
+def tip_errors(turn):
+    t = turn.get("tip")
+    return broken(((turn["kind"] == "tip" and (type(t) is not int or not 1 <= t <= 3), f"tip {t}: must be in the range 1-3"),))
+
+
+def reply_errors(turn):
+    return broken((
+        (turn["kind"] != "tip" and "message" not in turn, "message: required on a chat turn"),
+        (("points" in turn or "feedback" in turn) and "submitted" not in turn, "points and feedback need a submitted answer"),
+    ))
+
+
+def key_block(exam, qid):
+    q = next(q for q in exam["questions"] if q["id"] == qid)
+    return f"Question: {json.dumps(q)}\nKey: {json.dumps(exam['key'][qid])}"
+
+
+def turn_parts(turn, exam):
+    return target_parts(turn, exam) + (tip_parts(turn) if turn["kind"] == "tip" else chat_parts(turn))
+
+
+def target_parts(turn, exam):
+    if turn["kind"] == "general":
+        return ["All questions:\n" + "\n".join(key_block(exam, q["id"]) for q in exam["questions"])]
+    parts = [key_block(exam, turn["question"])]
+    if "draft" in turn and "submitted" not in turn:  # after submit, the submitted answer replaces the draft
+        parts.append(f"Draft: {turn['draft']}")
+    return parts
+
+
+def tip_parts(turn):
+    return [f"Tip number: {turn['tip']}"] + [f"Tip {i}: {t}" for i, t in enumerate(turn.get("tips", []), 1)]
+
+
+CHAT_LABELS = (("submitted", "Submitted answer"), ("points", "Points"), ("feedback", "Feedback"))
+
+
+def chat_parts(turn):
+    parts = [f"{label}: {turn[k]}" for k, label in CHAT_LABELS if k in turn]
+    parts += [f"{m['role']}: {m['text']}" for m in turn.get("thread", [])]
+    return parts + [f"Message: {turn['message']}"]
+
+
+def context(args):
+    exam, turn = load(args.exam), load(args.turn)
+    errors = turn_errors(turn, exam)
+    if errors:
+        return fail("\n".join(errors))
+    try:
+        rules = skill_section(TURN_KINDS[turn["kind"]])
+    except ValueError as e:
+        return fail(e)
+    prompt = "\n\n".join([rules, "Diff:\n" + Path(args.diff).read_text(), "PR body:\n" + Path(args.body).read_text(),
+                          *turn_parts(turn, exam)])
+    if len(prompt) > PROMPT_LIMIT:
+        return fail(f"prompt is {len(prompt):,} characters, over the {PROMPT_LIMIT:,}-character limit")
+    print(prompt)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pr_exam")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -681,6 +858,7 @@ def main(argv=None):
     sc = sub.add_parser("score")
     for f in ("exam", "answers", "grades"):
         sc.add_argument(f"--{f}", required=True)
+    sc.add_argument("--flags")
     sc.set_defaults(fn=score)
     ln = sub.add_parser("learned")
     ln.add_argument("--records", required=True)
@@ -697,6 +875,10 @@ def main(argv=None):
     st.add_argument("--check", action="store_true", help="only report whether `exam` is a required check")
     st.add_argument("repo")
     st.set_defaults(fn=setup)
+    cx = sub.add_parser("context")
+    for f in ("exam", "diff", "body", "turn"):
+        cx.add_argument(f"--{f}", required=True)
+    cx.set_defaults(fn=context)
     args = p.parse_args(argv)
     return args.fn(args)
 
