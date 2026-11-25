@@ -154,3 +154,29 @@ def test_ctrl_c_removes_the_worktree(tmp_path, home, cache):
     finally:
         reap(proc)
     assert len(worktrees(repo)) == 1
+
+
+DRAIN = """import subprocess, sys
+sys.path.insert(0, {skill!r})
+from weigh_mutation import _drain
+chatty = "import signal, sys\\nsignal.signal(signal.SIGINT, signal.SIG_IGN)\\nwhile True: print('x' * 100, flush=True)"
+proc = subprocess.Popen([sys.executable, "-c", chatty], stdout=subprocess.PIPE, text=True)
+try:
+    _drain(proc)
+except KeyboardInterrupt:
+    proc.kill()
+    sys.exit(130)
+"""
+
+
+def test_a_ctrl_c_between_two_reads_still_stops_the_wait():
+    """mutmut that keeps printing and ignores Ctrl-C: a plain communicate() misses about one SIGINT in five, here 10 in a row stop."""
+    script = DRAIN.format(skill=str(WEIGH.parent))
+    for _ in range(10):
+        proc = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+        try:
+            time.sleep(0.5)
+            os.kill(proc.pid, signal.SIGINT)
+            assert proc.wait(timeout=5) == 130
+        finally:
+            reap(proc)

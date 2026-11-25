@@ -153,6 +153,16 @@ def _matrix(python, repo, wt, env, per_function):
     }
 
 
+def _drain(proc):
+    """proc's stdout once it exits. It wakes every second: a blocking read misses a Ctrl-C that lands between two reads of
+    mutmut's output, and mutmut can hang after its own Ctrl-C, so the run would wait forever."""
+    while True:
+        try:
+            return proc.communicate(timeout=1)[0]
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def score(python, repo, overlay, per_function=3):
     """The pinned mutmut run on HEAD and its kill matrix, as a dict: score (percent of all mutants killed), pseudo_tested
     (percent of the covered functions whose mutants all survived), sampled (mutant ids: per_function per function on
@@ -170,7 +180,7 @@ def score(python, repo, overlay, per_function=3):
         _configure(wt, python_files(wt))
         env = {**os.environ, "PYTHONPATH": str(mutmut_overlay(python)), "PYTHONDONTWRITEBYTECODE": "1"}
         proc = subprocess.Popen([str(python), "-m", "mutmut", "run"], cwd=wt, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        out = proc.communicate()[0]
+        out = _drain(proc)
         if proc.returncode:
             raise SetupError(f"mutmut run exited {proc.returncode}:\n" + out)
         exported = subprocess.run([str(python), "-m", "mutmut", "export-cicd-stats"], cwd=wt, env=env, capture_output=True, text=True)
