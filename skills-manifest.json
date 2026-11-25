@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-21T14:15:51.769Z",
+  "generatedAt": "2026-11-25T00:19:23.913Z",
   "skills": [
     {
       "name": "agents-wayfinder",
@@ -64,8 +64,8 @@
     },
     {
       "name": "pr-exam",
-      "version": "0.1.0",
-      "hash": "sha256-af12d523a609c4eb220e38af8688600fdb61b69acbb5670f93d121ffeba99ef6",
+      "version": "0.1.1",
+      "hash": "sha256-d0b41f8978fd33978f3a3ce2e6aa6e22a489c1ac479a523cfdc9d23fbdcfd97e",
       "description": "Deterministic rules for a PR exam: validate a generated exam.json against its generation request, project the served (answer-free) exam, score an attempt, read and write learning records, and validate a repo's .pr-exam.json. Use when generating, serving or grading a PR exam, or when the user says \"pr-exam\"."
     },
     {
